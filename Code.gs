@@ -178,7 +178,7 @@ function calculateBalance(data) {
     case "Due":
     case "Partial":
       // Adjust based on selected invoice outstanding
-      const invoiceOutstanding = getInvoiceOutstanding(data.invoiceNo || data.prevInvoice);
+      const invoiceOutstanding = getInvoiceOutstanding(data.invoiceNo || data.prevInvoice, data.supplier);
       updateInvoiceOutstanding(data.invoiceNo, invoiceOutstanding - data.paymentAmt);
       newBalance = supplierOutstanding - data.paymentAmt;
       break;
@@ -318,11 +318,11 @@ function getOutstandingForSupplier(supplier) {
  * Returns Number or 0 if not found.
  */
 function getInvoiceOutstanding(invoiceNo, supplier) {
-  if (!invoiceNo) return 0;
+  if (!invoiceNo || !supplier) return 0;
   // use existing findInvoiceRecord which expects supplier + invoice
   const rec = findInvoiceRecord(supplier, invoiceNo);
   if (!rec) return 0;
-  return Number(rec.data[5]) || 0; // F column
+  return Number(rec.data[5]) || 0; // column F (index 5)
 }
 
 // VALIDATION ENGINE
