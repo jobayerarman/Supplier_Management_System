@@ -457,15 +457,28 @@ function updateExistingInvoice(existingInvoice, data) {
 }
 
 function updateInvoiceOutstanding(invoiceNo, newOutstanding) {
+  if (!invoiceNo || newOutstanding == null) {
+    throw new Error('Invalid parameters for updateInvoiceOutstanding');
+  }
+
   const invoiceSh = getSheet(CONFIG.invoiceSheet);
   const data = invoiceSh.getDataRange().getValues();
+  let found = false;
   
   for (let i = 1; i < data.length; i++) {
-    if (data[i][2] === invoiceNo) { // Invoice No column
-      invoiceSh.getRange(i + 1, 6).setValue(newOutstanding); // Balance Due column
+    // Use loose equality and handle type conversion
+    if (data[i][2] == invoiceNo) { // Invoice No column
+      invoiceSh.getRange(i + 1, 6).setValue(Number(newOutstanding)); // Balance Due column
+      found = true;
       break;
     }
   }
+  
+  if (!found) {
+    logSystemError('updateInvoiceOutstanding', `Invoice ${invoiceNo} not found`);
+  }
+  
+  return found;
 }
 
 // PAYMENT PROCESSING
