@@ -234,7 +234,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
   const paymentAmt = parseFloat(sh.getRange(row, CONFIG.cols.paymentAmt + 1).getValue()) || 0;
   const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
 
-  const balanceCell = CONFIG.cols.balance; // H = Current Balance
+  const balanceCell = sh.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
 
   if (!supplier || !paymentType) {
     balanceCell.clearContent().setNote("Balance requires supplier & payment type");
