@@ -52,7 +52,8 @@ function onEdit(e) {
 
     // === 1. Handle commit ===
     if (col === CONFIG.cols.commit + 1) {
-      const isCommitted = e.value === "TRUE";
+      const cellVal = sh.getRange(row, col).getValue();
+      const isCommitted = (cellVal === true) || (cellVal === 'TRUE') || (cellVal === 'TRUE'); // covers boolean & strings
       if (isCommitted) {
         processCommittedRowWithLock(sh, row);
         // After commit: recalc balance in col H
