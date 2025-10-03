@@ -493,10 +493,24 @@ function shouldProcessPayment(data) {
 
 function isDuplicatePayment(sysId) {
   const paymentSh = getSheet(CONFIG.paymentSheet);
-  const payments = paymentSh.getDataRange().getValues();
+  if (!paymentSh) return false;
+  const lastCol = paymentSh.getLastColumn();
+  const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
+  const idIndex = headers.indexOf(CONFIG.idColHeader); // returns -1 if not present
+
   const searchId = sysId + '_PAY';
-  
-  return payments.some(row => row[10] === searchId); // System ID column
+  const startRow = 2;
+  const lastRow = paymentSh.getLastRow();
+  if (lastRow < startRow) return false;
+
+  if (idIndex >= 0) {
+    const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
+    return vals.some(v => v === searchId);
+  } else {
+    // fallback: search last column
+    const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
+    return vals.some(v => v === searchId);
+  }
 }
 
 function setCommitStatus(sheet, rowNum, status, resetCommit) {
