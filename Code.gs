@@ -436,6 +436,25 @@ function createNewInvoice(data) {
   return { success: true, action: 'created', invoiceId: data.sysId + '_INV' };
 }
 
+function updateExistingInvoice(existingInvoice, data) {
+  // existingInvoice: { row: <sheetRow>, data: <rowArray> }
+  const invoiceSh = getSheet(CONFIG.invoiceSheet);
+  if (!existingInvoice || !invoiceSh) {
+    return { success: false, error: 'Invoice or sheet not found' };
+  }
+  const rowNum = existingInvoice.row;
+  try {
+    const currentTotal = Number(existingInvoice.data[3]) || 0; // column D
+    if (data.receivedAmt !== currentTotal) {
+      invoiceSh.getRange(rowNum, 4).setValue(data.receivedAmt); // update Total Amount (col D)
+    }
+    // touch the row to trigger formulas (optional)
+    invoiceSh.getRange(rowNum, 1).setValue(invoiceSh.getRange(rowNum, 1).getValue());
+    return { success: true, action: 'updated', row: rowNum };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
 
 // PAYMENT PROCESSING
 function processPayment(data) {
