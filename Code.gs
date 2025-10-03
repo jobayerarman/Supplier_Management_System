@@ -456,6 +456,18 @@ function updateExistingInvoice(existingInvoice, data) {
   }
 }
 
+function updateInvoiceOutstanding(invoiceNo, newOutstanding) {
+  const invoiceSh = getSheet(CONFIG.invoiceSheet);
+  const data = invoiceSh.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][2] === invoiceNo) { // Invoice No column
+      invoiceSh.getRange(i + 1, 6).setValue(newOutstanding); // Balance Due column
+      break;
+    }
+  }
+}
+
 // PAYMENT PROCESSING
 function processPayment(data) {
   const paymentSh = getSheet(CONFIG.paymentSheet);
