@@ -22,10 +22,10 @@ const CONFIG = {
     receivedAmt: 3,     // D
     paymentAmt: 4,      // E
     paymentType: 5,     // F
-    prevInvoice: 6,     // G
-    balance: 7,         // H
+    prevInvoice: 6,     // G (reference invoice for Due payments)
+    balance: 7,         // H (CURRENT BALANCE column)
     notes: 8,           // I
-    commit: 9,          // J
+    commit: 9,          // J (checkbox)
     status: 10,         // K
     enteredBy: 11,      // L
     timestamp: 12,      // M
@@ -35,9 +35,14 @@ const CONFIG = {
 
 function onEdit(e) {
   const lock = LockService.getDocumentLock();
+  let locked = false;
 
   try {
-    if (!lock.tryLock(30000)) return;
+    locked = lock.tryLock(30000);
+    if (!locked) {
+      console.warn('onEdit: could not obtain lock; aborting.');
+      return;
+    }
 
     const sh = e.range.getSheet();
     const sheetName = sh.getName();
@@ -76,7 +81,7 @@ function onEdit(e) {
     console.error("onEdit error:", error);
     logSystemError("onEdit", error.toString());
   } finally {
-    lock.releaseLock();
+    if (locked) { lock.releaseLock(); }
   }
 }
 
@@ -228,7 +233,6 @@ function updateCurrentBalance(sh, row, afterCommit) {
   const paymentAmt = parseFloat(sh.getRange(row, CONFIG.cols.paymentAmt + 1).getValue()) || 0;
   const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
 
-  //const balanceCell = sh.getRange(row, CONFIG.cols.status - 2); // H = Current Balance
   const balanceCell = CONFIG.cols.balance; // H = Current Balance
 
   if (!supplier || !paymentType) {
