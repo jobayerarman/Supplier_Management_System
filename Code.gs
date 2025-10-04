@@ -589,7 +589,13 @@ function generateUUID() {
 }
 
 function getSheet(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    logSystemError('getSheet', `Sheet "${name}" not found`);
+    throw new Error(`Required sheet "${name}" does not exist`);
+  }
+  return sheet;
 }
 
 function findInvoiceRecord(supplier, invoiceNo) {
