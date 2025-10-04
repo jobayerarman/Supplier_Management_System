@@ -199,12 +199,12 @@ function buildPrevInvoiceDropdown(sh, row) {
   const targetCell = sh.getRange(row, CONFIG.cols.prevInvoice + 1);
 
   if (paymentType !== "Due" || !supplier) {
-    targetCell.clearDataValidations();
-    targetCell.clearContent();
+    targetCell.clearDataValidations().clearContent();
     return;
   }
 
-  const invoiceSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.invoiceSheet);
+  const invoiceSheet = getSheet(CONFIG.invoiceSheet);
+  const lastRow = invoiceSheet.getLastRow();
   const data = invoiceSheet.getDataRange().getValues();
 
   const validInvoices = data
@@ -212,8 +212,7 @@ function buildPrevInvoiceDropdown(sh, row) {
     .map(r => r[2]); // Invoice No
 
   if (validInvoices.length === 0) {
-    targetCell.clearDataValidations();
-    targetCell.setNote("No unpaid invoices for this supplier.");
+    targetCell.clearDataValidations().setNote("No unpaid invoices for this supplier.");
     return;
   }
 
