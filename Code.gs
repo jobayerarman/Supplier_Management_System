@@ -30,6 +30,96 @@ const CONFIG = {
     enteredBy: 11,      // L
     timestamp: 12,      // M
     sysId: 13           // N
+  },
+  
+  // Invoice sheet columns (0-based indices)
+  invoiceCols: {
+    date: 0,            // A
+    supplier: 1,        // B
+    invoiceNo: 2,       // C
+    totalAmount: 3,     // D
+    totalPaid: 4,       // E (formula)
+    balanceDue: 5,      // F (formula)
+    status: 6,          // G (formula)
+    originDay: 7,       // H
+    daysOutstanding: 8, // I (formula)
+    sysId: 9            // J
+  },
+  
+  // Payment sheet columns (0-based indices)
+  paymentCols: {
+    date: 0,            // A
+    supplier: 1,        // B
+    invoiceNo: 2,       // C
+    paymentType: 3,     // D
+    amount: 4,          // E
+    method: 5,          // F
+    reference: 6,       // G
+    fromSheet: 7,       // H
+    enteredBy: 8,       // I
+    timestamp: 9,       // J
+    sysId: 10           // K
+  },
+  
+  // Ledger sheet columns (0-based indices)
+  ledgerCols: {
+    supplier: 0,        // A
+    outstanding: 1,     // B
+    lastUpdated: 2,     // C
+    status: 3           // D
+  },
+  
+  // Business rules
+  rules: {
+    MAX_TRANSACTION_AMOUNT: 1000000,
+    CACHE_TTL_MS: 30000,
+    LOCK_TIMEOUT_MS: 30000,
+    MAX_INVOICE_NO_LENGTH: 50
+  },
+  
+  // Total columns in each sheet
+  totalColumns: {
+    daily: 14,          // A through N
+    invoice: 10,        // A through J
+    payment: 11,        // A through K
+    ledger: 4           // A through D
+  },
+  
+  /**
+   * Validate configuration on script load
+   */
+  validate: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const requiredSheets = [
+      this.invoiceSheet,
+      this.paymentSheet,
+      this.supplierLedger,
+      this.auditSheet,
+      this.supplierList
+    ];
+    
+    const missing = requiredSheets.filter(name => !ss.getSheetByName(name));
+    
+    if (missing.length > 0) {
+      throw new Error(`Missing required sheets: ${missing.join(', ')}`);
+    }
+    
+    // Validate column counts match
+    if (Object.keys(this.cols).length !== this.totalColumns.daily - 1) {
+      console.warn('Column count mismatch in daily sheets configuration');
+    }
+  },
+  
+  /**
+   * Get column letter from index
+   */
+  getColumnLetter: function(index) {
+    let letter = '';
+    while (index >= 0) {
+      letter = String.fromCharCode((index % 26) + 65) + letter;
+      index = Math.floor(index / 26) - 1;
+    }
+    return letter;
   }
 };
 
@@ -88,7 +178,8 @@ function onEdit(e) {
 
 function processCommittedRowWithLock(sheet, rowNum) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const rowData = sheet.getRange(rowNum, 1, 1, 14).getValues()[0]; // A:N
+  const totalCols = CONFIG.totalColumns.daily;
+  const rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0]; // A:N
   
   const data = {
     sheetName: sheet.getName(),
@@ -445,6 +536,17 @@ function validateCommitData(data) {
       // Don't block - duplicate check will happen again in createNewInvoice
     }
   }
+
+  // === 7. Return Result ===
+  if (errors.length > 0) {
+    const errorMessage = errors.join('; ');
+    auditAction('VALIDATION_FAILED', data, errorMessage);
+    return { 
+      valid: false,
+      error: errorMessage,
+      errors: errors // Array of individual errors
+    };
+  }
   
   return { valid: true };
 }
@@ -494,12 +596,22 @@ function createNewInvoice(data) {
 
   // Apply formulas to new row (E,F,G,I)
   const newRow = lastRow + 1;
+
   invoiceSh.getRange(`E${newRow}`).setFormula(`=IF(C${newRow}="","", IFERROR(SUMIF(PaymentLog!C:C, C${newRow}, PaymentLog!E:E), 0))`);
   invoiceSh.getRange(`F${newRow}`).setFormula(`=IF(D${newRow}="","", D${newRow} - E${newRow})`);
   invoiceSh.getRange(`G${newRow}`).setFormula(`=IFS(F${newRow}=0,"Paid", F${newRow}=D${newRow},"Unpaid", F${newRow}<D${newRow},"Partial")`);
   invoiceSh.getRange(`I${newRow}`).setFormula(`=IF(F${newRow}=0,0, TODAY()-A${newRow})`);
 
-  return { success: true, action: 'created', invoiceId: data.sysId + '_INV' };
+  auditAction('INVOICE_CREATED', data, 
+    `New invoice created at row ${newRow}`
+  );
+
+  return { 
+    success: true, 
+    action: 'created', 
+    invoiceId: data.sysId + '_INV',
+    row: newRow
+  };
 }
 
 function updateExistingInvoice(existingInvoice, data) {
@@ -533,21 +645,22 @@ function processPayment(data) {
   if (isDuplicatePayment(data.sysId)) {
     return { success: false, error: 'Duplicate payment detected' };
   }
-  
-  const paymentRow = [
-    data.timestamp,                    // Payment Date
-    data.supplier,                     // Supplier
-    targetInvoice,                     // Invoice No
-    data.paymentType,                  // Payment Type
-    data.paymentAmt,                   // Amount
-    getPaymentMethod(data.paymentType), // Payment Method
-    data.notes,                        // Reference
-    data.sheetName,                    // From Sheet
-    data.enteredBy,                    // Entered By
-    data.timestamp,                    // Timestamp
-    data.sysId + '_PAY'                // System ID
-  ];
-  
+
+  // Build payment row using column indices
+  const paymentRow = new Array(CONFIG.totalColumns.payment);
+
+  paymentRow[CONFIG.paymentCols.date] = data.timestamp;                          // Payment Date
+  paymentRow[CONFIG.paymentCols.supplier] = data.supplier;                       // Supplier
+  paymentRow[CONFIG.paymentCols.invoiceNo] = targetInvoice;                      // Invoice No
+  paymentRow[CONFIG.paymentCols.paymentType] = data.paymentType;                 // Payment Type
+  paymentRow[CONFIG.paymentCols.amount] = data.paymentAmt;                       // Amount
+  paymentRow[CONFIG.paymentCols.method] = getPaymentMethod(data.paymentType);    // Payment Method
+  paymentRow[CONFIG.paymentCols.reference] = data.notes;                         // Reference
+  paymentRow[CONFIG.paymentCols.fromSheet] = data.sheetName;                     // From Sheet
+  paymentRow[CONFIG.paymentCols.enteredBy] = data.enteredBy;                     // Entered By
+  paymentRow[CONFIG.paymentCols.timestamp] = data.timestamp;                     // Timestamp
+  paymentRow[CONFIG.paymentCols.sysId] = data.sysId + '_PAY';                    // System ID
+    
   paymentSh.appendRow(paymentRow);
   return { success: true, action: 'logged', paymentId: data.sysId + '_PAY' };
 }
@@ -587,7 +700,8 @@ function setCommitStatus(sheet, rowNum, status, resetCommit) {
 }
 
 function setRowBackground(sheet, rowNum, color) {
-  sheet.getRange(rowNum, 1, 1, 14).setBackground(color); // A:N
+  const totalCols = CONFIG.totalColumns.daily;
+  sheet.getRange(rowNum, 1, 1, totalCols).setBackground(color); // A:N
 }
 
 function recalculateInvoiceBalances(invoiceNo, supplier) {
