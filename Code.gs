@@ -410,6 +410,11 @@ function processInvoice(data) {
 }
 
 function createNewInvoice(data) {
+  // Double-check invoice doesn't exist
+  if (findInvoiceRecord(data.supplier, data.invoiceNo)) {
+    return { success: false, error: 'Invoice already exists' };
+  }
+
   const invoiceSh = getSheet(CONFIG.invoiceSheet);
   const lastRow = invoiceSh.getLastRow();
 
