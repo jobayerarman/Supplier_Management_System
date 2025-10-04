@@ -326,6 +326,11 @@ function getInvoiceOutstanding(invoiceNo, supplier) {
 
 // VALIDATION ENGINE
 function validateCommitData(data) {
+  // Negative amounts
+  if (data.receivedAmt < 0 || data.paymentAmt < 0) {
+    return { valid: false, error: 'Amounts cannot be negative' };
+  }
+
   // Required fields check
   if (!data.supplier) {
     return { valid: false, error: 'Supplier is required' };
