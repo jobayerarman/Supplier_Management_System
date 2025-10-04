@@ -111,9 +111,11 @@ function processCommittedRowWithLock(sheet, rowNum) {
       }
     }
     
-    // 4. RECALCULATE BALANCES (patched logic)
-    const balance = calculateBalance(data);
-    sheet.getRange(rowNum, CONFIG.cols.balance + 1).setValue(balance);
+    // 4. CALCULATE BALANCES
+    calculateBalance(data);
+
+    const supplierOutstanding = getOutstandingForSupplier(data.supplier);
+    sheet.getRange(rowNum, CONFIG.cols.balance + 1).setValue(supplierOutstanding);
     
     // 5. SUCCESS
     setCommitStatus(
