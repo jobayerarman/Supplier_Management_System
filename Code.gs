@@ -179,7 +179,7 @@ function calculateBalance(data) {
     case "Partial":
       // Adjust based on selected invoice outstanding
       const invoiceOutstanding = getInvoiceOutstanding(data.invoiceNo || data.prevInvoice, data.supplier);
-      updateInvoiceOutstanding(data.invoiceNo, invoiceOutstanding - data.paymentAmt);
+      // updateInvoiceOutstanding(data.invoiceNo, invoiceOutstanding - data.paymentAmt);
       newBalance = supplierOutstanding - data.paymentAmt;
       break;
 
@@ -189,7 +189,7 @@ function calculateBalance(data) {
   }
 
   // Update central database / outstanding ledger
-  //updateSupplierOutstanding(data.supplier, newBalance);
+  // updateSupplierOutstanding(data.supplier, newBalance);
   return newBalance;
 }
 
