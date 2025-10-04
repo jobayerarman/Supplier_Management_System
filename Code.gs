@@ -326,67 +326,124 @@ function getInvoiceOutstanding(invoiceNo, supplier) {
 
 // VALIDATION ENGINE
 function validateCommitData(data) {
-  // Negative amounts
-  if (data.receivedAmt < 0 || data.paymentAmt < 0) {
-    return { valid: false, error: 'Amounts cannot be negative' };
-  }
+  const errors = [];
 
-  // Required fields check
+  // === 1. Required Fields ===
   if (!data.supplier) {
     return { valid: false, error: 'Supplier is required' };
   }
+
+  if (!data.paymentType) {
+    errors.push('Payment type is required');
+  }
+
+  // === 2. Numeric Validation ===
+  if (isNaN(data.receivedAmt) || data.receivedAmt < 0) {
+    errors.push('Received amount must be a non-negative number');
+  }
   
-  // Payment type specific validations
+  if (isNaN(data.paymentAmt) || data.paymentAmt < 0) {
+    errors.push('Payment amount must be a non-negative number');
+  }
+
+  // === 4. Invoice Number Validation ===
+  // Check length
+  if (data.invoiceNo.length > 50) {
+    errors.push('Invoice number cannot exceed 50 characters');
+  }
+  
+  // === 5. Payment Type Specific Validation ===
   switch (data.paymentType) {
     case 'Unpaid':
       if (data.paymentAmt !== 0) {
-        return { valid: false, error: 'Payment amount must be 0 for Unpaid' };
+        errors.push('Payment amount must be 0 for Unpaid transactions');
       }
       if (!data.invoiceNo) {
-        return { valid: false, error: 'Invoice number required for Unpaid' };
+        errors.push('Invoice number is required for Unpaid transactions');
+      }
+      if (data.receivedAmt <= 0) {
+        errors.push('Received amount must be greater than 0 for Unpaid transactions');
       }
       break;
       
     case 'Regular':
-      if (data.paymentAmt !== data.receivedAmt) {
-        return { valid: false, error: 'Payment amount must equal received amount for Regular payment' };
-      }
       if (!data.invoiceNo) {
-        return { valid: false, error: 'Invoice number required for Regular payment' };
+        errors.push('Invoice number is required for Regular payment');
+      }
+      if (data.receivedAmt <= 0) {
+        errors.push('Received amount must be greater than 0 for Regular payment');
+      }
+      if (data.paymentAmt !== data.receivedAmt) {
+        errors.push(`Payment amount (${data.paymentAmt}) must equal received amount (${data.receivedAmt}) for Regular payment`);
       }
       break;
       
     case 'Partial':
-      if (data.paymentAmt <= 0 || data.paymentAmt >= data.receivedAmt) {
-        return { valid: false, error: 'Partial payment must be between 0 and received amount' };
-      }
       if (!data.invoiceNo) {
-        return { valid: false, error: 'Invoice number required for Partial payment' };
+        errors.push('Invoice number is required for Partial payment');
+      }
+      if (data.receivedAmt <= 0) {
+        errors.push('Received amount must be greater than 0 for Partial payment');
+      }
+      if (data.paymentAmt <= 0) {
+        errors.push('Payment amount must be greater than 0 for Partial payment');
+      }
+      if (data.paymentAmt >= data.receivedAmt) {
+        errors.push(`Partial payment (${data.paymentAmt}) must be less than received amount (${data.receivedAmt})`);
       }
       break;
       
     case 'Due':
       if (!data.prevInvoice) {
-        return { valid: false, error: 'Previous invoice reference required for Due payment' };
+        errors.push('Previous invoice reference is required for Due payment');
       }
       if (data.paymentAmt <= 0) {
-        return { valid: false, error: 'Payment amount required for Due payment' };
+        errors.push('Payment amount must be greater than 0 for Due payment');
+      }
+      if (data.receivedAmt !== 0) {
+        errors.push('Received amount must be 0 for Due payment (paying existing invoice)');
       }
       
       // Check if previous invoice exists and has sufficient balance
-      const prevInvoice = findInvoiceRecord(data.supplier, data.prevInvoice);
-      if (!prevInvoice) {
-        return { valid: false, error: `Previous invoice ${data.prevInvoice} not found` };
-      }
-      
-      const currentBalance = prevInvoice.data[5]; // Balance Due column
-      if (data.paymentAmt > currentBalance) {
-        return { valid: false, error: `Payment amount (${data.paymentAmt}) exceeds invoice balance (${currentBalance})` };
+      if (data.prevInvoice) {
+        try {
+          const prevInvoice = findInvoiceRecord(data.supplier, data.prevInvoice);
+          if (!prevInvoice) {
+            errors.push(`Previous invoice "${data.prevInvoice}" not found for supplier "${data.supplier}"`);
+          } else {
+            const currentBalance = Number(prevInvoice.data[5]) || 0; // Balance Due column
+            if (currentBalance <= 0) {
+              errors.push(`Invoice "${data.prevInvoice}" has no outstanding balance`);
+            } else if (data.paymentAmt > currentBalance) {
+              errors.push(`Payment amount (${data.paymentAmt}) exceeds invoice balance (${currentBalance})`);
+            }
+          }
+        } catch (error) {
+          logSystemError('validateCommitData:prevInvoice', 
+            `Error validating previous invoice: ${error.toString()}`);
+          errors.push('Unable to verify previous invoice - system error');
+        }
       }
       break;
       
     default:
-      return { valid: false, error: 'Invalid payment type' };
+      errors.push(`Invalid payment type: "${data.paymentType}". Must be Unpaid, Regular, Partial, or Due`);
+  }
+
+  // === 6. Business Logic Validation ===
+
+  // Check for duplicate invoice (only for new invoices)
+  if (data.invoiceNo && data.paymentType !== 'Due') {
+    try {
+      const existing = findInvoiceRecord(data.supplier, data.invoiceNo);
+      if (existing) {
+        errors.push(`Invoice "${data.invoiceNo}" already exists for supplier "${data.supplier}" at row ${existing.row}`);
+      }
+    } catch (error) {
+      logSystemError('validateCommitData:duplicate', 
+        `Error checking for duplicate invoice: ${error.toString()}`);
+      // Don't block - duplicate check will happen again in createNewInvoice
+    }
   }
   
   return { valid: true };
