@@ -161,8 +161,6 @@ function calculateBalance(data) {
       newBalance = supplierOutstanding;
   }
 
-  // Update central database / outstanding ledger
-  // updateSupplierOutstanding(data.supplier, newBalance);
   return newBalance;
 }
 
