@@ -146,16 +146,23 @@ function calculateBalance(data) {
       break;
 
     case "Regular":
-      // Received today and paid immediately
+      // Received today and paid immediately - net effect is zero on outstanding
       newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
       break;
 
     case "Due":
-    case "Partial":
-      // Adjust based on selected invoice outstanding
-      const invoiceOutstanding = getInvoiceOutstanding(data.invoiceNo || data.prevInvoice, data.supplier);
-      // updateInvoiceOutstanding(data.invoiceNo, invoiceOutstanding - data.paymentAmt);
+      // Payment against existing invoice - use prevInvoice reference
+      // Don't manually update invoice balance - formulas handle this automatically
+      if (!data.prevInvoice) {
+        logSystemError('calculateBalance', 'Due payment missing prevInvoice reference');
+        return supplierOutstanding;
+      }
       newBalance = supplierOutstanding - data.paymentAmt;
+      break;
+    case "Partial":
+      // Partial payment on today's invoice
+      // Invoice balance will be: receivedAmt - paymentAmt (handled by formulas)
+      newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
       break;
 
     default:
