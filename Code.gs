@@ -1,11 +1,14 @@
 /**
- * Apps Script for Supplier Accounts automation
  * Code.gs - Main Application Logic
  * Uses modular architecture with:
- * - onEdit: validates and creates entries
- * 
- * 
-*/
+ * - _Config.gs for configuration
+ * - _Utils.gs for utilities
+ * - AuditLogger.gs for audit trail
+ * - ValidationEngine.gs for validation
+ * - InvoiceManager.gs for invoice operations
+ * - PaymentManager.gs for payment operations
+ * - BalanceCalculator.gs for balance calculations
+ */
 
 function onEdit(e) {
   const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
@@ -34,8 +37,7 @@ function onEdit(e) {
       const isCommitted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
       if (isCommitted) {
         processCommittedRowWithLock(sh, row);
-        // After commit: recalc balance in col H
-        updateCurrentBalance(sh, row, true);
+        updateCurrentBalance(sh, row, true); // After commit: show supplier total outstanding
       }
       return;
     }
@@ -64,6 +66,9 @@ function onEdit(e) {
   }
 }
 
+/**
+ * Process committed row with full transaction workflow
+ */
 function processCommittedRowWithLock(sheet, rowNum) {
   const totalCols = CONFIG.totalColumns.daily;
   const rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0]; // A:N
@@ -79,8 +84,8 @@ function processCommittedRowWithLock(sheet, rowNum) {
     prevInvoice: rowData[CONFIG.cols.prevInvoice],
     notes: rowData[CONFIG.cols.notes],
     enteredBy: Session.getEffectiveUser().getEmail(),
-    timestamp: DateUtils.now(), // Uses DateUtils
-    sysId: rowData[CONFIG.cols.sysId] || IDGenerator.generateUUID() // Uses IDGenerator
+    timestamp: DateUtils.now(),
+    sysId: rowData[CONFIG.cols.sysId] || IDGenerator.generateUUID()
   };
   
   // Store system ID if not exists
@@ -92,7 +97,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
   auditAction('PRE-COMMIT', data, 'Starting commit process');
   
   try {
-    // 1. VALIDATION
+    // 1. VALIDATION - Uses ValidationEngine.gs
     const validation = validateCommitData(data);
     if (!validation.valid) {
       setCommitStatus(sheet, rowNum, `ERROR: ${validation.error}`, false);
@@ -100,14 +105,14 @@ function processCommittedRowWithLock(sheet, rowNum) {
       return;
     }
     
-    // 2. PROCESS INVOICE
+    // 2. PROCESS INVOICE - Uses InvoiceManager.gs
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
       setCommitStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, false);
       return;
     }
     
-    // 3. PROCESS PAYMENT (only if applicable)
+    // 3. PROCESS PAYMENT - Uses PaymentManager.gs
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
@@ -116,8 +121,8 @@ function processCommittedRowWithLock(sheet, rowNum) {
       }
     }
     
-    // 4. CALCULATE CURRENT SUPPLIER OUTSTANDING
-    const supplierOutstanding = calculateBalance(data);
+    // 4. CALCULATE SUPPLIER OUTSTANDING - Uses BalanceCalculator.gs
+    const supplierOutstanding = BalanceCalculator.calculate(data);
 
     // 5. UPDATE DAILY SHEET WITH SUPPLIER OUTSTANDING
     sheet.getRange(rowNum, CONFIG.cols.balance + 1).setValue(supplierOutstanding);
@@ -126,10 +131,10 @@ function processCommittedRowWithLock(sheet, rowNum) {
     setCommitStatus(
       sheet,
       rowNum,
-      `Committed by ${data.enteredBy.split('@')[0]} @ ${DateUtils.formatTime(data.timestamp)}`, // Uses DateUtils
+      `Committed by ${data.enteredBy.split('@')[0]} @ ${DateUtils.formatTime(data.timestamp)}`,
       true
     );
-    setRowBackground(sheet, rowNum, '#E8F5E8'); // Light green
+    setRowBackground(sheet, rowNum, CONFIG.colors.success);
     
     // POST-COMMIT AUDIT
     auditAction('POST-COMMIT', data, `Commit completed. Supplier outstanding: ${supplierOutstanding}`);
@@ -138,52 +143,6 @@ function processCommittedRowWithLock(sheet, rowNum) {
     setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, false);
     logSystemError('processCommittedRow', error.toString());
   }
-}
-
-/**
- * Calculate balance and update supplier ledger
- * ALWAYS returns supplier's total outstanding after transaction
- * 
- * @param {Object} data - Transaction data
- * @returns {number} Supplier's total outstanding balance (consistent across all payment types)
- */
-function calculateBalance(data) {
-  const supplierOutstanding = getOutstandingForSupplier(data.supplier); 
-  let newBalance = supplierOutstanding;
-
-  switch (data.paymentType) {
-    case "Unpaid":
-      // Add new received product once
-      newBalance = supplierOutstanding + data.receivedAmt;
-      break;
-
-    case "Regular":
-      // Received today and paid immediately - net effect is zero on outstanding
-      newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
-      break;
-
-    case "Due":
-      // Payment against existing invoice - use prevInvoice reference
-      // Don't manually update invoice balance - formulas handle this automatically
-      if (!data.prevInvoice) {
-        logSystemError('calculateBalance', 'Due payment missing prevInvoice reference');
-        return supplierOutstanding;
-      }
-      newBalance = supplierOutstanding - data.paymentAmt;
-      break;
-    case "Partial":
-      // Partial payment on today's invoice
-      // Invoice balance will be: receivedAmt - paymentAmt (handled by formulas)
-      newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
-      break;
-
-    default:
-      // Fallback → keep supplier balance unchanged
-      logSystemError('calculateBalance', `Unknown payment type: ${data.paymentType}`);
-      newBalance = supplierOutstanding;
-  }
-
-  return newBalance;
 }
 
 /**
@@ -203,7 +162,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
 
   const balanceCell = sh.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
 
-  if (StringUtils.isEmpty(supplier) || !paymentType) { // Uses StringUtils
+  if (StringUtils.isEmpty(supplier) || !paymentType) {
     balanceCell.clearContent().setNote("Balance requires supplier & payment type");
     return;
   }
@@ -216,73 +175,21 @@ function updateCurrentBalance(sh, row, afterCommit) {
 
   if (afterCommit) {
     // AFTER COMMIT: Always show supplier total outstanding
-    balance = getOutstandingForSupplier(supplier);
+    balance = BalanceCalculator.getSupplierOutstanding(supplier);
     note = "Supplier total outstanding";
   } else {
-    // BEFORE COMMIT: Show context-specific preview
-    switch (paymentType) {
-      case "Unpaid":
-        balance = getOutstandingForSupplier(supplier) + receivedAmt;
-        note = "Preview: Supplier outstanding after receiving";
-        break;
-
-      case "Regular":
-        balance = getOutstandingForSupplier(supplier) + receivedAmt - paymentAmt;
-        note = "Preview: Supplier outstanding (net zero expected)";
-        break;
-
-      case "Partial":
-        balance = getOutstandingForSupplier(supplier) + receivedAmt - paymentAmt;
-        note = "Preview: Supplier outstanding after partial payment";
-        break;
-
-      case "Due":
-        if (StringUtils.isEmpty(prevInvoice)) { // Uses StringUtils
-          balanceCell.clearContent().setNote("Select previous invoice");
-          return;
-        }
-        // BEFORE COMMIT: Show specific invoice balance being paid
-        const invBalance = getInvoiceOutstanding(prevInvoice, supplier);
-        balance = invBalance;
-        note = `Preview: Invoice ${prevInvoice} balance (before payment)`;
-        break;
-
-      default:
-        balanceCell.clearContent().setNote("Invalid payment type");
-        return;
-    }
+    // BEFORE COMMIT: Show context-specific preview using BalanceCalculator
+    const preview = BalanceCalculator.calculatePreview(
+      supplier,
+      paymentType,
+      receivedAmt,
+      paymentAmt,
+      prevInvoice
+    );
+    balance = preview.balance;
+    note = preview.note;
   }
 
   balanceCell.setValue(balance).setNote(note);
 }
 
-// PAYMENT PROCESSING
-function processPayment(data) {
-  const paymentSh = getSheet(CONFIG.paymentSheet); // Uses SheetUtils
-  
-  // Determine which invoice this payment applies to
-  const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
-  
-  // Check for duplicate payment
-  if (isDuplicatePayment(data.sysId)) {
-    return { success: false, error: 'Duplicate payment detected' };
-  }
-
-  // Build payment row using column indices
-  const paymentRow = new Array(CONFIG.totalColumns.payment);
-
-  paymentRow[CONFIG.paymentCols.date] = data.timestamp;                          // Payment Date
-  paymentRow[CONFIG.paymentCols.supplier] = data.supplier;                       // Supplier
-  paymentRow[CONFIG.paymentCols.invoiceNo] = targetInvoice;                      // Invoice No
-  paymentRow[CONFIG.paymentCols.paymentType] = data.paymentType;                 // Payment Type
-  paymentRow[CONFIG.paymentCols.amount] = data.paymentAmt;                       // Amount
-  paymentRow[CONFIG.paymentCols.method] = getPaymentMethod(data.paymentType);    // Payment Method
-  paymentRow[CONFIG.paymentCols.reference] = data.notes;                         // Reference
-  paymentRow[CONFIG.paymentCols.fromSheet] = data.sheetName;                     // From Sheet
-  paymentRow[CONFIG.paymentCols.enteredBy] = data.enteredBy;                     // Entered By
-  paymentRow[CONFIG.paymentCols.timestamp] = data.timestamp;                     // Timestamp
-  paymentRow[CONFIG.paymentCols.sysId] = IDGenerator.generatePaymentId(data.sysId);                  // System ID Uses IDGenerator
-    
-  paymentSh.appendRow(paymentRow);
-  return { success: true, action: 'logged', paymentId: IDGenerator.generatePaymentId(data.sysId) };
-}

@@ -268,60 +268,28 @@ const LockManager = {
 
 /**
  * Find invoice record by supplier and invoice number
+ * Used by InvoiceManager and BalanceCalculator
  * @param {string} supplier - Supplier name
  * @param {string} invoiceNo - Invoice number
  * @returns {Object|null} Object with {row, data} or null if not found
  */
 function findInvoiceRecord(supplier, invoiceNo) {
-  const invoiceSh = getSheet(CONFIG.invoiceSheet);
-  const data = invoiceSh.getDataRange().getValues();
-  
-  for (let i = 1; i < data.length; i++) {
-    if (StringUtils.equals(data[i][1], supplier) &&
-        StringUtils.equals(data[i][2], invoiceNo)) {
-      return { row: i + 1, data: data[i] };
-    }
-  }
-  return null;
-}
-
-/**
- * Get total outstanding balance for a supplier
- * Sums all Balance Due amounts from InvoiceDatabase
- * @param {string} supplier - Supplier name
- * @returns {number} Total outstanding balance
- */
-function getOutstandingForSupplier(supplier) {
-  if (!supplier) return 0;
-
-  const invoiceSh = getSheet(CONFIG.invoiceSheet);
-  const data = invoiceSh.getDataRange().getValues();
-  let total = 0;
-  
-  for (let i = 1; i < data.length; i++) {
-    try {
-      if (StringUtils.equals(data[i][1], supplier)) {
-        const bal = Number(data[i][5]) || 0; // Balance Due is column F (index 5)
-        total += bal;
+  try {
+    const invoiceSh = getSheet(CONFIG.invoiceSheet);
+    const data = invoiceSh.getDataRange().getValues();
+    
+    for (let i = 1; i < data.length; i++) {
+      if (StringUtils.equals(data[i][CONFIG.invoiceCols.supplier], supplier) &&
+          StringUtils.equals(data[i][CONFIG.invoiceCols.invoiceNo], invoiceNo)) {
+        return { row: i + 1, data: data[i] };
       }
-    } catch (e) {
-      // skip bad rows silently
     }
+    return null;
+  } catch (error) {
+    logSystemError('findInvoiceRecord', 
+      `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
+    return null;
   }
-  return total;
-}
-
-/**
- * Get balance due for a specific invoice
- * @param {string} invoiceNo - Invoice number
- * @param {string} supplier - Supplier name
- * @returns {number} Invoice balance due or 0 if not found
- */
-function getInvoiceOutstanding(invoiceNo, supplier) {
-  if (!invoiceNo || !supplier) return 0;
-  const rec = findInvoiceRecord(supplier, invoiceNo);
-  if (!rec) return 0;
-  return Number(rec.data[5]) || 0; // column F (index 5)
 }
 
 // ==================== PAYMENT HELPERS ====================
@@ -356,24 +324,29 @@ function shouldProcessPayment(data) {
  * @returns {boolean} True if duplicate exists
  */
 function isDuplicatePayment(sysId) {
-  const paymentSh = getSheet(CONFIG.paymentSheet);
-  if (!paymentSh) return false;
-  
-  const lastCol = paymentSh.getLastColumn();
-  const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
-  const idIndex = headers.indexOf(CONFIG.idColHeader);
+  try {
+    const paymentSh = getSheet(CONFIG.paymentSheet);
+    if (!paymentSh) return false;
+    
+    const lastCol = paymentSh.getLastColumn();
+    const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
+    const idIndex = headers.indexOf(CONFIG.idColHeader);
 
-  const searchId = sysId + '_PAY';
-  const startRow = 2;
-  const lastRow = paymentSh.getLastRow();
-  if (lastRow < startRow) return false;
+    const searchId = IDGenerator.generatePaymentId(sysId);
+    const startRow = 2;
+    const lastRow = paymentSh.getLastRow();
+    if (lastRow < startRow) return false;
 
-  if (idIndex >= 0) {
-    const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
-    return vals.some(v => v === searchId);
-  } else {
-    const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
-    return vals.some(v => v === searchId);
+    if (idIndex >= 0) {
+      const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
+      return vals.some(v => v === searchId);
+    } else {
+      const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
+      return vals.some(v => v === searchId);
+    }
+  } catch (error) {
+    logSystemError('isDuplicatePayment', `Error checking duplicate: ${error.toString()}`);
+    return false;
   }
 }
 
@@ -413,26 +386,30 @@ function setRowBackground(sheet, rowNum, color) {
  * @param {string} message - Audit message
  */
 function auditAction(action, data, message) {
-  const auditSh = getSheet(CONFIG.auditSheet);
-  const auditRow = [
-    new Date(),
-    data.enteredBy || 'SYSTEM',
-    data.sheetName || 'N/A',
-    `Row ${data.rowNum || 'N/A'}`,
-    action,
-    JSON.stringify({
-      supplier: data.supplier,
-      invoice: data.invoiceNo,
-      prevInvoice: data.prevInvoice,
-      receivedAmt: data.receivedAmt,
-      paymentAmt: data.paymentAmt,
-      paymentType: data.paymentType,
-      sysId: data.sysId
-    }),
-    message
-  ];
-  
-  auditSh.appendRow(auditRow);
+  try {
+    const auditSh = getSheet(CONFIG.auditSheet);
+    const auditRow = [
+      DateUtils.now(),
+      data.enteredBy || 'SYSTEM',
+      data.sheetName || 'N/A',
+      `Row ${data.rowNum || 'N/A'}`,
+      action,
+      JSON.stringify({
+        supplier: data.supplier,
+        invoice: data.invoiceNo,
+        prevInvoice: data.prevInvoice,
+        receivedAmt: data.receivedAmt,
+        paymentAmt: data.paymentAmt,
+        paymentType: data.paymentType,
+        sysId: data.sysId
+      }),
+      message
+    ];
+    
+    auditSh.appendRow(auditRow);
+  } catch (error) {
+    console.error(`[AUDIT ERROR] ${action}: ${message}`, error);
+  }
 }
 
 /**
@@ -444,7 +421,7 @@ function logSystemError(context, message) {
   try {
     const auditSh = getSheet(CONFIG.auditSheet);
     auditSh.appendRow([
-      new Date(),
+      DateUtils.now(),
       'SYSTEM',
       'N/A',
       'N/A',
