@@ -211,43 +211,28 @@ function updateCurrentBalance(sh, row, afterCommit) {
   const invoiceSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.invoiceSheet);
   const data = invoiceSheet.getDataRange().getValues();
 
-  // Helper to sum supplier’s open balances
-  function getSupplierTotalOutstanding(supp) {
-    return data
-      .filter((r, i) => i > 0 && StringUtils.equals(r[1], supp) && r[5] > 0) // Uses StringUtils
-      .reduce((sum, r) => sum + r[5], 0);
-  }
-
-  // Helper to find single invoice
-  function getInvoiceBalance(supp, inv) {
-    const row = data.find((r, i) => i > 0 && 
-      StringUtils.equals(r[1], supp) && 
-      StringUtils.equals(r[2], inv)); // Uses StringUtils
-    return row ? row[5] : 0;
-  }
-
   let balance = 0;
   let note = "";
 
   if (afterCommit) {
     // AFTER COMMIT: Always show supplier total outstanding
-    balance = getSupplierTotalOutstanding(supplier);
+    balance = getOutstandingForSupplier(supplier);
     note = "Supplier total outstanding";
   } else {
     // BEFORE COMMIT: Show context-specific preview
     switch (paymentType) {
       case "Unpaid":
-        balance = getSupplierTotalOutstanding(supplier) + receivedAmt;
+        balance = getOutstandingForSupplier(supplier) + receivedAmt;
         note = "Preview: Supplier outstanding after receiving";
         break;
 
       case "Regular":
-        balance = getSupplierTotalOutstanding(supplier) + receivedAmt - paymentAmt;
+        balance = getOutstandingForSupplier(supplier) + receivedAmt - paymentAmt;
         note = "Preview: Supplier outstanding (net zero expected)";
         break;
 
       case "Partial":
-        balance = getSupplierTotalOutstanding(supplier) + receivedAmt - paymentAmt;
+        balance = getOutstandingForSupplier(supplier) + receivedAmt - paymentAmt;
         note = "Preview: Supplier outstanding after partial payment";
         break;
 
@@ -257,7 +242,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
           return;
         }
         // BEFORE COMMIT: Show specific invoice balance being paid
-        const invBalance = getInvoiceBalance(supplier, prevInvoice);
+        const invBalance = getInvoiceOutstanding(prevInvoice, supplier);
         balance = invBalance;
         note = `Preview: Invoice ${prevInvoice} balance (before payment)`;
         break;
