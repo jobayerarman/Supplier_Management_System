@@ -261,7 +261,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
     }
   }
 
-  balanceCell.setValue(balance).setNote("Calculated balance");
+  balanceCell.setValue(balance).setNote(note);
 }
 
 function buildPrevInvoiceDropdown(sh, row) {
