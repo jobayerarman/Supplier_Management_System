@@ -112,12 +112,12 @@ function processCommittedRowWithLock(sheet, rowNum) {
     }
     
     // 4. CALCULATE BALANCES
-    calculateBalance(data);
+    const supplierOutstanding = calculateBalance(data);
 
-    const supplierOutstanding = getOutstandingForSupplier(data.supplier);
+    // 5. UPDATE DAILY SHEET WITH SUPPLIER OUTSTANDING
     sheet.getRange(rowNum, CONFIG.cols.balance + 1).setValue(supplierOutstanding);
     
-    // 5. SUCCESS
+    // 6. SUCCESS
     setCommitStatus(
       sheet,
       rowNum,
@@ -135,6 +135,13 @@ function processCommittedRowWithLock(sheet, rowNum) {
   }
 }
 
+/**
+ * Calculate balance and update supplier ledger
+ * ALWAYS returns supplier's total outstanding after transaction
+ * 
+ * @param {Object} data - Transaction data
+ * @returns {number} Supplier's total outstanding balance (consistent across all payment types)
+ */
 function calculateBalance(data) {
   const supplierOutstanding = getOutstandingForSupplier(data.supplier); 
   let newBalance = supplierOutstanding;
@@ -167,47 +174,23 @@ function calculateBalance(data) {
 
     default:
       // Fallback → keep supplier balance unchanged
+      logSystemError('calculateBalance', `Unknown payment type: ${data.paymentType}`);
       newBalance = supplierOutstanding;
   }
 
   return newBalance;
 }
 
-function buildPrevInvoiceDropdown(sh, row) {
-  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
-  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
-  const targetCell = sh.getRange(row, CONFIG.cols.prevInvoice + 1);
-
-  if (paymentType !== "Due" || !supplier) {
-    targetCell.clearDataValidations().clearContent();
-    return;
-  }
-
-  const invoiceSheet = getSheet(CONFIG.invoiceSheet);
-  const lastRow = invoiceSheet.getLastRow();
-  const data = invoiceSheet.getDataRange().getValues();
-
-  const validInvoices = data
-    .filter((r, i) => i > 0 && r[1] === supplier && r[5] > 0) // Supplier match + Balance Due > 0
-    .map(r => r[2]); // Invoice No
-
-  if (validInvoices.length === 0) {
-    targetCell.clearDataValidations().setNote("No unpaid invoices for this supplier.");
-    return;
-  }
-
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(validInvoices, true)
-    .setAllowInvalid(false)
-    .build();
-
-  targetCell.setDataValidation(rule);
-  targetCell.setNote("Select invoice for due payment");
-}
-
+/**
+ * Update balance preview in daily sheet
+ * Shows context-appropriate balance based on payment type and commit state
+ * 
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sh - Active sheet
+ * @param {number} row - Row number
+ * @param {boolean} afterCommit - Whether this is after commit
+ */
 function updateCurrentBalance(sh, row, afterCommit) {
   const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
-  const invoiceNo = sh.getRange(row, CONFIG.cols.invoiceNo + 1).getValue();
   const prevInvoice = sh.getRange(row, CONFIG.cols.prevInvoice + 1).getValue();
   const receivedAmt = parseFloat(sh.getRange(row, CONFIG.cols.receivedAmt + 1).getValue()) || 0;
   const paymentAmt = parseFloat(sh.getRange(row, CONFIG.cols.paymentAmt + 1).getValue()) || 0;
@@ -237,35 +220,79 @@ function updateCurrentBalance(sh, row, afterCommit) {
   }
 
   let balance = 0;
+  let note = "";
 
-  switch (paymentType) {
-    case "Unpaid":
-      balance = getSupplierTotalOutstanding(supplier) + receivedAmt;
-      break;
+  if (afterCommit) {
+    // AFTER COMMIT: Always show supplier total outstanding
+    balance = getSupplierTotalOutstanding(supplier);
+    note = "Supplier total outstanding";
+  } else {
+    // BEFORE COMMIT: Show context-specific preview
+    switch (paymentType) {
+      case "Unpaid":
+        balance = getSupplierTotalOutstanding(supplier) + receivedAmt;
+        note = "Preview: Supplier outstanding after receiving";
+        break;
 
-    case "Regular":
-      balance = getSupplierTotalOutstanding(supplier); // invoice is instantly balanced
-      break;
+      case "Regular":
+        balance = getSupplierTotalOutstanding(supplier) + receivedAmt - paymentAmt;
+        note = "Preview: Supplier outstanding (net zero expected)";
+        break;
 
-    case "Partial":
-      balance = receivedAmt - paymentAmt;
-      break;
+      case "Partial":
+        balance = getSupplierTotalOutstanding(supplier) + receivedAmt - paymentAmt;
+        note = "Preview: Supplier outstanding after partial payment";
+        break;
 
-    case "Due":
-      if (!prevInvoice) {
-        balanceCell.clearContent().setNote("Select previous invoice");
+      case "Due":
+        if (!prevInvoice) {
+          balanceCell.clearContent().setNote("Select previous invoice");
+          return;
+        }
+        // BEFORE COMMIT: Show specific invoice balance being paid
+        const invBalance = getInvoiceBalance(supplier, prevInvoice);
+        balance = invBalance;
+        note = `Preview: Invoice ${prevInvoice} balance (before payment)`;
+        break;
+
+      default:
+        balanceCell.clearContent().setNote("Invalid payment type");
         return;
-      }
-      const invBalance = getInvoiceBalance(supplier, prevInvoice);
-      balance = afterCommit ? invBalance - paymentAmt : invBalance;
-      break;
-
-    default:
-      balanceCell.clearContent().setNote("Invalid payment type");
-      return;
+    }
   }
 
   balanceCell.setValue(balance).setNote("Calculated balance");
+}
+
+function buildPrevInvoiceDropdown(sh, row) {
+  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
+  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
+  const targetCell = sh.getRange(row, CONFIG.cols.prevInvoice + 1);
+
+  if (paymentType !== "Due" || !supplier) {
+    targetCell.clearDataValidations().clearContent();
+    return;
+  }
+
+  const invoiceSheet = getSheet(CONFIG.invoiceSheet);
+  const data = invoiceSheet.getDataRange().getValues();
+
+  const validInvoices = data
+    .filter((r, i) => i > 0 && r[1] === supplier && r[5] > 0) // Supplier match + Balance Due > 0
+    .map(r => r[2]); // Invoice No
+
+  if (validInvoices.length === 0) {
+    targetCell.clearDataValidations().setNote("No unpaid invoices for this supplier.");
+    return;
+  }
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(validInvoices, true)
+    .setAllowInvalid(false)
+    .build();
+
+  targetCell.setDataValidation(rule);
+  targetCell.setNote("Select invoice for due payment");
 }
 
 /**

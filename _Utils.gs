@@ -1,10 +1,9 @@
 // ==================== MODULE: Utils.gs ====================
 /**
- * 
- * 
+ * _Utils.gs - Utility Functions
+ * Shared helper functions used across the application
  */
 
-// feat: create base utilities module for shared functions
 
 /**
  * String normalization and manipulation utilities
