@@ -1,18 +1,24 @@
 /**
  * Apps Script for Supplier Accounts automation
+ * Code.gs - Main Application Logic
+ * Uses modular architecture with:
  * - onEdit: validates and creates entries
- * - addInvoiceAndPayment: safe append logic
- * - auditLog: always records edits
+ * 
+ * 
 */
 
 function onEdit(e) {
-  const lock = LockService.getDocumentLock();
-  let locked = false;
+  const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+
+  if (!lock) {
+    console.warn('onEdit: could not obtain lock; aborting.');
+    return;
+  }
 
   try {
-    locked = lock.tryLock(30000);
-    if (!locked) {
-      console.warn('onEdit: could not obtain lock; aborting.');
+    // Validate event object
+    if (!e || !e.range) {
+      console.warn('onEdit: Invalid event object');
       return;
     }
 
@@ -54,12 +60,11 @@ function onEdit(e) {
     console.error("onEdit error:", error);
     logSystemError("onEdit", error.toString());
   } finally {
-    if (locked) { lock.releaseLock(); }
+    LockManager.releaseLock(lock);
   }
 }
 
 function processCommittedRowWithLock(sheet, rowNum) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const totalCols = CONFIG.totalColumns.daily;
   const rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0]; // A:N
   
@@ -74,8 +79,8 @@ function processCommittedRowWithLock(sheet, rowNum) {
     prevInvoice: rowData[CONFIG.cols.prevInvoice],
     notes: rowData[CONFIG.cols.notes],
     enteredBy: Session.getEffectiveUser().getEmail(),
-    timestamp: new Date(),
-    sysId: rowData[CONFIG.cols.sysId] || generateUUID()
+    timestamp: DateUtils.now(), // Uses DateUtils
+    sysId: rowData[CONFIG.cols.sysId] || IDGenerator.generateUUID() // Uses IDGenerator
   };
   
   // Store system ID if not exists
@@ -121,13 +126,13 @@ function processCommittedRowWithLock(sheet, rowNum) {
     setCommitStatus(
       sheet,
       rowNum,
-      `Committed by ${data.enteredBy.split('@')[0]} @ ${formatTime(data.timestamp)}`,
+      `Committed by ${data.enteredBy.split('@')[0]} @ ${DateUtils.DateUtils.formatTime(data.timestamp)}`, // Uses DateUtils
       true
     );
     setRowBackground(sheet, rowNum, '#E8F5E8'); // Light green
     
     // POST-COMMIT AUDIT
-    auditAction('POST-COMMIT', data, 'Commit completed successfully');
+    auditAction('POST-COMMIT', data, `Commit completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
     setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, false);
@@ -198,7 +203,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
 
   const balanceCell = sh.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
 
-  if (!supplier || !paymentType) {
+  if (StringUtils.isEmpty(supplier) || !paymentType) { // Uses StringUtils
     balanceCell.clearContent().setNote("Balance requires supplier & payment type");
     return;
   }
@@ -209,13 +214,15 @@ function updateCurrentBalance(sh, row, afterCommit) {
   // Helper to sum supplier’s open balances
   function getSupplierTotalOutstanding(supp) {
     return data
-      .filter((r, i) => i > 0 && r[1] === supp && r[5] > 0)
+      .filter((r, i) => i > 0 && StringUtils.equals(r[1], supp) && r[5] > 0) // Uses StringUtils
       .reduce((sum, r) => sum + r[5], 0);
   }
 
   // Helper to find single invoice
   function getInvoiceBalance(supp, inv) {
-    const row = data.find((r, i) => i > 0 && r[1] === supp && r[2] == inv);
+    const row = data.find((r, i) => i > 0 && 
+      StringUtils.equals(r[1], supp) && 
+      StringUtils.equals(r[2], inv)); // Uses StringUtils
     return row ? row[5] : 0;
   }
 
@@ -245,7 +252,7 @@ function updateCurrentBalance(sh, row, afterCommit) {
         break;
 
       case "Due":
-        if (!prevInvoice) {
+        if (StringUtils.isEmpty(prevInvoice)) { // Uses StringUtils
           balanceCell.clearContent().setNote("Select previous invoice");
           return;
         }
@@ -308,7 +315,7 @@ function getOutstandingForSupplier(supplier) {
   for (let i = 1; i < data.length; i++) { // skip header row
     try {
       const rowSupplier = (data[i][1] || '').toString().trim();
-      if (rowSupplier === supplier.toString().trim()) {
+      if (StringUtils.equals(data[i][0], supplier)) {
         const bal = Number(data[i][5]) || 0; // Balance Due is column F (index 5)
         total += bal;
       }
@@ -552,7 +559,7 @@ function updateExistingInvoice(existingInvoice, data) {
 
 // PAYMENT PROCESSING
 function processPayment(data) {
-  const paymentSh = getSheet(CONFIG.paymentSheet);
+  const paymentSh = SheetUtils.getSheet(CONFIG.paymentSheet); // Uses SheetUtils
   
   // Determine which invoice this payment applies to
   const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
@@ -575,132 +582,8 @@ function processPayment(data) {
   paymentRow[CONFIG.paymentCols.fromSheet] = data.sheetName;                     // From Sheet
   paymentRow[CONFIG.paymentCols.enteredBy] = data.enteredBy;                     // Entered By
   paymentRow[CONFIG.paymentCols.timestamp] = data.timestamp;                     // Timestamp
-  paymentRow[CONFIG.paymentCols.sysId] = data.sysId + '_PAY';                    // System ID
+  paymentRow[CONFIG.paymentCols.sysId] = IDGenerator.generatePaymentId(data.sysId);                  // System ID Uses IDGenerator
     
   paymentSh.appendRow(paymentRow);
-  return { success: true, action: 'logged', paymentId: data.sysId + '_PAY' };
-}
-
-// HELPER FUNCTIONS
-function shouldProcessPayment(data) {
-  return data.paymentAmt > 0 || data.paymentType === 'Regular';
-}
-
-function isDuplicatePayment(sysId) {
-  const paymentSh = getSheet(CONFIG.paymentSheet);
-  if (!paymentSh) return false;
-  const lastCol = paymentSh.getLastColumn();
-  const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
-  const idIndex = headers.indexOf(CONFIG.idColHeader); // returns -1 if not present
-
-  const searchId = sysId + '_PAY';
-  const startRow = 2;
-  const lastRow = paymentSh.getLastRow();
-  if (lastRow < startRow) return false;
-
-  if (idIndex >= 0) {
-    const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
-    return vals.some(v => v === searchId);
-  } else {
-    // fallback: search last column
-    const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
-    return vals.some(v => v === searchId);
-  }
-}
-
-function setCommitStatus(sheet, rowNum, status, resetCommit) {
-  sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
-  if (resetCommit) {
-    sheet.getRange(rowNum, CONFIG.cols.commit + 1).setValue(false);
-  }
-}
-
-function setRowBackground(sheet, rowNum, color) {
-  const totalCols = CONFIG.totalColumns.daily;
-  sheet.getRange(rowNum, 1, 1, totalCols).setBackground(color); // A:N
-}
-
-function recalculateInvoiceBalances(invoiceNo, supplier) {
-  // This triggers sheet formulas to recalc
-  // For large datasets, you might want script-based recalculation
-  const invoiceSh = getSheet(CONFIG.invoiceSheet);
-  invoiceSh.getRange('A:Z').sort(1); // Simple trigger
-}
-
-function auditAction(action, data, message) {
-  const auditSh = getSheet(CONFIG.auditSheet);
-  const auditRow = [
-    new Date(),
-    data.enteredBy,
-    data.sheetName,
-    `Row ${data.rowNum}`,
-    action,
-    JSON.stringify({
-      supplier: data.supplier,
-      invoice: data.invoiceNo,
-      prevInvoice: data.prevInvoice,
-      receivedAmt: data.receivedAmt,
-      paymentAmt: data.paymentAmt,
-      paymentType: data.paymentType,
-      sysId: data.sysId
-    }),
-    message
-  ];
-  
-  auditSh.appendRow(auditRow);
-}
-
-// UTILITY FUNCTIONS
-function generateUUID() {
-  return 'inv_' + Utilities.getUuid();
-}
-
-function getSheet(name) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(name);
-  if (!sheet) {
-    logSystemError('getSheet', `Sheet "${name}" not found`);
-    throw new Error(`Required sheet "${name}" does not exist`);
-  }
-  return sheet;
-}
-
-function findInvoiceRecord(supplier, invoiceNo) {
-  const invoiceSh = getSheet(CONFIG.invoiceSheet);
-  const data = invoiceSh.getDataRange().getValues();
-  
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][1].toString().trim() === supplier.toString().trim() &&
-        data[i][2].toString().trim() === invoiceNo.toString().trim()) {
-      return { row: i + 1, data: data[i] };
-    }
-  }
-  return null;
-}
-
-function getPaymentMethod(paymentType) {
-  const methods = {
-    'Regular': 'Cash',
-    'Partial': 'Cash', 
-    'Due': 'Cash',
-    'Unpaid': 'None'
-  };
-  return methods[paymentType] || 'Cash';
-}
-
-function formatTime(date) {
-  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'HH:mm:ss');
-}
-
-function logSystemError(context, message) {
-  const auditSh = getSheet(CONFIG.auditSheet);
-  auditSh.appendRow([
-    new Date(),
-    'SYSTEM',
-    'N/A',
-    'N/A',
-    'SYSTEM_ERROR',
-    context,
-    message
-  ]);
+  return { success: true, action: 'logged', paymentId: IDGenerator.generatePaymentId(data.sysId) };
 }

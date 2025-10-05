@@ -264,13 +264,211 @@ const LockManager = {
   }
 };
 
-// Backward compatibility functions
-function getSheet(name) {
-  return SheetUtils.getSheet(name);
+// ==================== DATA LOOKUP ====================
+
+/**
+ * Find invoice record by supplier and invoice number
+ * @param {string} supplier - Supplier name
+ * @param {string} invoiceNo - Invoice number
+ * @returns {Object|null} Object with {row, data} or null if not found
+ */
+function findInvoiceRecord(supplier, invoiceNo) {
+  const invoiceSh = getSheet(CONFIG.invoiceSheet);
+  const data = invoiceSh.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    if (StringUtils.equals(data[i][1], supplier) &&
+        StringUtils.equals(data[i][2], invoiceNo)) {
+      return { row: i + 1, data: data[i] };
+    }
+  }
+  return null;
 }
 
+/**
+ * Get total outstanding balance for a supplier
+ * Sums all Balance Due amounts from InvoiceDatabase
+ * @param {string} supplier - Supplier name
+ * @returns {number} Total outstanding balance
+ */
+function getOutstandingForSupplier(supplier) {
+  if (!supplier) return 0;
+
+  const invoiceSh = getSheet(CONFIG.invoiceSheet);
+  const data = invoiceSh.getDataRange().getValues();
+  let total = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    try {
+      if (StringUtils.equals(data[i][1], supplier)) {
+        const bal = Number(data[i][5]) || 0; // Balance Due is column F (index 5)
+        total += bal;
+      }
+    } catch (e) {
+      // skip bad rows silently
+    }
+  }
+  return total;
+}
+
+/**
+ * Get balance due for a specific invoice
+ * @param {string} invoiceNo - Invoice number
+ * @param {string} supplier - Supplier name
+ * @returns {number} Invoice balance due or 0 if not found
+ */
+function getInvoiceOutstanding(invoiceNo, supplier) {
+  if (!invoiceNo || !supplier) return 0;
+  const rec = findInvoiceRecord(supplier, invoiceNo);
+  if (!rec) return 0;
+  return Number(rec.data[5]) || 0; // column F (index 5)
+}
+
+// ==================== PAYMENT HELPERS ====================
+
+/**
+ * Get payment method based on payment type
+ * @param {string} paymentType - Payment type
+ * @returns {string} Payment method
+ */
+function getPaymentMethod(paymentType) {
+  const methods = {
+    'Regular': 'Cash',
+    'Partial': 'Cash', 
+    'Due': 'Cash',
+    'Unpaid': 'None'
+  };
+  return methods[paymentType] || 'Cash';
+}
+
+/**
+ * Check if payment should be processed for transaction
+ * @param {Object} data - Transaction data
+ * @returns {boolean} True if payment should be logged
+ */
+function shouldProcessPayment(data) {
+  return data.paymentAmt > 0 || data.paymentType === 'Regular';
+}
+
+/**
+ * Check for duplicate payment by system ID
+ * @param {string} sysId - System ID to check
+ * @returns {boolean} True if duplicate exists
+ */
+function isDuplicatePayment(sysId) {
+  const paymentSh = getSheet(CONFIG.paymentSheet);
+  if (!paymentSh) return false;
+  
+  const lastCol = paymentSh.getLastColumn();
+  const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
+  const idIndex = headers.indexOf(CONFIG.idColHeader);
+
+  const searchId = sysId + '_PAY';
+  const startRow = 2;
+  const lastRow = paymentSh.getLastRow();
+  if (lastRow < startRow) return false;
+
+  if (idIndex >= 0) {
+    const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
+    return vals.some(v => v === searchId);
+  } else {
+    const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
+    return vals.some(v => v === searchId);
+  }
+}
+
+// ==================== UI HELPERS ====================
+
+/**
+ * Set commit status message in daily sheet
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+ * @param {number} rowNum - Row number
+ * @param {string} status - Status message
+ * @param {boolean} resetCommit - Whether to reset commit checkbox
+ */
+function setCommitStatus(sheet, rowNum, status, resetCommit) {
+  sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
+  if (resetCommit) {
+    sheet.getRange(rowNum, CONFIG.cols.commit + 1).setValue(false);
+  }
+}
+
+/**
+ * Set background color for entire row
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+ * @param {number} rowNum - Row number
+ * @param {string} color - Hex color code
+ */
+function setRowBackground(sheet, rowNum, color) {
+  const totalCols = CONFIG.totalColumns.daily;
+  sheet.getRange(rowNum, 1, 1, totalCols).setBackground(color);
+}
+
+// ==================== AUDIT LOGGING ====================
+
+/**
+ * Log action to audit trail
+ * @param {string} action - Action type
+ * @param {Object} data - Transaction data
+ * @param {string} message - Audit message
+ */
+function auditAction(action, data, message) {
+  const auditSh = getSheet(CONFIG.auditSheet);
+  const auditRow = [
+    new Date(),
+    data.enteredBy || 'SYSTEM',
+    data.sheetName || 'N/A',
+    `Row ${data.rowNum || 'N/A'}`,
+    action,
+    JSON.stringify({
+      supplier: data.supplier,
+      invoice: data.invoiceNo,
+      prevInvoice: data.prevInvoice,
+      receivedAmt: data.receivedAmt,
+      paymentAmt: data.paymentAmt,
+      paymentType: data.paymentType,
+      sysId: data.sysId
+    }),
+    message
+  ];
+  
+  auditSh.appendRow(auditRow);
+}
+
+/**
+ * Log system error to audit trail
+ * @param {string} context - Error context/location
+ * @param {string} message - Error message
+ */
+function logSystemError(context, message) {
+  try {
+    const auditSh = getSheet(CONFIG.auditSheet);
+    auditSh.appendRow([
+      new Date(),
+      'SYSTEM',
+      'N/A',
+      'N/A',
+      'SYSTEM_ERROR',
+      context,
+      message
+    ]);
+  } catch (error) {
+    // Fallback to console if audit sheet is unavailable
+    console.error(`[SYSTEM ERROR] ${context}: ${message}`);
+  }
+}
+
+// ==================== BACKWARD COMPATIBILITY ====================
+
+/**
+ * Backward compatibility wrappers for legacy code
+ */
 function generateUUID() {
   return IDGenerator.generateUUID();
+}
+
+function getSheet(name) {
+  return SheetUtils.getSheet(name);
 }
 
 function formatTime(date) {
