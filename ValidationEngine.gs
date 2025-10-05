@@ -275,11 +275,10 @@ function validateAmount(amount, fieldName) {
   }
   
   // Optional: Check maximum transaction amount
-  const MAX_AMOUNT = 1000000; // Configure as needed
-  if (amount > MAX_AMOUNT) {
+  if (amount > CONFIG.rules.MAX_TRANSACTION_AMOUNT) {
     return { 
       valid: false, 
-      error: `${fieldName} (${amount}) exceeds maximum allowed (${MAX_AMOUNT})` 
+      error: `${fieldName} (${amount}) exceeds maximum allowed (${CONFIG.rules.MAX_TRANSACTION_AMOUNT})` 
     };
   }
   
