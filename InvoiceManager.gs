@@ -1,7 +1,11 @@
 // ==================== MODULE: InvoiceManager.gs ====================
 /**
  * Invoice management module
- * Handles all invoice CRUD operations
+ * Handles all invoice-related operations
+ * - Creating new invoices
+ * - Updating existing invoices
+ * - Finding invoice records
+ * - Managing invoice formulas
  */
 
 // Cache for invoice data to reduce repeated sheet reads
@@ -28,6 +32,8 @@ const InvoiceCache = {
     this.timestamp = null;
   }
 };
+
+// ==================== INVOICE MANAGER MODULE ====================
 
 const InvoiceManager = {
   /**
@@ -87,42 +93,28 @@ const InvoiceManager = {
         };
       }
       
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
 
-      // Build new invoice row using column indices
-      const newInvoice = new Array(CONFIG.totalColumns.invoice);
-      newInvoice[CONFIG.invoiceCols.date] = data.timestamp;
-      newInvoice[CONFIG.invoiceCols.supplier] = data.supplier;
-      newInvoice[CONFIG.invoiceCols.invoiceNo] = data.invoiceNo;
-      newInvoice[CONFIG.invoiceCols.totalAmount] = data.receivedAmt;
-      newInvoice[CONFIG.invoiceCols.totalPaid] = '';      // Formula
-      newInvoice[CONFIG.invoiceCols.balanceDue] = '';     // Formula
-      newInvoice[CONFIG.invoiceCols.status] = '';         // Formula
-      newInvoice[CONFIG.invoiceCols.originDay] = data.sheetName;
-      newInvoice[CONFIG.invoiceCols.daysOutstanding] = ''; // Formula
-      newInvoice[CONFIG.invoiceCols.sysId] = IDGenerator.generateInvoiceId(data.sysId);
+      // Build new invoice row
+      const newInvoice = [
+        data.timestamp,                              // A: Date
+        data.supplier,                               // B: Supplier
+        data.invoiceNo,                              // C: Invoice No
+        data.receivedAmt,                            // D: Total Amount
+        '',                                          // E: Total Paid (formula)
+        '',                                          // F: Balance Due (formula)
+        '',                                          // G: Status (formula)
+        data.sheetName,                              // H: Origin Day
+        '',                                          // I: Days Outstanding (formula)
+        IDGenerator.generateInvoiceId(data.sysId)    // J: System ID
+      ];
 
       invoiceSh.appendRow(newInvoice);
 
+      // Apply formulas to new row
       const newRow = lastRow + 1;
-      
-      // Apply formulas using column letters from config
-      const colInvoiceNo = CONFIG.getColumnLetter(CONFIG.invoiceCols.invoiceNo);
-      const colTotalAmt = CONFIG.getColumnLetter(CONFIG.invoiceCols.totalAmount);
-      const colTotalPaid = CONFIG.getColumnLetter(CONFIG.invoiceCols.totalPaid);
-      const colBalanceDue = CONFIG.getColumnLetter(CONFIG.invoiceCols.balanceDue);
-      const colDate = CONFIG.getColumnLetter(CONFIG.invoiceCols.date);
-      
-      const formulas = [[
-        `=IF(${colInvoiceNo}${newRow}="","", IFERROR(SUMIF(PaymentLog!C:C, ${colInvoiceNo}${newRow}, PaymentLog!E:E), 0))`,
-        `=IF(${colTotalAmt}${newRow}="","", ${colTotalAmt}${newRow} - ${colTotalPaid}${newRow})`,
-        `=IFS(${colBalanceDue}${newRow}=0,"Paid", ${colBalanceDue}${newRow}=${colTotalAmt}${newRow},"Unpaid", ${colBalanceDue}${newRow}<${colTotalAmt}${newRow},"Partial")`,
-        `=IF(${colBalanceDue}${newRow}=0,0, TODAY()-${colDate}${newRow})`
-      ]];
-      
-      // Batch set formulas (columns E, F, G, I)
-      invoiceSh.getRange(newRow, CONFIG.invoiceCols.totalPaid + 1, 1, 4).setFormulas(formulas);
+      this.setFormulas(invoiceSh, newRow);
       
       // Clear cache after invoice creation
       InvoiceCache.clear();
@@ -152,7 +144,7 @@ const InvoiceManager = {
   /**
    * Update existing invoice
    * 
-   * @param {Object} existingInvoice - Existing invoice record
+   * @param {Object} existingInvoice - Existing invoice record {row, data}
    * @param {Object} data - Transaction data
    * @returns {Object} Result with success flag
    */
@@ -162,7 +154,7 @@ const InvoiceManager = {
     }
     
     try {
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const rowNum = existingInvoice.row;
       const currentTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
       const currentOrigin = existingInvoice.data[CONFIG.invoiceCols.originDay];
@@ -178,6 +170,10 @@ const InvoiceManager = {
       // Update Total Amount (column D) and Origin Day (column H)
       invoiceSh.getRange(rowNum, CONFIG.invoiceCols.totalAmount + 1).setValue(data.receivedAmt);
       invoiceSh.getRange(rowNum, CONFIG.invoiceCols.originDay + 1).setValue(data.sheetName);
+
+      // Touch the row to trigger formula recalculation
+      const currentDate = invoiceSh.getRange(rowNum, 1).getValue();
+      invoiceSh.getRange(rowNum, 1).setValue(currentDate);
       
       // Clear cache after update
       InvoiceCache.clear();
@@ -191,6 +187,40 @@ const InvoiceManager = {
       AuditLogger.logError('InvoiceManager.update', 
         `Failed to update invoice: ${error.toString()}`);
       return { success: false, error: error.toString() };
+    }
+  },
+
+  /**
+   * Set formulas for invoice row
+   * 
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
+   * @param {number} row - Row number
+   */
+  setFormulas: function(sheet, row) {
+    try {
+      // Column E: Total Paid (sum of all payments for this invoice)
+      sheet.getRange(`E${row}`).setFormula(
+        `=IF(C${row}="","", IFERROR(SUMIF(PaymentLog!C:C, C${row}, PaymentLog!E:E), 0))`
+      );
+      
+      // Column F: Balance Due (Total Amount - Total Paid)
+      sheet.getRange(`F${row}`).setFormula(
+        `=IF(D${row}="","", D${row} - E${row})`
+      );
+      
+      // Column G: Status (Paid/Unpaid/Partial based on balance)
+      sheet.getRange(`G${row}`).setFormula(
+        `=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`
+      );
+      
+      // Column I: Days Outstanding (days since invoice date, 0 if paid)
+      sheet.getRange(`I${row}`).setFormula(
+        `=IF(F${row}=0,0, TODAY()-A${row})`
+      );
+    } catch (error) {
+      logSystemError('InvoiceManager.setFormulas', 
+        `Failed to set formulas for row ${row}: ${error.toString()}`);
+      throw error;
     }
   },
   
@@ -209,7 +239,7 @@ const InvoiceManager = {
     }
 
     try {
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const data = invoiceSh.getDataRange().getValues();
       
       const normalizedSupplier = StringUtils.normalize(supplier);
@@ -234,7 +264,7 @@ const InvoiceManager = {
    * Get unpaid invoices for supplier
    * 
    * @param {string} supplier - Supplier name
-   * @returns {Array} Array of unpaid invoices
+   * @returns {Array} Array of unpaid invoice objects
    */
   getUnpaidForSupplier: function(supplier) {
     if (StringUtils.isEmpty(supplier)) {
@@ -242,7 +272,7 @@ const InvoiceManager = {
     }
     
     try {
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
       
       if (lastRow < 2) {
@@ -278,8 +308,8 @@ const InvoiceManager = {
    * Get all invoices for supplier
    * 
    * @param {string} supplier - Supplier name
-   * @param {boolean} includesPaid - Include paid invoices
-   * @returns {Array} Array of invoices
+   * @param {boolean} includePaid - Whether to include paid invoices
+   * @returns {Array} Array of invoice objects
    */
   getAllForSupplier: function(supplier, includePaid = true) {
     if (StringUtils.isEmpty(supplier)) {
@@ -287,7 +317,7 @@ const InvoiceManager = {
     }
     
     try {
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
       
       if (lastRow < 2) {
@@ -330,7 +360,7 @@ const InvoiceManager = {
    */
   getStatistics: function() {
     try {
-      const invoiceSh = SheetUtils.getSheet(CONFIG.invoiceSheet);
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
       
       if (lastRow < 2) {
@@ -378,15 +408,17 @@ const InvoiceManager = {
    * Build dropdown list of unpaid invoices for a supplier
    * Used for Due payment dropdown
    * 
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Target sheet
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Daily sheet
    * @param {number} row - Target row
    * @param {string} supplier - Supplier name
+   * @param {string} paymentType - Payment type
    * @returns {boolean} Success flag
    */
-  buildUnpaidDropdown: function(sheet, row, supplier) {
+  buildUnpaidDropdown: function(sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
     
-    if (StringUtils.isEmpty(supplier)) {
+    // Clear dropdown if not Due payment or no supplier
+    if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
         targetCell.clearDataValidations().clearContent();
       } catch (e) {
@@ -431,10 +463,45 @@ const InvoiceManager = {
       
       return false;
     }
+  },
+
+  /**
+   * Repair formulas for all invoices (maintenance function)
+   * 
+   * @returns {Object} Result with repaired count
+   */
+  repairAllFormulas: function() {
+    try {
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      const lastRow = invoiceSh.getLastRow();
+      let repairedCount = 0;
+      
+      for (let i = 2; i <= lastRow; i++) {
+        // Check if formulas are missing
+        const formulaE = invoiceSh.getRange(i, 5).getFormula();
+        const formulaF = invoiceSh.getRange(i, 6).getFormula();
+        const formulaG = invoiceSh.getRange(i, 7).getFormula();
+        const formulaI = invoiceSh.getRange(i, 9).getFormula();
+        
+        if (!formulaE || !formulaF || !formulaG || !formulaI) {
+          this.setFormulas(invoiceSh, i);
+          repairedCount++;
+        }
+      }
+      
+      return { success: true, repairedCount: repairedCount };
+    } catch (error) {
+      logSystemError('InvoiceManager.repairAllFormulas', error.toString());
+      return { success: false, error: error.toString() };
+    }
   }
 };
 
-// Backward compatibility functions
+// ==================== BACKWARD COMPATIBILITY ====================
+
+/**
+ * Backward compatibility wrapper functions
+ */
 function processInvoice(data) {
   return InvoiceManager.process(data);
 }
@@ -451,38 +518,37 @@ function findInvoiceRecord(supplier, invoiceNo) {
   return InvoiceManager.find(supplier, invoiceNo);
 }
 
-function buildPrevInvoiceDropdown(sh, row) {
-  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
-  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
-  const targetCell = sh.getRange(row, CONFIG.cols.prevInvoice + 1);
+function setInvoiceFormulas(sheet, row) {
+  return InvoiceManager.setFormulas(sheet, row);
+}
 
-  if (paymentType !== "Due" || !supplier) {
-    targetCell.clearDataValidations().clearContent();
-    return;
-  }
+function getUnpaidInvoicesForSupplier(supplier) {
+  return InvoiceManager.getUnpaidForSupplier(supplier);
+}
 
-  const invoiceSheet = getSheet(CONFIG.invoiceSheet);
-  const lastRow = invoiceSheet.getLastRow();
-  const data = invoiceSheet.getDataRange().getValues();
+function getAllInvoicesForSupplier(supplier, includePaid) {
+  return InvoiceManager.getAllForSupplier(supplier, includePaid);
+}
 
-  const validInvoices = data
-    .filter((r, i) => i > 0 && r[1] === supplier && r[5] > 0) // Supplier match + Balance Due > 0
-    .map(r => r[2]); // Invoice No
+function getInvoiceStatistics() {
+  return InvoiceManager.getStatistics();
+}
 
-  if (validInvoices.length === 0) {
-    targetCell.clearDataValidations().setNote("No unpaid invoices for this supplier.");
-    return;
-  }
+function buildInvoiceDropdown(sheet, row, supplier, paymentType) {
+  return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+}
 
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(validInvoices, true)
-    .setAllowInvalid(false)
-    .build();
-
-  targetCell.setDataValidation(rule);
-  targetCell.setNote("Select invoice for due payment");
+function repairAllInvoiceFormulas() {
+  return InvoiceManager.repairAllFormulas();
 }
 
 function clearInvoiceCache() {
   InvoiceCache.clear();
+}
+
+// Legacy function for compatibility with old Code.gs
+function buildPrevInvoiceDropdown(sh, row) {
+  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
+  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
+  return InvoiceManager.buildUnpaidDropdown(sh, row, supplier, paymentType);
 }
