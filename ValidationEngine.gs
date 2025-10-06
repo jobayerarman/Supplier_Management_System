@@ -50,7 +50,6 @@ function validateCommitData(data) {
   // === 6. Return Result ===
   if (errors.length > 0) {
     const errorMessage = errors.join('; ');
-    auditAction('VALIDATION_FAILED', data, errorMessage);
     return { 
       valid: false,
       error: errorMessage,
@@ -150,7 +149,7 @@ function validateDuePayment(data) {
       if (!prevInvoice) {
         errors.push(`Previous invoice "${data.prevInvoice}" not found for supplier "${data.supplier}"`);
       } else {
-        const currentBalance = Number(prevInvoice.data[5]) || 0; // Balance Due column
+        const currentBalance = Number(prevInvoice.data[6]) || 0; // Balance Due column
         if (currentBalance <= 0) {
           errors.push(`Invoice "${data.prevInvoice}" has no outstanding balance`);
         } else if (data.paymentAmt > currentBalance) {
