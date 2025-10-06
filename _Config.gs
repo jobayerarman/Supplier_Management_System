@@ -24,8 +24,8 @@ const CONFIG = {
     supplier: 1,        // B
     invoiceNo: 2,       // C
     receivedAmt: 3,     // D
-    paymentAmt: 4,      // E
-    paymentType: 5,     // F
+    paymentType: 4,     // E
+    paymentAmt: 5,      // F
     prevInvoice: 6,     // G (reference invoice for Due payments)
     balance: 7,         // H (CURRENT BALANCE column)
     notes: 8,           // I
@@ -38,16 +38,18 @@ const CONFIG = {
   
   // Invoice sheet column mappings (0-based indices)
   invoiceCols: {
-    date: 0,            // A
-    supplier: 1,        // B
-    invoiceNo: 2,       // C
-    totalAmount: 3,     // D
-    totalPaid: 4,       // E (formula)
-    balanceDue: 5,      // F (formula)
-    status: 6,          // G (formula)
-    originDay: 7,       // H
-    daysOutstanding: 8, // I (formula)
-    sysId: 9            // J
+    date: 0,              // A
+    supplier: 1,          // B
+    invoiceNo: 2,         // C
+    invoiceDate: 3,       // D (NEW - actual receive date)
+    totalAmount: 4,       // E
+    totalPaid: 5,         // F (formula)
+    balanceDue: 6,        // G (formula)
+    status: 7,            // H (formula)
+    paidDate: 8,          // I (NEW - formula)
+    originDay: 9,         // J
+    daysOutstanding: 10,  // K (formula)
+    sysId: 11             // L
   },
   
   // Payment sheet column mappings (0-based indices)
@@ -107,7 +109,7 @@ const CONFIG = {
   // Total columns in each sheet
   totalColumns: {
     daily: 14,          // A through N
-    invoice: 10,        // A through J
+    invoice: 12,        // A through L
     payment: 11,        // A through K
     ledger: 4,          // A through D
     audit: 7            // A through G

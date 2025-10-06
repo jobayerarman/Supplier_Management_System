@@ -25,8 +25,11 @@ const PaymentManager = {
       
       // Build payment row using column indices
       const paymentRow = new Array(CONFIG.totalColumns.payment);
+
+      // Get payment date from daily sheet (same as invoice date)
+      const paymentDate = getDailySheetDate(data.sheetName) || data.timestamp;
       
-      paymentRow[CONFIG.paymentCols.date] = data.timestamp;
+      paymentRow[CONFIG.paymentCols.date] = paymentDate;
       paymentRow[CONFIG.paymentCols.supplier] = data.supplier;
       paymentRow[CONFIG.paymentCols.invoiceNo] = targetInvoice;
       paymentRow[CONFIG.paymentCols.paymentType] = data.paymentType;
@@ -41,7 +44,7 @@ const PaymentManager = {
       paymentSh.appendRow(paymentRow);
       
       AuditLogger.log('PAYMENT_LOGGED', data, 
-        `Payment of ${data.paymentAmt} logged for invoice ${targetInvoice}`);
+        `Payment of ${data.paymentAmt} logged for invoice ${targetInvoice} on ${DateUtils.formatDate(paymentDate)}`);
       
       return { 
         success: true, 
