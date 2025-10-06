@@ -31,11 +31,11 @@ function onEdit(e) {
     const col = e.range.getColumn();
     if (!CONFIG.dailySheets.includes(sheetName) || row < 2) return;
 
-    // === 1. Handle commit ===
+    // === 1. Handle Posting ===
     if (col === CONFIG.cols.commit + 1) {
       const cellVal = sh.getRange(row, col).getValue();
-      const isCommitted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
-      if (isCommitted) {
+      const isPosted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
+      if (isPosted) {
         processCommittedRowWithLock(sh, row);
         updateCurrentBalance(sh, row, true); // After commit: show supplier total outstanding
       }
@@ -67,18 +67,22 @@ function onEdit(e) {
 }
 
 /**
- * Process committed row with full transaction workflow
+ * Process posted row with full transaction workflow
  */
 function processCommittedRowWithLock(sheet, rowNum) {
   const totalCols = CONFIG.totalColumns.daily;
   const rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0]; // A:N
+
+  // Calculate timestamp and invoice date BEFORE data object
+  const timestamp = DateUtils.now();
+  const invoiceDate = getDailySheetDate(sheet.getName()) || timestamp;
   
   const data = {
     sheetName: sheet.getName(),
     rowNum: rowNum,
     supplier: rowData[CONFIG.cols.supplier],
     invoiceNo: rowData[CONFIG.cols.invoiceNo],
-    invoiceDate: getDailySheetDate(sheet.getName()) || data.timestamp,
+    invoiceDate: invoiceDate,
     receivedAmt: parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0,
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     paymentType: rowData[CONFIG.cols.paymentType],
@@ -95,7 +99,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
   }
   
   // PRE-COMMIT AUDIT
-  auditAction('PRE-COMMIT', data, 'Starting commit process');
+  auditAction('PRE-COMMIT', data, 'Starting posting process');
   
   try {
     // 1. VALIDATION - Uses ValidationEngine.gs
@@ -121,7 +125,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
         return;
       }
 
-      // NEW: Check if invoice is fully paid and update paid date
+      // Check if invoice is fully paid and update paid date
       SpreadsheetApp.flush();
       
       const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
@@ -130,25 +134,22 @@ function processCommittedRowWithLock(sheet, rowNum) {
       }
     }
     
-    // 4. CALCULATE SUPPLIER OUTSTANDING - Uses BalanceCalculator.gs
-    const supplierOutstanding = BalanceCalculator.calculate(data);
-
-    // 5. UPDATE DAILY SHEET WITH SUPPLIER OUTSTANDING
-    sheet.getRange(rowNum, CONFIG.cols.balance + 1).setValue(supplierOutstanding);
-    
-    // 6. SUCCESS
+    // 4. SUCCESS
     setCommitStatus(
       sheet,
       rowNum,
-      'COMMITTED',
+      'POSTED',
       data.enteredBy.split('@')[0],
       DateUtils.formatTime(data.timestamp),
       true
     );
     setRowBackground(sheet, rowNum, CONFIG.colors.success);
     
+    // 5. Get final supplier outstanding AFTER all updates
+    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(data.supplier);
+
     // POST-COMMIT AUDIT
-    auditAction('POST-COMMIT', data, `Commit completed. Supplier outstanding: ${supplierOutstanding}`);
+    auditAction('POST-COMMIT', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
     setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
@@ -158,11 +159,11 @@ function processCommittedRowWithLock(sheet, rowNum) {
 
 /**
  * Update balance preview in daily sheet
- * Shows context-appropriate balance based on payment type and commit state
+ * Shows context-appropriate balance based on payment type and post state
  * 
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sh - Active sheet
  * @param {number} row - Row number
- * @param {boolean} afterCommit - Whether this is after commit
+ * @param {boolean} afterCommit - Whether this is after post
  */
 function updateCurrentBalance(sh, row, afterCommit) {
   const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
