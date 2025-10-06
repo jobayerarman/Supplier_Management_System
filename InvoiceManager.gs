@@ -96,18 +96,23 @@ const InvoiceManager = {
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
 
-      // Build new invoice row
+      // Get invoice date from daily sheet A3
+      const invoiceDate = getDailySheetDate(data.sheetName) || data.timestamp;
+
+      // Build new invoice row (now 12 columns)
       const newInvoice = [
-        data.timestamp,                              // A: Date
+        data.timestamp,                              // A: Date (legacy - first transaction)
         data.supplier,                               // B: Supplier
         data.invoiceNo,                              // C: Invoice No
-        data.receivedAmt,                            // D: Total Amount
-        '',                                          // E: Total Paid (formula)
-        '',                                          // F: Balance Due (formula)
-        '',                                          // G: Status (formula)
-        data.sheetName,                              // H: Origin Day
-        '',                                          // I: Days Outstanding (formula)
-        IDGenerator.generateInvoiceId(data.sysId)    // J: System ID
+        invoiceDate,                                 // D: Invoice Date (NEW)
+        data.receivedAmt,                            // E: Total Amount
+        '',                                          // F: Total Paid (formula)
+        '',                                          // G: Balance Due (formula)
+        '',                                          // H: Status (formula)
+        '',                                          // I: Paid Date (formula)
+        data.sheetName,                              // J: Origin Day
+        '',                                          // K: Days Outstanding (formula)
+        IDGenerator.generateInvoiceId(data.sysId)    // L: System ID
       ];
 
       invoiceSh.appendRow(newInvoice);
@@ -120,7 +125,7 @@ const InvoiceManager = {
       InvoiceCache.clear();
       
       AuditLogger.log('INVOICE_CREATED', data, 
-        `New invoice created at row ${newRow}`);
+        `New invoice created at row ${newRow}, Invoice Date: ${DateUtils.formatDate(invoiceDate)}`);
 
       return { 
         success: true, 
@@ -191,6 +196,36 @@ const InvoiceManager = {
   },
 
   /**
+   * Update paid date when invoice is fully paid
+   * Called after payment processing
+   * @param {string} invoiceNo - Invoice number
+   * @param {string} supplier - Supplier name
+   * @param {Date} paymentDate - Date of final payment
+   */
+  updatePaidDate: function(invoiceNo, supplier, paymentDate) {
+    try {
+      const invoice = this.find(supplier, invoiceNo);
+      if (!invoice) return;
+      
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      const balanceDue = Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
+      const currentPaidDate = invoice.data[CONFIG.invoiceCols.paidDate];
+      
+      // If balance is zero and paid date is empty, set it
+      if (balanceDue === 0 && !currentPaidDate) {
+        invoiceSh.getRange(invoice.row, CONFIG.invoiceCols.paidDate + 1)
+          .setValue(paymentDate);
+        
+        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier }, 
+          `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
+      }
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.updatePaidDate', 
+        `Failed to update paid date: ${error.toString()}`);
+    }
+  },
+
+  /**
    * Set formulas for invoice row
    * 
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
@@ -199,24 +234,25 @@ const InvoiceManager = {
   setFormulas: function(sheet, row) {
     try {
       // Column E: Total Paid (sum of all payments for this invoice)
-      sheet.getRange(`E${row}`).setFormula(
+      sheet.getRange(`F${row}`).setFormula(
         `=IF(C${row}="","", IFERROR(SUMIF(PaymentLog!C:C, C${row}, PaymentLog!E:E), 0))`
       );
       
-      // Column F: Balance Due (Total Amount - Total Paid)
-      sheet.getRange(`F${row}`).setFormula(
-        `=IF(D${row}="","", D${row} - E${row})`
-      );
-      
-      // Column G: Status (Paid/Unpaid/Partial based on balance)
+      // Column G: Balance Due (Total Amount - Total Paid)
       sheet.getRange(`G${row}`).setFormula(
-        `=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`
+        `=IF(D${row}="","", E${row} - F${row})`
       );
       
-      // Column I: Days Outstanding (days since invoice date, 0 if paid)
-      sheet.getRange(`I${row}`).setFormula(
-        `=IF(F${row}=0,0, TODAY()-A${row})`
+      // Column H: Status (Paid/Unpaid/Partial based on balance)
+      sheet.getRange(`H${row}`).setFormula(
+        `=IFS(G${row}=0,"Paid", G${row}=E${row},"Unpaid", G${row}<E${row},"Partial")`
       );
+      
+      // Column K: Days Outstanding (days since invoice date, 0 if paid)
+      sheet.getRange(`K${row}`).setFormula(
+        `=IF(G${row}=0, 0, TODAY() - D${row})`
+      );
+
     } catch (error) {
       logSystemError('InvoiceManager.setFormulas', 
         `Failed to set formulas for row ${row}: ${error.toString()}`);
@@ -446,9 +482,7 @@ const InvoiceManager = {
         .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s)`)
         .build();
 
-      targetCell.setDataValidation(rule)
-        .setNote(`${invoiceNumbers.length} unpaid invoice(s) available`)
-        .setBackground(CONFIG.colors.success);
+      targetCell.setDataValidation(rule).setBackground(CONFIG.colors.info);
       
       return true;
       

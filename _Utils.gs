@@ -171,6 +171,47 @@ const SheetUtils = {
 };
 
 /**
+ * Get the date from cell A3 of a daily sheet
+ * @param {string} sheetName - Daily sheet name (01-31)
+ * @returns {Date|null} Date from A3 or null
+ */
+function getDailySheetDate(sheetName) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+    if (!sheet) return null;
+    
+    const dateValue = sheet.getRange('A3').getValue();
+    
+    // Handle various date formats
+    if (dateValue instanceof Date) {
+      return dateValue;
+    }
+    
+    // Try parsing string
+    if (typeof dateValue === 'string') {
+      const parsed = new Date(dateValue);
+      if (!isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    
+    // Fallback: construct from sheet name and current month/year
+    const day = parseInt(sheetName);
+    if (!isNaN(day) && day >= 1 && day <= 31) {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), day);
+    }
+    
+    return null;
+    
+  } catch (error) {
+    AuditLogger.logError('getDailySheetDate', 
+      `Failed to get date from sheet ${sheetName}: ${error.toString()}`);
+    return null;
+  }
+}
+
+/**
  * Generate unique identifiers
  */
 const IDGenerator = {
@@ -357,10 +398,21 @@ function isDuplicatePayment(sysId) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {string} status - Status message
+ * @param {string} enteredBy - User email (optional)
+ * @param {Date} timestamp - Timestamp (optional)
  * @param {boolean} resetCommit - Whether to reset commit checkbox
  */
-function setCommitStatus(sheet, rowNum, status, resetCommit) {
+function setCommitStatus(sheet, rowNum, status, enteredBy, timestamp, resetCommit) {
   sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
+  
+  if (enteredBy) {
+    sheet.getRange(rowNum, CONFIG.cols.enteredBy + 1).setValue(enteredBy);
+  }
+  
+  if (timestamp) {
+    sheet.getRange(rowNum, CONFIG.cols.timestamp + 1).setValue(timestamp);
+  }
+
   if (resetCommit) {
     sheet.getRange(rowNum, CONFIG.cols.commit + 1).setValue(false);
   }
