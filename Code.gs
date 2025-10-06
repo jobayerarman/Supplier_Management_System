@@ -1,5 +1,5 @@
 /**
- * Code.gs - Main Application Logic
+ * SYSTEM - Main Application Logic
  * Uses modular architecture with:
  * - _Config.gs for configuration
  * - _Utils.gs for utilities
@@ -78,6 +78,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
     rowNum: rowNum,
     supplier: rowData[CONFIG.cols.supplier],
     invoiceNo: rowData[CONFIG.cols.invoiceNo],
+    invoiceDate: getDailySheetDate(sheet.getName()) || data.timestamp,
     receivedAmt: parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0,
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     paymentType: rowData[CONFIG.cols.paymentType],
@@ -100,7 +101,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
     // 1. VALIDATION - Uses ValidationEngine.gs
     const validation = validateCommitData(data);
     if (!validation.valid) {
-      setCommitStatus(sheet, rowNum, `ERROR: ${validation.error}`, false);
+      setCommitStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
       auditAction('VALIDATION_FAILED', data, validation.error);
       return;
     }
@@ -108,7 +109,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
     // 2. PROCESS INVOICE - Uses InvoiceManager.gs
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
-      setCommitStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, false);
+      setCommitStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
       return;
     }
     
@@ -116,9 +117,10 @@ function processCommittedRowWithLock(sheet, rowNum) {
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
-        setCommitStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, false);
+        setCommitStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
         return;
       }
+
     }
     
     // 4. CALCULATE SUPPLIER OUTSTANDING - Uses BalanceCalculator.gs
@@ -131,7 +133,9 @@ function processCommittedRowWithLock(sheet, rowNum) {
     setCommitStatus(
       sheet,
       rowNum,
-      `Committed by ${data.enteredBy.split('@')[0]} @ ${DateUtils.formatTime(data.timestamp)}`,
+      'COMMITTED',
+      data.enteredBy.split('@')[0],
+      DateUtils.formatTime(data.timestamp),
       true
     );
     setRowBackground(sheet, rowNum, CONFIG.colors.success);
@@ -140,7 +144,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
     auditAction('POST-COMMIT', data, `Commit completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
-    setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, false);
+    setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
     logSystemError('processCommittedRow', error.toString());
   }
 }
