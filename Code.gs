@@ -121,6 +121,13 @@ function processCommittedRowWithLock(sheet, rowNum) {
         return;
       }
 
+      // NEW: Check if invoice is fully paid and update paid date
+      SpreadsheetApp.flush();
+      
+      const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
+      if (targetInvoice) {
+        InvoiceManager.updatePaidDate(targetInvoice, data.supplier, data.invoiceDate);
+      }
     }
     
     // 4. CALCULATE SUPPLIER OUTSTANDING - Uses BalanceCalculator.gs
