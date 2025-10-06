@@ -89,7 +89,7 @@ function processCommittedRowWithLock(sheet, rowNum) {
     prevInvoice: rowData[CONFIG.cols.prevInvoice],
     notes: rowData[CONFIG.cols.notes],
     enteredBy: Session.getEffectiveUser().getEmail(),
-    timestamp: DateUtils.now(),
+    timestamp: timestamp,
     sysId: rowData[CONFIG.cols.sysId] || IDGenerator.generateUUID()
   };
   
@@ -178,9 +178,6 @@ function updateCurrentBalance(sh, row, afterCommit) {
     balanceCell.clearContent().setNote("Balance requires supplier & payment type");
     return;
   }
-
-  const invoiceSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.invoiceSheet);
-  const data = invoiceSheet.getDataRange().getValues();
 
   let balance = 0;
   let note = "";
