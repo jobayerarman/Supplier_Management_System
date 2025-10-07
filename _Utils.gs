@@ -394,15 +394,15 @@ function isDuplicatePayment(sysId) {
 // ==================== UI HELPERS ====================
 
 /**
- * Set post status message in daily sheet
+ * Set post status and metadata in daily sheet
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {string} status - Status message
  * @param {string} enteredBy - User email (optional)
- * @param {Date} timestamp - Timestamp (optional)
- * @param {boolean} resetPost - Whether to reset post checkbox
+ * @param {string} timestamp - Formatted timestamp (optional)
+ * @param {boolean} keepPostChecked - Whether to keep post checkbox checked (default: true)
  */
-function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, resetPost) {
+function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChecked = true) {
   sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
   
   if (enteredBy) {
@@ -412,8 +412,10 @@ function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, resetPost) {
   if (timestamp) {
     sheet.getRange(rowNum, CONFIG.cols.timestamp + 1).setValue(timestamp);
   }
-
-  if (resetPost) {
+  
+  // Keep checkbox checked by default (visual confirmation)
+  // Only uncheck on errors
+  if (!keepPostChecked) {
     sheet.getRange(rowNum, CONFIG.cols.post + 1).setValue(false);
   }
 }
