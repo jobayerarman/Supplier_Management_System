@@ -25,37 +25,37 @@ function onEdit(e) {
       return;
     }
 
-    const sh = e.range.getSheet();
-    const sheetName = sh.getName();
+    const sheet = e.range.getSheet();
+    const sheetName = sheet.getName();
     const row = e.range.getRow();
     const col = e.range.getColumn();
     if (!CONFIG.dailySheets.includes(sheetName) || row < 2) return;
 
     // === 1. Handle Posting ===
     if (col === CONFIG.cols.post + 1) {
-      const cellVal = sh.getRange(row, col).getValue();
+      const cellVal = sheet.getRange(row, col).getValue();
       const isPosted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
       if (isPosted) {
-        processPostedRowWithLock(sh, row);
-        updateCurrentBalance(sh, row, true); // After post: show supplier total outstanding
+        processPostedRowWithLock(sheet, row);
+        updateCurrentBalance(sheet, row, true); // After post: show supplier total outstanding
       }
       return;
     }
 
     // === 2. Handle Supplier/Payment Type edits ===
     if (col === CONFIG.cols.supplier + 1 || col === CONFIG.cols.paymentType + 1) {
-      buildPrevInvoiceDropdown(sh, row);
-      updateCurrentBalance(sh, row, false); // Before-post preview
+      buildPrevInvoiceDropdown(sheet, row);
+      updateCurrentBalance(sheet, row, false); // Before-post preview
     }
 
     // === 3. Handle Invoice selection (col G) for Due ===
     if (col === CONFIG.cols.prevInvoice + 1) {
-      updateCurrentBalance(sh, row, false);
+      updateCurrentBalance(sheet, row, false);
     }
 
     // === 4. Handle Payment Amount edits ===
     if (col === CONFIG.cols.paymentAmt + 1) {
-      updateCurrentBalance(sh, row, false);
+      updateCurrentBalance(sheet, row, false);
     }
 
   } catch (error) {
@@ -134,21 +134,13 @@ function processPostedRowWithLock(sheet, rowNum) {
       }
     }
     
-    // 4. SUCCESS
-    setPostStatus(
-      sheet,
-      rowNum,
-      'POSTED',
-      data.enteredBy.split('@')[0],
-      DateUtils.formatTime(data.timestamp),
-      true
-    );
+    // 4. SUCCESS STATUS
+    setPostStatus(sheet, rowNum,'POSTED', data.enteredBy.split('@')[0], DateUtils.formatTime(data.timestamp), true);
     setRowBackground(sheet, rowNum, CONFIG.colors.success);
-    
-    // 5. Get final supplier outstanding AFTER all updates
-    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(data.supplier);
+    updateCurrentBalance(sheet, rowNum, true);
 
     // AFTER-POST AUDIT
+    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(data.supplier);
     auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
@@ -161,18 +153,18 @@ function processPostedRowWithLock(sheet, rowNum) {
  * Update balance preview in daily sheet
  * Shows context-appropriate balance based on payment type and post state
  * 
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sh - Active sheet
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} row - Row number
  * @param {boolean} afterPost - Whether this is after post
  */
-function updateCurrentBalance(sh, row, afterPost) {
-  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
-  const prevInvoice = sh.getRange(row, CONFIG.cols.prevInvoice + 1).getValue();
-  const receivedAmt = parseFloat(sh.getRange(row, CONFIG.cols.receivedAmt + 1).getValue()) || 0;
-  const paymentAmt = parseFloat(sh.getRange(row, CONFIG.cols.paymentAmt + 1).getValue()) || 0;
-  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
+function updateCurrentBalance(sheet, row, afterPost) {
+  const supplier = sheet.getRange(row, CONFIG.cols.supplier + 1).getValue();
+  const prevInvoice = sheet.getRange(row, CONFIG.cols.prevInvoice + 1).getValue();
+  const receivedAmt = parseFloat(sheet.getRange(row, CONFIG.cols.receivedAmt + 1).getValue()) || 0;
+  const paymentAmt = parseFloat(sheet.getRange(row, CONFIG.cols.paymentAmt + 1).getValue()) || 0;
+  const paymentType = sheet.getRange(row, CONFIG.cols.paymentType + 1).getValue();
 
-  const balanceCell = sh.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
+  const balanceCell = sheet.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
 
   if (StringUtils.isEmpty(supplier) || !paymentType) {
     balanceCell.clearContent().setNote("Balance requires supplier & payment type");
