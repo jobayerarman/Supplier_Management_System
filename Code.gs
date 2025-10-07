@@ -105,7 +105,7 @@ function processPostedRowWithLock(sheet, rowNum) {
     // 1. VALIDATION - Uses ValidationEngine.gs
     const validation = validatePostData(data);
     if (!validation.valid) {
-      setCommitStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
       auditAction('VALIDATION_FAILED', data, validation.error);
       return;
     }
@@ -113,7 +113,7 @@ function processPostedRowWithLock(sheet, rowNum) {
     // 2. PROCESS INVOICE - Uses InvoiceManager.gs
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
-      setCommitStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
       return;
     }
     
@@ -121,7 +121,7 @@ function processPostedRowWithLock(sheet, rowNum) {
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
-        setCommitStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
         return;
       }
 
@@ -135,7 +135,7 @@ function processPostedRowWithLock(sheet, rowNum) {
     }
     
     // 4. SUCCESS
-    setCommitStatus(
+    setPostStatus(
       sheet,
       rowNum,
       'POSTED',
@@ -152,7 +152,7 @@ function processPostedRowWithLock(sheet, rowNum) {
     auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
-    setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+    setPostStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
     logSystemError('processPostedRow', error.toString());
   }
 }

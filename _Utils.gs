@@ -394,15 +394,15 @@ function isDuplicatePayment(sysId) {
 // ==================== UI HELPERS ====================
 
 /**
- * Set commit status message in daily sheet
+ * Set post status message in daily sheet
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {string} status - Status message
  * @param {string} enteredBy - User email (optional)
  * @param {Date} timestamp - Timestamp (optional)
- * @param {boolean} resetCommit - Whether to reset commit checkbox
+ * @param {boolean} resetPost - Whether to reset post checkbox
  */
-function setCommitStatus(sheet, rowNum, status, enteredBy, timestamp, resetCommit) {
+function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, resetPost) {
   sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
   
   if (enteredBy) {
@@ -413,8 +413,8 @@ function setCommitStatus(sheet, rowNum, status, enteredBy, timestamp, resetCommi
     sheet.getRange(rowNum, CONFIG.cols.timestamp + 1).setValue(timestamp);
   }
 
-  if (resetCommit) {
-    sheet.getRange(rowNum, CONFIG.cols.commit + 1).setValue(false);
+  if (resetPost) {
+    sheet.getRange(rowNum, CONFIG.cols.post + 1).setValue(false);
   }
 }
 
@@ -425,7 +425,7 @@ function setCommitStatus(sheet, rowNum, status, enteredBy, timestamp, resetCommi
  * @param {string} color - Hex color code
  */
 function setRowBackground(sheet, rowNum, color) {
-  const totalCols = CONFIG.totalColumns.daily;
+  const totalCols = CONFIG.totalColumns.daily - 4; // A:J Column
   sheet.getRange(rowNum, 1, 1, totalCols).setBackground(color);
 }
 
