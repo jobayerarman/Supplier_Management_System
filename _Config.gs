@@ -29,7 +29,7 @@ const CONFIG = {
     prevInvoice: 6,     // G (reference invoice for Due payments)
     balance: 7,         // H (CURRENT BALANCE column)
     notes: 8,           // I
-    commit: 9,          // J (checkbox)
+    post: 9,            // J (checkbox)
     status: 10,         // K
     enteredBy: 11,      // L
     timestamp: 12,      // M

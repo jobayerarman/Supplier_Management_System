@@ -5,11 +5,11 @@
  */
 
 /**
- * Main validation function - validates all commit data
+ * Main validation function - validates all post data
  * @param {Object} data - Transaction data to validate
  * @returns {Object} Validation result with {valid: boolean, error: string, errors: array}
  */
-function validateCommitData(data) {
+function validatePostData(data) {
   const errors = [];
 
   // === 1. Required Fields ===
@@ -285,7 +285,7 @@ function validateAmount(amount, fieldName) {
 }
 
 /**
- * Validate data integrity before commit (optional advanced validation)
+ * Validate data integrity before post (optional advanced validation)
  * @param {Object} data - Transaction data
  * @returns {Object} Validation result
  */

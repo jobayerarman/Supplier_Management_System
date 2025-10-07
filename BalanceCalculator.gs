@@ -102,7 +102,7 @@ const BalanceCalculator = {
   },
 
   /**
-   * Calculate balance preview (before commit)
+   * Calculate balance preview (before post)
    */
   calculatePreview: function(supplier, paymentType, receivedAmt, paymentAmt, prevInvoice) {
     if (StringUtils.isEmpty(supplier) || !paymentType) {

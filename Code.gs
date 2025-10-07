@@ -32,12 +32,12 @@ function onEdit(e) {
     if (!CONFIG.dailySheets.includes(sheetName) || row < 2) return;
 
     // === 1. Handle Posting ===
-    if (col === CONFIG.cols.commit + 1) {
+    if (col === CONFIG.cols.post + 1) {
       const cellVal = sh.getRange(row, col).getValue();
       const isPosted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
       if (isPosted) {
-        processCommittedRowWithLock(sh, row);
-        updateCurrentBalance(sh, row, true); // After commit: show supplier total outstanding
+        processPostedRowWithLock(sh, row);
+        updateCurrentBalance(sh, row, true); // After post: show supplier total outstanding
       }
       return;
     }
@@ -45,7 +45,7 @@ function onEdit(e) {
     // === 2. Handle Supplier/Payment Type edits ===
     if (col === CONFIG.cols.supplier + 1 || col === CONFIG.cols.paymentType + 1) {
       buildPrevInvoiceDropdown(sh, row);
-      updateCurrentBalance(sh, row, false); // Pre-commit preview
+      updateCurrentBalance(sh, row, false); // Before-post preview
     }
 
     // === 3. Handle Invoice selection (col G) for Due ===
@@ -69,7 +69,7 @@ function onEdit(e) {
 /**
  * Process posted row with full transaction workflow
  */
-function processCommittedRowWithLock(sheet, rowNum) {
+function processPostedRowWithLock(sheet, rowNum) {
   const totalCols = CONFIG.totalColumns.daily;
   const rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0]; // A:N
 
@@ -98,12 +98,12 @@ function processCommittedRowWithLock(sheet, rowNum) {
     sheet.getRange(rowNum, CONFIG.cols.sysId + 1).setValue(data.sysId);
   }
   
-  // PRE-COMMIT AUDIT
-  auditAction('PRE-COMMIT', data, 'Starting posting process');
+  // BEFORE-POST AUDIT
+  auditAction('BEFORE-POST', data, 'Starting posting process');
   
   try {
     // 1. VALIDATION - Uses ValidationEngine.gs
-    const validation = validateCommitData(data);
+    const validation = validatePostData(data);
     if (!validation.valid) {
       setCommitStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
       auditAction('VALIDATION_FAILED', data, validation.error);
@@ -148,12 +148,12 @@ function processCommittedRowWithLock(sheet, rowNum) {
     // 5. Get final supplier outstanding AFTER all updates
     const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(data.supplier);
 
-    // POST-COMMIT AUDIT
-    auditAction('POST-COMMIT', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
+    // AFTER-POST AUDIT
+    auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
     setCommitStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
-    logSystemError('processCommittedRow', error.toString());
+    logSystemError('processPostedRow', error.toString());
   }
 }
 
@@ -163,9 +163,9 @@ function processCommittedRowWithLock(sheet, rowNum) {
  * 
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sh - Active sheet
  * @param {number} row - Row number
- * @param {boolean} afterCommit - Whether this is after post
+ * @param {boolean} afterPost - Whether this is after post
  */
-function updateCurrentBalance(sh, row, afterCommit) {
+function updateCurrentBalance(sh, row, afterPost) {
   const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
   const prevInvoice = sh.getRange(row, CONFIG.cols.prevInvoice + 1).getValue();
   const receivedAmt = parseFloat(sh.getRange(row, CONFIG.cols.receivedAmt + 1).getValue()) || 0;
@@ -182,12 +182,12 @@ function updateCurrentBalance(sh, row, afterCommit) {
   let balance = 0;
   let note = "";
 
-  if (afterCommit) {
-    // AFTER COMMIT: Always show supplier total outstanding
+  if (afterPost) {
+    // AFTER-POST: Always show supplier total outstanding
     balance = BalanceCalculator.getSupplierOutstanding(supplier);
     note = "Supplier total outstanding";
   } else {
-    // BEFORE COMMIT: Show context-specific preview using BalanceCalculator
+    // BEFORE-POST: Show context-specific preview using BalanceCalculator
     const preview = BalanceCalculator.calculatePreview(
       supplier,
       paymentType,
