@@ -19,6 +19,10 @@ const BalanceCalculator = {
         newBalance = supplierOutstanding + data.receivedAmt;
         break;
 
+      case "Partial":
+        newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
+        break;
+
       case "Regular":
         newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
         break;
@@ -29,10 +33,6 @@ const BalanceCalculator = {
           return supplierOutstanding;
         }
         newBalance = supplierOutstanding - data.paymentAmt;
-        break;
-
-      case "Partial":
-        newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
         break;
 
       default:
@@ -117,15 +117,15 @@ const BalanceCalculator = {
         balance = this.getSupplierOutstanding(supplier) + receivedAmt;
         note = "Preview: Supplier outstanding after receiving";
         break;
+      
+      case "Partial":
+        balance = this.getSupplierOutstanding(supplier) + receivedAmt - paymentAmt;
+        note = "Preview: Supplier outstanding after partial payment";
+        break;
 
       case "Regular":
         balance = this.getSupplierOutstanding(supplier) + receivedAmt - paymentAmt;
         note = "Preview: Supplier outstanding (net zero expected)";
-        break;
-
-      case "Partial":
-        balance = this.getSupplierOutstanding(supplier) + receivedAmt - paymentAmt;
-        note = "Preview: Supplier outstanding after partial payment";
         break;
 
       case "Due":
