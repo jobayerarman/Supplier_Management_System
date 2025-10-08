@@ -579,10 +579,3 @@ function repairAllInvoiceFormulas() {
 function clearInvoiceCache() {
   InvoiceCache.clear();
 }
-
-// Legacy function for compatibility with old Code.gs
-function buildPrevInvoiceDropdown(sh, row) {
-  const supplier = sh.getRange(row, CONFIG.cols.supplier + 1).getValue();
-  const paymentType = sh.getRange(row, CONFIG.cols.paymentType + 1).getValue();
-  return InvoiceManager.buildUnpaidDropdown(sh, row, supplier, paymentType);
-}
