@@ -25,8 +25,8 @@ const CONFIG = {
     invoiceNo: 2,       // C
     receivedAmt: 3,     // D
     paymentType: 4,     // E
-    paymentAmt: 5,      // F
-    prevInvoice: 6,     // G (reference invoice for Due payments)
+    prevInvoice: 5,     // F (reference invoice for Due payments)
+    paymentAmt: 6,      // G
     balance: 7,         // H (CURRENT BALANCE column)
     notes: 8,           // I
     post: 9,            // J (checkbox)

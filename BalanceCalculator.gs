@@ -62,7 +62,7 @@ const BalanceCalculator = {
       for (let i = 1; i < data.length; i++) {
         try {
           if (StringUtils.equals(data[i][CONFIG.invoiceCols.supplier], supplier)) {
-            const bal = Number(data[i][CONFIG.invoiceCols.balanceDue]) || 0; // Balance Due is column F (index 5)
+            const bal = Number(data[i][CONFIG.invoiceCols.balanceDue]) || 0; // Balance Due is column G (index 6)
             total += bal;
           }
         } catch (e) {
@@ -103,6 +103,12 @@ const BalanceCalculator = {
 
   /**
    * Calculate balance preview (before post)
+   * @param {string} supplier - Supplier name
+   * @param {string} paymentType - Payment type
+   * @param {number} receivedAmt - Received amount
+   * @param {number} paymentAmt - Payment amount
+   * @param {string} prevInvoice - Previous invoice reference
+   * @returns {Object} Object with balance and note
    */
   calculatePreview: function(supplier, paymentType, receivedAmt, paymentAmt, prevInvoice) {
     if (StringUtils.isEmpty(supplier) || !paymentType) {
@@ -132,8 +138,8 @@ const BalanceCalculator = {
         if (StringUtils.isEmpty(prevInvoice)) {
           return { balance: 0, note: "Select previous invoice" };
         }
-        balance = this.getInvoiceOutstanding(prevInvoice, supplier);
-        note = `Preview: Invoice ${prevInvoice} balance (before payment)`;
+        balance = this.getSupplierOutstanding(supplier) - paymentAmt;
+        note = `Preview: Supplier outstanding after paying ${paymentAmt}`;
         break;
 
       default:
@@ -145,6 +151,8 @@ const BalanceCalculator = {
 
   /**
    * Get balance summary for supplier
+   * @param {string} supplier - Supplier name
+   * @returns {Object|null} Summary object or null on error
    */
   getSupplierSummary: function(supplier) {
     try {
