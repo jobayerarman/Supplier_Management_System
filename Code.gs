@@ -29,33 +29,73 @@ function onEdit(e) {
     const sheetName = sheet.getName();
     const row = e.range.getRow();
     const col = e.range.getColumn();
-    if (!CONFIG.dailySheets.includes(sheetName) || row < 2) return;
 
-    // === 1. Handle Posting ===
+    // Only process daily sheets, skip header row
+    if (!CONFIG.dailySheets.includes(sheetName) || row < 6) return;
+
+    // ==================== 1. HANDLE POSTING ====================
     if (col === CONFIG.cols.post + 1) {
       const cellVal = sheet.getRange(row, col).getValue();
-      const isPosted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE'); // covers boolean & strings
+      const isPosted = (cellVal === true || String(cellVal).toUpperCase() === 'TRUE');
       if (isPosted) {
         processPostedRowWithLock(sheet, row);
-        updateCurrentBalance(sheet, row, true); // After post: show supplier total outstanding
       }
       return;
     }
 
-    // === 2. Handle Supplier/Payment Type edits ===
-    if (col === CONFIG.cols.supplier + 1 || col === CONFIG.cols.paymentType + 1) {
+    // ==================== 2. HANDLE SUPPLIER EDIT ====================
+    if (col === CONFIG.cols.supplier + 1) {
       buildPrevInvoiceDropdown(sheet, row);
-      updateCurrentBalance(sheet, row, false); // Before-post preview
-    }
-
-    // === 3. Handle Invoice selection (col G) for Due ===
-    if (col === CONFIG.cols.prevInvoice + 1) {
       updateCurrentBalance(sheet, row, false);
+      return;
     }
 
-    // === 4. Handle Payment Amount edits ===
+    // ==================== 3. HANDLE PAYMENT TYPE EDIT ====================
+    if (col === CONFIG.cols.paymentType + 1) {
+      const paymentType = sheet.getRange(row, col).getValue();
+      
+      // First, clean up fields from previous payment type
+      clearPaymentFieldsForTypeChange(sheet, row, paymentType);
+      
+      // Build dropdown for Due payment type
+      buildPrevInvoiceDropdown(sheet, row);
+      
+      // Auto-populate for Regular or Partial payment types
+      if (StringUtils.equals(paymentType, 'Regular') || StringUtils.equals(paymentType, 'Partial')) {
+        autoPopulatePaymentFields(sheet, row, paymentType);
+      }
+      
+      updateCurrentBalance(sheet, row, false);
+      return;
+    }
+
+    // ==================== 4. HANDLE RECEIVED AMOUNT EDIT ====================
+    if (col === CONFIG.cols.receivedAmt + 1) {
+      const paymentType = sheet.getRange(row, CONFIG.cols.paymentType + 1).getValue();
+      
+      // If payment type is Regular, sync payment amount with received amount
+      if (StringUtils.equals(paymentType, 'Regular')) {
+        const receivedAmt = sheet.getRange(row, col).getValue();
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
+      }
+      
+      // If payment type is Partial, keep the existing payment amount
+      // (user needs to manually adjust for partial payments)
+      
+      updateCurrentBalance(sheet, row, false);
+      return;
+    }
+
+    // ==================== 5. HANDLE PAYMENT AMOUNT EDIT ====================
     if (col === CONFIG.cols.paymentAmt + 1) {
       updateCurrentBalance(sheet, row, false);
+      return;
+    }
+
+    // ==================== 6. HANDLE PREVIOUS INVOICE SELECTION ====================
+    if (col === CONFIG.cols.prevInvoice + 1) {
+      updateCurrentBalance(sheet, row, false);
+      return;
     }
 
   } catch (error) {
@@ -63,6 +103,132 @@ function onEdit(e) {
     logSystemError("onEdit", error.toString());
   } finally {
     LockManager.releaseLock(lock);
+  }
+}
+
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * Clear payment fields when changing payment type
+ * Handles cleanup based on new payment type selected
+ * 
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+ * @param {number} row - Row number
+ * @param {string} newPaymentType - New payment type selected
+ */
+function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
+  try {
+    const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
+    const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
+    
+    // Clear based on new payment type
+    if (StringUtils.equals(newPaymentType, 'Unpaid')) {
+      // Unpaid: Clear payment amount and previous invoice
+      paymentAmtCell
+        .clearContent()
+        .clearNote()
+        .setBackground(null);
+      
+      prevInvoiceCell
+        .clearContent()
+        .clearNote()
+        .clearDataValidations()
+        .setBackground(null);
+        
+    } else if (StringUtils.equals(newPaymentType, 'Due')) {
+      // Due: Clear payment amount and previous invoice (dropdown will be rebuilt)
+      paymentAmtCell
+        .clearContent()
+        .clearNote()
+        .setBackground(null);
+      
+      prevInvoiceCell
+        .clearContent()
+        .clearNote()
+        .clearDataValidations();
+        
+    } else if (StringUtils.equals(newPaymentType, 'Regular') || StringUtils.equals(newPaymentType, 'Partial')) {
+      // Regular/Partial: Just clear notes and background (will be repopulated)
+      paymentAmtCell
+        .clearNote()
+        .setBackground(null);
+      
+      prevInvoiceCell
+        .clearNote()
+        .clearDataValidations()
+        .setBackground(null);
+        
+    } else {
+      // Unknown type or empty: Clear everything
+      paymentAmtCell
+        .clearContent()
+        .clearNote()
+        .setBackground(null);
+      
+      prevInvoiceCell
+        .clearContent()
+        .clearNote()
+        .clearDataValidations();
+    }
+    
+  } catch (error) {
+    logSystemError('clearPaymentFieldsForTypeChange', 
+      `Failed to clear fields at row ${row}: ${error.toString()}`);
+  }
+}
+
+/**
+ * Auto-populate payment fields for Regular and Partial payment types
+ * Copies Invoice No to Previous Invoice and Received Amount to Payment Amount
+ * 
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+ * @param {number} row - Row number
+ * @param {string} paymentType - Payment type (Regular or Partial)
+ */
+function autoPopulatePaymentFields(sheet, row, paymentType) {
+  try {
+    // Get invoice number from column C
+    const invoiceNo = sheet.getRange(row, CONFIG.cols.invoiceNo + 1).getValue();
+    
+    // Get received amount from column D
+    const receivedAmt = sheet.getRange(row, CONFIG.cols.receivedAmt + 1).getValue();
+    
+    // Set payment amount (column E) = received amount
+    // For Regular: This will be full amount (validation enforces equality)
+    // For Partial: This is just a starting point (user should adjust down)
+    if (receivedAmt && receivedAmt !== '') {
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
+    }
+    
+    // Set previous invoice (column G) = invoice number
+    // Note: For Regular/Partial, this field is informational (not used in logic)
+    // But it helps user see which invoice is being paid
+    if (invoiceNo && invoiceNo !== '') {
+      const note = paymentType === 'Regular' 
+        ? 'Auto-populated for Regular payment' 
+        : 'Auto-populated for Partial payment - adjust payment amount as needed';
+      
+      sheet.getRange(row, CONFIG.cols.prevInvoice + 1)
+        .setValue(invoiceNo)
+        .setNote(note);
+    }
+    
+    // Add visual cue for Partial payments
+    if (StringUtils.equals(paymentType, 'Partial')) {
+      // Highlight payment amount cell to remind user to adjust
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
+        .setBackground(CONFIG.colors.warning)
+        .setNote('⚠️ Adjust this to partial payment amount (must be less than received amount)');
+    } else {
+      // Clear any previous highlighting for Regular
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
+        .setBackground(null)
+        .setNote('Auto-populated (equals received amount)');
+    }
+    
+  } catch (error) {
+    logSystemError('autoPopulatePaymentFields', 
+      `Failed to auto-populate at row ${row}: ${error.toString()}`);
   }
 }
 
@@ -134,9 +300,21 @@ function processPostedRowWithLock(sheet, rowNum) {
       }
     }
     
-    // 4. SUCCESS STATUS
-    setPostStatus(sheet, rowNum,'POSTED', data.enteredBy.split('@')[0], DateUtils.formatTime(data.timestamp), true);
+    // 4. Force formula recalculation
+    SpreadsheetApp.flush();
+    
+    // 5. SUCCESS STATUS
+    setPostStatus(
+      sheet,
+      rowNum,
+      'POSTED',
+      data.enteredBy.split('@')[0],
+      DateUtils.formatTime(data.timestamp),
+      true  // Keep checkbox checked
+    );
     setRowBackground(sheet, rowNum, CONFIG.colors.success);
+    
+    // 6. UPDATE BALANCE DISPLAY
     updateCurrentBalance(sheet, rowNum, true);
 
     // AFTER-POST AUDIT
