@@ -123,90 +123,98 @@ function onEdit(e) {
  * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
  */
 function processPostedRowWithLock(sheet, rowNum, rowData = null) {
-  // Fallback: read if not provided (for backward compatibility)
-  if (!rowData) {
-    const totalCols = CONFIG.totalColumns.daily;
-    rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
-  }
+  const cols = CONFIG.cols;
+  const totalCols = CONFIG.totalColumns.daily;
+  const colors = CONFIG.colors;
+  const now = DateUtils.now();
+  const timeStr = DateUtils.formatTime(now);
+  const sheetName = sheet.getName();
 
-  // Calculate timestamp and invoice date BEFORE data object
-  const timestamp = DateUtils.now();
-  const invoiceDate = getDailySheetDate(sheet.getName()) || timestamp;
-  
-  const data = {
-    sheetName: sheet.getName(),
-    rowNum: rowNum,
-    supplier: rowData[CONFIG.cols.supplier],
-    invoiceNo: rowData[CONFIG.cols.invoiceNo],
-    invoiceDate: invoiceDate,
-    receivedAmt: parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0,
-    paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
-    paymentType: rowData[CONFIG.cols.paymentType],
-    prevInvoice: rowData[CONFIG.cols.prevInvoice],
-    notes: rowData[CONFIG.cols.notes],
-    enteredBy: Session.getEffectiveUser().getEmail(),
-    timestamp: timestamp,
-    sysId: rowData[CONFIG.cols.sysId] || IDGenerator.generateUUID()
-  };
-  
-  // Store system ID if not exists
-  if (!rowData[CONFIG.cols.sysId]) {
-    sheet.getRange(rowNum, CONFIG.cols.sysId + 1).setValue(data.sysId);
-  }
-  
-  // BEFORE-POST AUDIT
-  auditAction('BEFORE-POST', data, 'Starting posting process');
-  
   try {
-    // 1. VALIDATION - Uses ValidationEngine.gs
+    // Fallback to single batch read only if not provided
+    if (!rowData) {
+      rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
+    }
+
+    // Pre-extract values efficiently
+    const supplier = rowData[cols.supplier];
+    const invoiceNo = rowData[cols.invoiceNo];
+    const paymentType = rowData[cols.paymentType];
+    const prevInvoice = rowData[cols.prevInvoice];
+    const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
+    const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
+    const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
+
+    const invoiceDate = getDailySheetDate(sheetName) || now;
+    const enteredBy = Session.getEffectiveUser().getEmail();
+
+    const data = {
+      sheetName,
+      rowNum,
+      supplier,
+      invoiceNo,
+      invoiceDate,
+      receivedAmt,
+      paymentAmt,
+      paymentType,
+      prevInvoice,
+      notes: rowData[cols.notes],
+      enteredBy,
+      timestamp: now,
+      sysId
+    };
+    
+    // If system ID is missing, write once
+    if (!rowData[cols.sysId]) {
+      sheet.getRange(rowNum, cols.sysId + 1).setValue(data.sysId);
+    }
+    
+    // BEFORE-POST AUDIT
+    auditAction("BEFORE-POST", data, "Starting posting process");
+  
+    // ─── 1. VALIDATION - Uses ValidationEngine.gs ───
     const validation = validatePostData(data);
     if (!validation.valid) {
-      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false);
       auditAction('VALIDATION_FAILED', data, validation.error);
       return;
     }
     
-    // 2. PROCESS INVOICE - Uses InvoiceManager.gs
+    // ─── 2. PROCESS INVOICE - Uses InvoiceManager.gs ───
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
-      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false);
       return;
     }
     
-    // 3. PROCESS PAYMENT - Uses PaymentManager.gs
+    // ─── 3. PROCESS PAYMENT - Uses PaymentManager.gs ───
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
-        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
+        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false);
         return;
       }
       
-      const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
+      const targetInvoice = paymentType === "Due" ? prevInvoice : invoiceNo;
       if (targetInvoice) {
-        InvoiceManager.updatePaidDate(targetInvoice, data.supplier, data.invoiceDate);
+        InvoiceManager.updatePaidDate(targetInvoice, supplier, invoiceDate);
       }
     }
-        
-    // 5. SUCCESS STATUS
-    setPostStatus(
-      sheet,
-      rowNum,
-      'POSTED',
-      data.enteredBy.split('@')[0],
-      DateUtils.formatTime(data.timestamp),
-      true  // Keep checkbox checked
-    );
-    setRowBackground(sheet, rowNum, CONFIG.colors.success);
-    
-    // 6. UPDATE BALANCE DISPLAY
+
+    // ─── 4. SUCCESS STATUS ───
+    setPostStatus(sheet, rowNum, "POSTED", enteredBy.split("@")[0], timeStr, true);  // Keep checkbox checked
+    setRowBackground(sheet, rowNum, colors.success);
+
+    // ─── 5. BALANCE UPDATE ───
+    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
     updateCurrentBalance(sheet, rowNum, true, null);
 
-    // AFTER-POST AUDIT
-    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(data.supplier);
+    // ─── 6. FINAL AUDIT ───
     auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
-    
+
   } catch (error) {
-    setPostStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
+    const errMsg = `SYSTEM ERROR: ${error.message || error}`;
+    setPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false);
     logSystemError('processPostedRow', error.toString());
   }
 }
