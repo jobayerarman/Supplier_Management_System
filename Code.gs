@@ -1,19 +1,20 @@
 /**
  * SYSTEM - Main Application Logic (Code.gs)
- * Uses modular architecture with:
- * - _Config.gs for configuration
- * - _Utils.gs for utilities
- * - AuditLogger.gs for audit trail
- * - ValidationEngine.gs for validation
- * - InvoiceManager.gs for invoice operations
- * - PaymentManager.gs for payment operations
- * - BalanceCalculator.gs for balance calculations
- * 
- * OPTIMIZED FOR HIGH PERFORMANCE:
+ * Modular Architecture:
+ * - _Config.gs → global config
+ * - _Utils.gs → helpers
+ * - AuditLogger.gs → audit trail
+ * - ValidationEngine.gs → validation
+ * - InvoiceManager.gs → invoice operations
+ * - PaymentManager.gs → payment operations
+ * - BalanceCalculator.gs → balance + cache
+ *
+ * PERFORMANCE STRATEGY:
  * - Single batch read per edit event
  * - Zero redundant cell reads
- * - Data passed through call chain
+ * - Cached balance lookups (3–5min)
  * - Minimal SpreadsheetApp API calls
+ * - Graceful concurrency with document locks
  */
 
 function onEdit(e) {
@@ -44,7 +45,6 @@ function onEdit(e) {
     const paymentType = rowValues[configCols.paymentType];
     const supplier = rowValues[configCols.supplier];
     const invoiceNo = rowValues[configCols.invoiceNo];
-    const prevInvoice = rowValues[configCols.prevInvoice];
     const receivedAmt = parseFloat(rowValues[configCols.receivedAmt]) || 0;
     const paymentAmt = parseFloat(rowValues[configCols.paymentAmt]) || 0;
 
@@ -66,16 +66,14 @@ function onEdit(e) {
 
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
       case configCols.invoiceNo + 1:
-        if (StringUtils.equals(paymentType, 'Regular') || StringUtils.equals(paymentType, 'Partial')) {
-          if (invoiceNo) {
-            sheet.getRange(sheetRow, configCols.prevInvoice + 1).setValue(invoiceNo);
-          }
+        if (['Regular', 'Partial'].includes(paymentType)) {
+          if (invoiceNo) sheet.getRange(row, cols.prevInvoice + 1).setValue(invoiceNo);
         }
         break;
     
       // ═══ 4. HANDLE RECEIVED AMOUNT EDIT ═══
       case configCols.receivedAmt + 1:
-        if (StringUtils.equals(paymentType, 'Regular')) {
+        if (paymentType === 'Regular') {
           sheet.getRange(sheetRow, configCols.paymentAmt + 1).setValue(receivedAmt);
         }
         updateCurrentBalance(sheet, sheetRow, false, rowValues);
@@ -86,7 +84,7 @@ function onEdit(e) {
         clearPaymentFieldsForTypeChange(sheet, sheetRow, paymentType);
         buildPrevInvoiceDropdown(sheet, sheetRow, rowValues);
         
-        if (StringUtils.equals(paymentType, 'Regular') || StringUtils.equals(paymentType, 'Partial')) {
+        if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, sheetRow, paymentType, rowValues);
         }
         
@@ -95,7 +93,7 @@ function onEdit(e) {
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
-        if (StringUtils.equals(paymentType, 'Due') && supplier && editedValue) {
+        if ((paymentType === 'Due') && supplier && editedValue) {
           autoPopulateDuePaymentAmount(sheet, sheetRow, supplier, editedValue);
         }
         updateCurrentBalance(sheet, sheetRow, false, rowValues);
@@ -163,7 +161,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     // 1. VALIDATION - Uses ValidationEngine.gs
     const validation = validatePostData(data);
     if (!validation.valid) {
-      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
       auditAction('VALIDATION_FAILED', data, validation.error);
       return;
     }
@@ -171,7 +169,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     // 2. PROCESS INVOICE - Uses InvoiceManager.gs
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
-      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
       return;
     }
     
@@ -179,22 +177,16 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
-        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
         return;
       }
-
-      // Check if invoice is fully paid and update paid date
-      SpreadsheetApp.flush();
       
       const targetInvoice = data.paymentType === 'Due' ? data.prevInvoice : data.invoiceNo;
       if (targetInvoice) {
         InvoiceManager.updatePaidDate(targetInvoice, data.supplier, data.invoiceDate);
       }
     }
-    
-    // 4. Force formula recalculation
-    SpreadsheetApp.flush();
-    
+        
     // 5. SUCCESS STATUS
     setPostStatus(
       sheet,
@@ -214,7 +206,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
     
   } catch (error) {
-    setPostStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(data.timestamp), false);
+    setPostStatus(sheet, rowNum, `SYSTEM ERROR: ${error.message}`, "SYSTEM", DateUtils.formatTime(timestamp), false);
     logSystemError('processPostedRow', error.toString());
   }
 }
@@ -280,59 +272,22 @@ function updateCurrentBalance(sheet, row, afterPost, rowData = null) {
  * @param {string} newPaymentType - New payment type selected
  */
 function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
+  const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
+  const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
+  
   try {
-    const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
-    const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
+    paymentAmtCell
+      .clearContent()
+      .clearNote()
+      .setBackground(null);
     
-    // Clear based on new payment type
-    if (StringUtils.equals(newPaymentType, 'Unpaid')) {
-      // Unpaid: Clear payment amount and previous invoice
-      paymentAmtCell
-        .clearContent()
-        .clearNote()
-        .setBackground(null);
-      
-      prevInvoiceCell
-        .clearContent()
-        .clearNote()
-        .clearDataValidations()
-        .setBackground(null);
-        
-    } else if (StringUtils.equals(newPaymentType, 'Due')) {
-      // Due: Clear payment amount and previous invoice (dropdown will be rebuilt)
-      paymentAmtCell
-        .clearContent()
-        .clearNote()
-        .setBackground(null);
-      
-      prevInvoiceCell
-        .clearContent()
-        .clearNote()
-        .clearDataValidations();
-        
-    } else if (StringUtils.equals(newPaymentType, 'Regular') || StringUtils.equals(newPaymentType, 'Partial')) {
-      // Regular/Partial: Just clear notes and background (will be repopulated)
-      paymentAmtCell
-        .clearNote()
-        .setBackground(null);
-      
-      prevInvoiceCell
-        .clearNote()
-        .clearDataValidations()
-        .setBackground(null);
-        
-    } else {
-      // Unknown type or empty: Clear everything
-      paymentAmtCell
-        .clearContent()
-        .clearNote()
-        .setBackground(null);
-      
-      prevInvoiceCell
-        .clearContent()
-        .clearNote()
-        .clearDataValidations();
-    }
+    prevInvoiceCell
+      .clearNote()
+      .clearDataValidations()
+      .setBackground(null);
+
+    if (['Unpaid', 'Due'].includes(newPaymentType))
+      prevInvoiceCell.clearContent();
     
   } catch (error) {
     logSystemError('clearPaymentFieldsForTypeChange', 
@@ -353,16 +308,17 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
   try {
     // Get the balance due for the selected invoice
     const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
+    const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
     
     if (invoiceBalance > 0) {
       // Set payment amount to invoice balance
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
+      targetCell
         .setValue(invoiceBalance)
         .setNote(`Auto-populated: Outstanding balance of ${prevInvoice}`)
         .setBackground(CONFIG.colors.info);
     } else {
       // Invoice has no balance or not found
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
+      targetCell
         .clearContent()
         .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance`)
         .setBackground(CONFIG.colors.warning);
@@ -372,7 +328,7 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
     logSystemError('autoPopulateDuePaymentAmount', 
       `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
     
-    sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
+    targetCell
       .clearContent()
       .setNote('Error loading invoice balance')
       .setBackground(CONFIG.colors.error);
