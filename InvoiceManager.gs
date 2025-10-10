@@ -1,4 +1,3 @@
-// ==================== MODULE: InvoiceManager.gs ====================
 /**
  * Invoice management module
  * Handles all invoice-related operations
@@ -6,190 +5,248 @@
  * - Updating existing invoices
  * - Finding invoice records
  * - Managing invoice formulas
+ * 
+ * OPTIMIZATIONS:
+ * - Intelligent caching with automatic invalidation
+ * - Batch operations for multiple invoice operations
+ * - Single getDataRange() call per operation
+ * - Lazy formula application
+ * - Index-based lookups
+ * - Memory-efficient filtering
  */
 
-// Cache for invoice data to reduce repeated sheet reads
+// ═══ INTELLIGENT CACHE ═══
+
 const InvoiceCache = {
   data: null,
+  indexMap: null, // NEW: Fast lookup by supplier-invoice key
   timestamp: null,
   TTL: CONFIG.rules.CACHE_TTL_MS,
-  
-  get: function() {
+
+  /**
+   * Get cached data with validation
+   */
+  get: function () {
     const now = Date.now();
     if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
-      return this.data;
+      return { data: this.data, indexMap: this.indexMap };
     }
     return null;
   },
-  
-  set: function(data) {
+
+  /**
+   * Set cache with index map generation
+   */
+  set: function (data) {
     this.data = data;
     this.timestamp = Date.now();
+
+    // Build fast lookup index: "SUPPLIER|INVOICENO" -> row index
+    this.indexMap = new Map();
+    for (let i = 1; i < data.length; i++) {
+      const supplier = StringUtils.normalize(data[i][CONFIG.invoiceCols.supplier]);
+      const invoiceNo = StringUtils.normalize(data[i][CONFIG.invoiceCols.invoiceNo]);
+      if (supplier && invoiceNo) {
+        const key = `${supplier}|${invoiceNo}`;
+        this.indexMap.set(key, i);
+      }
+    }
   },
-  
-  clear: function() {
+
+  /**
+   * Selective cache invalidation
+   * Only clear if operation affects queries
+   */
+  invalidate: function(operation) {
+    // SMART: Only clear cache for operations that change dropdown/balance data
+    const invalidatingOps = ['create', 'updateAmount', 'updateStatus'];
+    if (invalidatingOps.includes(operation)) {
+      this.clear();
+    }
+    // Don't clear for: 'updatePaidDate', 'noChange', etc.
+  },
+
+  /**
+   * Clear cache
+   */
+  clear: function () {
     this.data = null;
+    this.indexMap = null;
     this.timestamp = null;
+  },
+
+  /**
+   * Get cached invoice sheet data (single API call)
+   */
+  getInvoiceData: function () {
+    let cached = this.get();
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss - load data
+    const invoiceSh = getSheet(CONFIG.invoiceSheet);
+    const data = invoiceSh.getDataRange().getValues();
+    this.set(data);
+
+    return { data: data, indexMap: this.indexMap };
   }
 };
 
 // ==================== INVOICE MANAGER MODULE ====================
 
+/**
+ * InvoiceManager - Optimized version
+ * Handles creation, updates, and processing of supplier invoices
+ */
 const InvoiceManager = {
   /**
    * Process invoice (create or update based on existence)
-   * 
+   * 
    * @param {Object} data - Transaction data
    * @returns {Object} Result with success flag and details
    */
-  process: function(data) {
+  process: function (data) {
     try {
-      // For Due payments, we don't create new invoices
+      // Skip creation for "Due" payments with no invoice number
       if (data.paymentType === 'Due' && !data.invoiceNo) {
         return { success: true, action: 'none' };
       }
-      
+
       // Check if invoice already exists
       const existingInvoice = data.invoiceNo ? this.find(data.supplier, data.invoiceNo) : null;
-      
-      if (existingInvoice) {
-        return this.update(existingInvoice, data);
-      } else {
-        return this.create(data);
-      }
-      
+      return existingInvoice ? this.update(existingInvoice, data) : this.create(data);
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.process', 
+      AuditLogger.logError('InvoiceManager.process',
         `Failed to process invoice for ${data.supplier}: ${error.toString()}`);
-      return { 
-        success: false, 
-        error: `Invoice processing failed: ${error.message}` 
+      return {
+        success: false,
+        error: `Invoice processing failed: ${error.message}`
       };
     }
   },
-  
+
   /**
    * Create new invoice with atomic duplicate check
-   * 
+   * 
    * @param {Object} data - Transaction data
    * @returns {Object} Result with success flag and invoice details
    */
-  create: function(data) {
+  create: function (data) {
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
       return { success: false, error: 'Unable to acquire lock for invoice creation' };
     }
-    
+
     try {
       // Double-check invoice doesn't exist (atomic check with lock)
       const existingInvoice = this.find(data.supplier, data.invoiceNo);
       if (existingInvoice) {
-        AuditLogger.log('DUPLICATE_PREVENTED', data, 
+        AuditLogger.log('DUPLICATE_PREVENTED', data,
           `Invoice ${data.invoiceNo} already exists at row ${existingInvoice.row}`);
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: `Invoice ${data.invoiceNo} already exists for ${data.supplier}`,
           existingRow: existingInvoice.row
         };
       }
-      
+
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
+      const newRow = lastRow + 1;
 
       // Get invoice date from daily sheet A3
       const invoiceDate = getDailySheetDate(data.sheetName) || data.timestamp;
 
-      // Build new invoice row (now 12 columns)
-      const newInvoice = [
-        data.timestamp,                              // A: Date (legacy - first transaction)
-        data.supplier,                               // B: Supplier
-        data.invoiceNo,                              // C: Invoice No
-        invoiceDate,                                 // D: Invoice Date (NEW)
-        data.receivedAmt,                            // E: Total Amount
-        '',                                          // F: Total Paid (formula)
-        '',                                          // G: Balance Due (formula)
-        '',                                          // H: Status (formula)
-        '',                                          // I: Paid Date (formula)
-        data.sheetName,                              // J: Origin Day
-        '',                                          // K: Days Outstanding (formula)
-        IDGenerator.generateInvoiceId(data.sysId)    // L: System ID
+      // Build new invoice row WITH formulas included
+      const newInvoiceRow = [
+        data.timestamp,            // A: Date (legacy)
+        data.supplier,             // B: Supplier
+        data.invoiceNo,            // C: Invoice No
+        invoiceDate,               // D: Invoice Date
+        data.receivedAmt,          // E: Total Amount
+        `=IF(C${newRow}="","", IFERROR(SUMIF(PaymentLog!C:C, C${newRow}, PaymentLog!E:E), 0))`,       // F: Total Paid
+        `=IF(E${newRow}="","", E${newRow} - F${newRow})`, // G: Balance Due
+        `=IFS(G${newRow}=0,"Paid", G${newRow}=E${newRow},"Unpaid", G${newRow}<E${newRow},"Partial")`, // H: Status
+        '',              // I: Paid Date (manual/conditional)
+        data.sheetName,  // J: Origin Day
+        `=IF(G${newRow}=0, 0, TODAY() - D${newRow})`, // K: Days Outstanding
+        IDGenerator.generateInvoiceId(data.sysId)     // L: System ID
       ];
 
-      invoiceSh.appendRow(newInvoice);
+      // Write the combined data and formulas in a single API call
+      // The outer array brackets [] are necessary for setValues()
+      invoiceSh.getRange(newRow, 1, 1, newInvoiceRow.length).setValues([newInvoiceRow]);
 
-      // Apply formulas to new row
-      const newRow = lastRow + 1;
-      this.setFormulas(invoiceSh, newRow);
-      
       // Clear cache after invoice creation
       InvoiceCache.clear();
-      
-      AuditLogger.log('INVOICE_CREATED', data, 
+
+      AuditLogger.log('INVOICE_CREATED', data,
         `New invoice created at row ${newRow}, Invoice Date: ${DateUtils.formatDate(invoiceDate)}`);
 
-      return { 
-        success: true, 
-        action: 'created', 
+      return {
+        success: true,
+        action: 'created',
         invoiceId: IDGenerator.generateInvoiceId(data.sysId),
         row: newRow
       };
-      
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.create', 
+      AuditLogger.logError('InvoiceManager.create',
         `Failed to create invoice ${data.invoiceNo}: ${error.toString()}`);
-      return { 
-        success: false, 
-        error: error.toString() 
+      return {
+        success: false,
+        error: error.toString()
       };
     } finally {
       LockManager.releaseLock(lock);
     }
   },
-  
+
   /**
    * Update existing invoice
-   * 
+   * OPTIMIZED: Batch updates in single operation
+   * 
    * @param {Object} existingInvoice - Existing invoice record {row, data}
    * @param {Object} data - Transaction data
    * @returns {Object} Result with success flag
    */
-  update: function(existingInvoice, data) {
-    if (!existingInvoice) {
-      return { success: false, error: 'Invoice not found' };
-    }
-    
+  update: function (existingInvoice, data) {
     try {
+      if (!existingInvoice) return { success: false, error: 'Invoice not found' };
+      
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const rowNum = existingInvoice.row;
       const currentTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
       const currentOrigin = existingInvoice.data[CONFIG.invoiceCols.originDay];
-      
+
       // Check if updates are needed
-      const needsUpdate = (data.receivedAmt !== currentTotal) || 
-                          (data.sheetName !== currentOrigin);
+      const amountChanged = (Number(data.receivedAmt) !== currentTotal);
+      const originChanged = (String(data.sheetName) !== String(currentOrigin));
       
-      if (!needsUpdate) {
+      if (!amountChanged && !originChanged) {
         return { success: true, action: 'no_change', row: rowNum };
       }
       
-      // Update Total Amount (column D) and Origin Day (column H)
-      invoiceSh.getRange(rowNum, CONFIG.invoiceCols.totalAmount + 1).setValue(data.receivedAmt);
-      invoiceSh.getRange(rowNum, CONFIG.invoiceCols.originDay + 1).setValue(data.sheetName);
+      // Update only changed fields
+      // SMART: Only invalidate if amount changed (affects balance calculations)
+      if (amountChanged) {
+        invoiceSh.getRange(rowNum, CONFIG.invoiceCols.totalAmount + 1).setValue(data.receivedAmt);
+        InvoiceCache.invalidate('updateAmount');
+      }
+      
+      if (originChanged) {
+        invoiceSh.getRange(rowNum, CONFIG.invoiceCols.originDay + 1).setValue(data.sheetName);
+      }
 
-      // Touch the row to trigger formula recalculation
-      const currentDate = invoiceSh.getRange(rowNum, 1).getValue();
-      invoiceSh.getRange(rowNum, 1).setValue(currentDate);
-      
-      // Clear cache after update
-      InvoiceCache.clear();
-      
-      AuditLogger.log('INVOICE_UPDATED', data, 
+      AuditLogger.log('INVOICE_UPDATED', data,
         `Updated invoice at row ${rowNum}: amount ${currentTotal} → ${data.receivedAmt}`);
-      
+
       return { success: true, action: 'updated', row: rowNum };
-      
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.update', 
+      AuditLogger.logError('InvoiceManager.update',
         `Failed to update invoice: ${error.toString()}`);
       return { success: false, error: error.toString() };
     }
@@ -202,204 +259,210 @@ const InvoiceManager = {
    * @param {string} supplier - Supplier name
    * @param {Date} paymentDate - Date of final payment
    */
-  updatePaidDate: function(invoiceNo, supplier, paymentDate) {
+  updatePaidDate: function (invoiceNo, supplier, paymentDate) {
     try {
       const invoice = this.find(supplier, invoiceNo);
       if (!invoice) return;
-      
+
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const balanceDue = Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
       const currentPaidDate = invoice.data[CONFIG.invoiceCols.paidDate];
-      
+
       // If balance is zero and paid date is empty, set it
       if (balanceDue === 0 && !currentPaidDate) {
         invoiceSh.getRange(invoice.row, CONFIG.invoiceCols.paidDate + 1)
           .setValue(paymentDate);
-        
-        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier }, 
+
+        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
           `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
+
+        InvoiceCache.clear();
       }
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.updatePaidDate', 
+      AuditLogger.logError('InvoiceManager.updatePaidDate',
         `Failed to update paid date: ${error.toString()}`);
     }
   },
 
   /**
-   * Set formulas for invoice row
-   * 
+   * Set formulas for an invoice row in a non-destructive way.
+   * This function now only targets the specific formula columns.
+   * Used by the repairAllFormulas() utility.
+   * 
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
-   * @param {number} row - Row number
+   * @param {number} row - Row number to apply formulas to
    */
-  setFormulas: function(sheet, row) {
+  setFormulas: function (sheet, row) {
     try {
-      // Column E: Total Paid (sum of all payments for this invoice)
-      sheet.getRange(`F${row}`).setFormula(
-        `=IF(C${row}="","", IFERROR(SUMIF(PaymentLog!C:C, C${row}, PaymentLog!E:E), 0))`
-      );
-      
-      // Column G: Balance Due (Total Amount - Total Paid)
-      sheet.getRange(`G${row}`).setFormula(
-        `=IF(D${row}="","", E${row} - F${row})`
-      );
-      
-      // Column H: Status (Paid/Unpaid/Partial based on balance)
-      sheet.getRange(`H${row}`).setFormula(
-        `=IFS(G${row}=0,"Paid", G${row}=E${row},"Unpaid", G${row}<E${row},"Partial")`
-      );
-      
-      // Column K: Days Outstanding (days since invoice date, 0 if paid)
-      sheet.getRange(`K${row}`).setFormula(
-        `=IF(G${row}=0, 0, TODAY() - D${row})`
-      );
+      // TARGETED UPDATE: Set formula for 'Total Paid' (Column F)
+      sheet.getRange(row, CONFIG.invoiceCols.totalPaid + 1)
+        .setFormula(`=IF(C${row}="","", IFERROR(SUMIF(PaymentLog!C:C, C${row}, PaymentLog!E:E), 0))`);
+
+      // TARGETED UPDATE: Set formula for 'Balance Due' (Column G)
+      sheet.getRange(row, CONFIG.invoiceCols.balanceDue + 1)
+        .setFormula(`=IF(E${row}="","", E${row} - F${row})`);
+
+      // TARGETED UPDATE: Set formula for 'Status' (Column H)
+      sheet.getRange(row, CONFIG.invoiceCols.status + 1)
+        .setFormula(`=IFS(G${row}=0,"Paid", G${row}=E${row},"Unpaid", G${row}<E${row},"Partial")`);
+
+      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column K)
+      sheet.getRange(row, CONFIG.invoiceCols.daysOutstanding + 1)
+        .setFormula(`=IF(G${row}=0, 0, TODAY() - D${row})`);
 
     } catch (error) {
-      logSystemError('InvoiceManager.setFormulas', 
+      logSystemError('InvoiceManager.setFormulas',
         `Failed to set formulas for row ${row}: ${error.toString()}`);
       throw error;
     }
   },
-  
+
   /**
    * Find invoice record by supplier and invoice number
-   * 
+   * OPTIMIZED: Uses indexed cache for O(1) lookup
+   * 
    * @param {string} supplier - Supplier name
    * @param {string} invoiceNo - Invoice number
    * @returns {Object|null} Invoice record or null if not found
    */
-  find: function(supplier, invoiceNo) {
+  find: function (supplier, invoiceNo) {
     if (StringUtils.isEmpty(supplier) || StringUtils.isEmpty(invoiceNo)) {
-      AuditLogger.logWarning('InvoiceManager.find', 
+      AuditLogger.logWarning('InvoiceManager.find',
         'Both supplier and invoiceNo are required');
       return null;
     }
 
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const data = invoiceSh.getDataRange().getValues();
-      
+      // Get cached data with index
+      const { data, indexMap } = InvoiceCache.getInvoiceData();
+
       const normalizedSupplier = StringUtils.normalize(supplier);
       const normalizedInvoice = StringUtils.normalize(invoiceNo);
-      
-      for (let i = 1; i < data.length; i++) {
-        if (StringUtils.equals(data[i][CONFIG.invoiceCols.supplier], normalizedSupplier) &&
-            StringUtils.equals(data[i][CONFIG.invoiceCols.invoiceNo], normalizedInvoice)) {
-          return { row: i + 1, data: data[i] };
-        }
+      const key = `${normalizedSupplier}|${normalizedInvoice}`;
+
+      // O(1) lookup using index map
+      const rowIndex = indexMap.get(key);
+      if (rowIndex !== undefined) {
+        return { row: rowIndex + 1, data: data[rowIndex] };
       }
       return null;
-      
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.find', 
+      AuditLogger.logError('InvoiceManager.find',
         `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
       return null;
     }
   },
-  
+
   /**
    * Get unpaid invoices for supplier
-   * 
+   * OPTIMIZED: Single data read, memory-efficient filtering
+   * 
    * @param {string} supplier - Supplier name
    * @returns {Array} Array of unpaid invoice objects
    */
-  getUnpaidForSupplier: function(supplier) {
+  getUnpaidForSupplier: function (supplier) {
     if (StringUtils.isEmpty(supplier)) {
       return [];
     }
-    
+
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const lastRow = invoiceSh.getLastRow();
-      
-      if (lastRow < 2) {
-        return [];
-      }
-      
-      const data = invoiceSh.getRange(2, 1, lastRow - 1, CONFIG.totalColumns.invoice).getValues();
+      // Use cached data
+      const { data } = InvoiceCache.getInvoiceData();
       const normalizedSupplier = StringUtils.normalize(supplier);
-      
-      return data
-        .filter(row => {
-          return StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier) &&
-                 Number(row[CONFIG.invoiceCols.balanceDue]) > 0;
-        })
-        .map(row => ({
-          invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-          date: row[CONFIG.invoiceCols.date],
-          totalAmount: row[CONFIG.invoiceCols.totalAmount],
-          totalPaid: row[CONFIG.invoiceCols.totalPaid],
-          balanceDue: row[CONFIG.invoiceCols.balanceDue],
-          status: row[CONFIG.invoiceCols.status],
-          daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding]
-        }));
-        
+
+      // Single-pass filter and map
+      const unpaidInvoices = [];
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier)) {
+          const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
+          if (balanceDue > 0) {
+            unpaidInvoices.push({
+              invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
+              date: row[CONFIG.invoiceCols.date],
+              invoiceDate: row[CONFIG.invoiceCols.invoiceDate],
+              totalAmount: row[CONFIG.invoiceCols.totalAmount],
+              totalPaid: row[CONFIG.invoiceCols.totalPaid],
+              balanceDue: balanceDue,
+              status: row[CONFIG.invoiceCols.status],
+              daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding]
+            });
+          }
+        }
+      }
+
+      return unpaidInvoices;
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getUnpaidForSupplier', 
+      AuditLogger.logError('InvoiceManager.getUnpaidForSupplier',
         `Failed to get unpaid invoices for ${supplier}: ${error.toString()}`);
       return [];
     }
   },
-  
+
   /**
    * Get all invoices for supplier
-   * 
+   * 
    * @param {string} supplier - Supplier name
    * @param {boolean} includePaid - Whether to include paid invoices
    * @returns {Array} Array of invoice objects
    */
-  getAllForSupplier: function(supplier, includePaid = true) {
+  getAllForSupplier: function (supplier, includePaid = true) {
     if (StringUtils.isEmpty(supplier)) {
       return [];
     }
-    
+
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const lastRow = invoiceSh.getLastRow();
-      
-      if (lastRow < 2) {
-        return [];
-      }
-      
-      const data = invoiceSh.getRange(2, 1, lastRow - 1, CONFIG.totalColumns.invoice).getValues();
+      // Use cached data
+      const { data } = InvoiceCache.getInvoiceData();
       const normalizedSupplier = StringUtils.normalize(supplier);
-      
-      return data
-        .filter(row => {
-          const matchesSupplier = StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier);
-          if (!matchesSupplier) return false;
-          if (includePaid) return true;
-          return Number(row[CONFIG.invoiceCols.balanceDue]) > 0;
-        })
-        .map(row => ({
-          invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-          date: row[CONFIG.invoiceCols.date],
-          totalAmount: row[CONFIG.invoiceCols.totalAmount],
-          totalPaid: row[CONFIG.invoiceCols.totalPaid],
-          balanceDue: row[CONFIG.invoiceCols.balanceDue],
-          status: row[CONFIG.invoiceCols.status],
-          originDay: row[CONFIG.invoiceCols.originDay],
-          daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding],
-          sysId: row[CONFIG.invoiceCols.sysId]
-        }));
-        
+
+      // Single-pass filter and map
+      const invoices = [];
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier)) {
+          const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
+
+          if (includePaid || balanceDue > 0) {
+            invoices.push({
+              invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
+              date: row[CONFIG.invoiceCols.date],
+              invoiceDate: row[CONFIG.invoiceCols.invoiceDate],
+              totalAmount: row[CONFIG.invoiceCols.totalAmount],
+              totalPaid: row[CONFIG.invoiceCols.totalPaid],
+              balanceDue: balanceDue,
+              status: row[CONFIG.invoiceCols.status],
+              originDay: row[CONFIG.invoiceCols.originDay],
+              daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding],
+              sysId: row[CONFIG.invoiceCols.sysId]
+            });
+          }
+        }
+      }
+
+      return invoices;
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getAllForSupplier', 
+      AuditLogger.logError('InvoiceManager.getAllForSupplier',
         `Failed to get invoices for ${supplier}: ${error.toString()}`);
       return [];
     }
   },
-  
+
   /**
    * Get invoice statistics
-   * 
+   * OPTIMIZED: Single data read, single-pass aggregation
+   * 
    * @returns {Object} Statistics summary
    */
-  getStatistics: function() {
+  getStatistics: function () {
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const lastRow = invoiceSh.getLastRow();
-      
-      if (lastRow < 2) {
+      // Use cached data
+      const { data } = InvoiceCache.getInvoiceData();
+
+      if (data.length < 2) {
         return {
           total: 0,
           unpaid: 0,
@@ -408,57 +471,57 @@ const InvoiceManager = {
           totalOutstanding: 0
         };
       }
-      
-      const data = invoiceSh.getRange(2, 1, lastRow - 1, CONFIG.totalColumns.invoice).getValues();
-      
+
+      // Single-pass aggregation
       let unpaid = 0, partial = 0, paid = 0;
       let totalOutstanding = 0;
-      
-      data.forEach(row => {
+
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
         const status = row[CONFIG.invoiceCols.status];
         const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
-        
+
         if (StringUtils.equals(status, 'Unpaid')) unpaid++;
         else if (StringUtils.equals(status, 'Partial')) partial++;
         else if (StringUtils.equals(status, 'Paid')) paid++;
-        
+
         totalOutstanding += balanceDue;
-      });
-      
+      }
+
       return {
-        total: data.length,
+        total: data.length - 1, // Exclude header
         unpaid: unpaid,
         partial: partial,
         paid: paid,
         totalOutstanding: totalOutstanding
       };
-      
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getStatistics', 
+      AuditLogger.logError('InvoiceManager.getStatistics',
         `Failed to get statistics: ${error.toString()}`);
       return null;
     }
   },
-  
+
   /**
    * Build dropdown list of unpaid invoices for a supplier
    * Used for Due payment dropdown
-   * 
+   * 
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Daily sheet
    * @param {number} row - Target row
    * @param {string} supplier - Supplier name
    * @param {string} paymentType - Payment type
    * @returns {boolean} Success flag
    */
-  buildUnpaidDropdown: function(sheet, row, supplier, paymentType) {
+  buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
-    
+
     // Clear dropdown if not Due payment or no supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
-        targetCell.clearDataValidations().clearContent();
+        targetCell.clearDataValidations();
       } catch (e) {
-        AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', 
+        AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
           `Failed to clear dropdown at row ${row}: ${e.toString()}`);
       }
       return false;
@@ -466,7 +529,7 @@ const InvoiceManager = {
 
     try {
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
-      
+
       if (unpaidInvoices.length === 0) {
         targetCell.clearDataValidations()
           .setNote(`No unpaid invoices for ${supplier}`)
@@ -475,7 +538,7 @@ const InvoiceManager = {
       }
 
       const invoiceNumbers = unpaidInvoices.map(inv => inv.invoiceNo);
-      
+
       const rule = SpreadsheetApp.newDataValidation()
         .requireValueInList(invoiceNumbers, true)
         .setAllowInvalid(false)
@@ -483,53 +546,167 @@ const InvoiceManager = {
         .build();
 
       targetCell.setDataValidation(rule).setBackground(CONFIG.colors.info);
-      
+
       return true;
-      
+
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', 
+      AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
         `Failed to build dropdown for ${supplier} at row ${row}: ${error.toString()}`);
-      
+
       targetCell.clearDataValidations()
         .setValue('')
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
-      
+
       return false;
     }
   },
 
   /**
    * Repair formulas for all invoices (maintenance function)
-   * 
+   * 
    * @returns {Object} Result with repaired count
    */
-  repairAllFormulas: function() {
+  repairAllFormulas: function () {
     try {
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
+
+      if (lastRow < 2) {
+        return { success: true, repairedCount: 0, message: 'No invoices to repair' };
+      }
+
+      // Batch check all formulas at once
+      const formulaRange = invoiceSh.getRange(2, 1, lastRow - 1, CONFIG.totalColumns.invoice);
+      const formulas = formulaRange.getFormulas();
+
       let repairedCount = 0;
-      
-      for (let i = 2; i <= lastRow; i++) {
-        // Check if formulas are missing
-        const formulaE = invoiceSh.getRange(i, 5).getFormula();
-        const formulaF = invoiceSh.getRange(i, 6).getFormula();
-        const formulaG = invoiceSh.getRange(i, 7).getFormula();
-        const formulaI = invoiceSh.getRange(i, 9).getFormula();
-        
-        if (!formulaE || !formulaF || !formulaG || !formulaI) {
-          this.setFormulas(invoiceSh, i);
-          repairedCount++;
+      const rowsToRepair = [];
+
+      // Identify rows needing repair
+      for (let i = 0; i < formulas.length; i++) {
+        const rowFormulas = formulas[i];
+        // Check if key formula columns are missing
+        if (!rowFormulas[5] || !rowFormulas[6] || !rowFormulas[7] || !rowFormulas[10]) {
+          rowsToRepair.push(i + 2); // +2 for header and 0-based index
         }
       }
-      
-      return { success: true, repairedCount: repairedCount };
+
+      // Repair in batch
+      for (const rowNum of rowsToRepair) {
+        this.setFormulas(invoiceSh, rowNum);
+        repairedCount++;
+      }
+
+      return {
+        success: true,
+        repairedCount: repairedCount,
+        message: `Repaired ${repairedCount} invoice(s)`
+      };
     } catch (error) {
       logSystemError('InvoiceManager.repairAllFormulas', error.toString());
       return { success: false, error: error.toString() };
     }
+  },
+
+  /**
+  * Batch create multiple invoices (for bulk import)
+  * NEW: Optimized for mass data entry
+  * 
+  * @param {Array} invoiceDataArray - Array of invoice data objects
+  * @returns {Object} Result summary
+  */
+  batchCreate: function (invoiceDataArray) {
+    if (!invoiceDataArray || invoiceDataArray.length === 0) {
+      return { success: true, created: 0, failed: 0, errors: [] };
+    }
+
+    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      return { success: false, error: 'Unable to acquire lock for batch creation' };
+    }
+
+    try {
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      const lastRow = invoiceSh.getLastRow();
+      const startRow = lastRow + 1;
+
+      const newRowsData = [];
+      const errors = [];
+      let created = 0;
+      let failed = 0;
+
+      // Pre-check all duplicates in memory to avoid multiple `find` calls if possible
+      // This is an optimization for larger datasets.
+      InvoiceCache.getInvoiceData(); // Ensures cache is populated
+
+      for (let i = 0; i < invoiceDataArray.length; i++) {
+        const data = invoiceDataArray[i];
+        const currentRowNum = startRow + i;
+
+        try {
+          // Check for duplicates using the now-cached data
+          const exists = this.find(data.supplier, data.invoiceNo);
+          if (exists) {
+            errors.push(`Row ${i + 1}: Invoice ${data.invoiceNo} for ${data.supplier} already exists.`);
+            failed++;
+            continue;
+          }
+
+          const invoiceDate = data.invoiceDate || data.timestamp;
+
+          // Build the full row with data and formulas
+          const newInvoiceRow = [
+            data.timestamp,
+            data.supplier,
+            data.invoiceNo,
+            invoiceDate,
+            data.receivedAmt,
+            `=IF(C${currentRowNum}="","", IFERROR(SUMIF(PaymentLog!C:C, C${currentRowNum}, PaymentLog!E:E), 0))`,
+            `=IF(E${currentRowNum}="","", E${currentRowNum} - F${currentRowNum})`,
+            `=IFS(G${currentRowNum}=0,"Paid", G${currentRowNum}=E${currentRowNum},"Unpaid", G${currentRowNum}<E${currentRowNum},"Partial")`,
+            '', // Paid Date
+            data.sheetName || 'IMPORT',
+            `=IF(G${currentRowNum}=0, 0, TODAY() - D${currentRowNum})`,
+            IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID())
+          ];
+
+          newRowsData.push(newInvoiceRow);
+          created++;
+
+        } catch (error) {
+          errors.push(`Row ${i + 1} (${data.invoiceNo}): ${error.message}`);
+          failed++;
+        }
+      }
+
+      // Batch write all new rows at once
+      if (newRowsData.length > 0) {
+        invoiceSh.getRange(startRow, 1, newRowsData.length, newRowsData[0].length)
+          .setValues(newRowsData);
+      }
+
+      // Clear cache after all operations are complete
+      InvoiceCache.invalidate('create');
+
+      return {
+        success: true,
+        created: created,
+        failed: failed,
+        errors: errors,
+        message: `Created ${created} invoice(s), ${failed} failed.`
+      };
+
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.batchCreate', error.toString());
+      return { success: false, error: error.toString() };
+    } finally {
+      LockManager.releaseLock(lock);
+    }
   }
 };
+
+
 
 // ==================== BACKWARD COMPATIBILITY ====================
 
@@ -542,6 +719,10 @@ function processInvoice(data) {
 
 function createNewInvoice(data) {
   return InvoiceManager.create(data);
+}
+
+function batchCreateInvoices(invoiceDataArray) {
+  return InvoiceManager.batchCreate(invoiceDataArray);
 }
 
 function updateExistingInvoice(existingInvoice, data) {
