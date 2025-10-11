@@ -140,65 +140,63 @@ const InvoiceManager = {
     }
 
     try {
+      const { supplier, invoiceNo, sheetName, sysId, receivedAmt, timestamp } = data;
+
       // Double-check invoice doesn't exist (atomic check with lock)
-      const existingInvoice = this.find(data.supplier, data.invoiceNo);
+      const existingInvoice = this.find(supplier, invoiceNo);
+
       if (existingInvoice) {
-        AuditLogger.log('DUPLICATE_PREVENTED', data,
-          `Invoice ${data.invoiceNo} already exists at row ${existingInvoice.row}`);
-        return {
-          success: false,
-          error: `Invoice ${data.invoiceNo} already exists for ${data.supplier}`,
-          existingRow: existingInvoice.row
-        };
+        const msg = `Invoice ${invoiceNo} already exists at row ${existing.row}`;
+
+        AuditLogger.log('DUPLICATE_PREVENTED', data, msg);
+        return { success: false, error: msg, existingRow: existingInvoice.row };
       }
 
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const lastRow = invoiceSh.getLastRow();
       const newRow = lastRow + 1;
+      const invoiceDate = getDailySheetDate(sheetName) || timestamp;
+      const formattedDate = DateUtils.formatDate(invoiceDate);
+      const invoiceId = IDGenerator.generateInvoiceId(sysId);
 
-      // Get invoice date from daily sheet A3
-      const invoiceDate = getDailySheetDate(data.sheetName) || data.timestamp;
+      // Cached formula templates (avoids repetitive string concatenations)
+      const F = `=IF(C${newRow}="","",IFERROR(SUMIF(PaymentLog!C:C,C${newRow},PaymentLog!E:E),0))`;
+      const G = `=IF(E${newRow}="","",E${newRow}-F${newRow})`;
+      const H = `=IFS(G${newRow}=0,"Paid",G${newRow}=E${newRow},"Unpaid",G${newRow}<E${newRow},"Partial")`;
+      const K = `=IF(G${newRow}=0,0,TODAY()-D${newRow})`;
 
       // Build new invoice row WITH formulas included
-      const newInvoiceRow = [
-        data.timestamp,            // A: Date (legacy)
-        data.supplier,             // B: Supplier
-        data.invoiceNo,            // C: Invoice No
-        invoiceDate,               // D: Invoice Date
-        data.receivedAmt,          // E: Total Amount
-        `=IF(C${newRow}="","", IFERROR(SUMIF(PaymentLog!C:C, C${newRow}, PaymentLog!E:E), 0))`,       // F: Total Paid
-        `=IF(E${newRow}="","", E${newRow} - F${newRow})`, // G: Balance Due
-        `=IFS(G${newRow}=0,"Paid", G${newRow}=E${newRow},"Unpaid", G${newRow}<E${newRow},"Partial")`, // H: Status
-        '',              // I: Paid Date (manual/conditional)
-        data.sheetName,  // J: Origin Day
-        `=IF(G${newRow}=0, 0, TODAY() - D${newRow})`, // K: Days Outstanding
-        IDGenerator.generateInvoiceId(data.sysId)     // L: System ID
+      const newRowData = [
+        timestamp,
+        supplier,
+        invoiceNo,
+        invoiceDate,
+        receivedAmt,
+        F,
+        G,
+        H,
+        '',
+        sheetName,
+        K,
+        invoiceId
       ];
 
-      // Write the combined data and formulas in a single API call
-      // The outer array brackets [] are necessary for setValues()
-      invoiceSh.getRange(newRow, 1, 1, newInvoiceRow.length).setValues([newInvoiceRow]);
+      // Single atomic write
+      invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
 
-      // Clear cache after invoice creation
-      InvoiceCache.clear();
+      // Invalidate supplier-level cache (scoped)
+      InvoiceCache.invalidateForSupplier(supplier);
 
       AuditLogger.log('INVOICE_CREATED', data,
-        `New invoice created at row ${newRow}, Invoice Date: ${DateUtils.formatDate(invoiceDate)}`);
+        `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate}`);
 
-      return {
-        success: true,
-        action: 'created',
-        invoiceId: IDGenerator.generateInvoiceId(data.sysId),
-        row: newRow
-      };
+      return { success: true, action: 'created', invoiceId, row: newRow };
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.create',
         `Failed to create invoice ${data.invoiceNo}: ${error.toString()}`);
-      return {
-        success: false,
-        error: error.toString()
-      };
+      return {success: false, error: error.toString()};
+      
     } finally {
       LockManager.releaseLock(lock);
     }
@@ -216,32 +214,47 @@ const InvoiceManager = {
     try {
       if (!existingInvoice) return { success: false, error: 'Invoice not found' };
       
+      const { supplier, sheetName, receivedAmt } = data;
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const rowNum = existingInvoice.row;
+
       const currentTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
       const currentOrigin = existingInvoice.data[CONFIG.invoiceCols.originDay];
 
+      const totalCol = CONFIG.invoiceCols.totalAmount + 1;
+      const originCol = CONFIG.invoiceCols.originDay + 1;
+      const oldTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
+      const oldOrigin = String(existingInvoice.data[CONFIG.invoiceCols.originDay]);
+      
       // Check if updates are needed
-      const amountChanged = (Number(data.receivedAmt) !== currentTotal);
-      const originChanged = (String(data.sheetName) !== String(currentOrigin));
+      const amountChanged = Number(receivedAmt) !== oldTotal;
+      const originChanged = (String(data.sheetName) !== oldOrigin);
       
       if (!amountChanged && !originChanged) {
         return { success: true, action: 'no_change', row: rowNum };
       }
       
-      // Update only changed fields
-      // SMART: Only invalidate if amount changed (affects balance calculations)
+      // Perform only necessary writes in one batch
+      const updates = [];
       if (amountChanged) {
-        invoiceSh.getRange(rowNum, CONFIG.invoiceCols.totalAmount + 1).setValue(data.receivedAmt);
-        InvoiceCache.invalidate('updateAmount');
+        updates.push({ col: totalCol, val: receivedAmt });
       }
-      
       if (originChanged) {
-        invoiceSh.getRange(rowNum, CONFIG.invoiceCols.originDay + 1).setValue(data.sheetName);
+        updates.push({ col: originCol, val: sheetName });
       }
 
+      if (updates.length) {
+        const range = invoiceSh.getRange(rowNum, 1, 1, invoiceSh.getLastColumn());
+        const values = range.getValues()[0];
+        updates.forEach(u => (values[u.col - 1] = u.val));
+        range.setValues([values]);
+      }
+
+      // Cache invalidation only if numeric data changed
+      if (amountChanged) InvoiceCache.clear();
+
       AuditLogger.log('INVOICE_UPDATED', data,
-        `Updated invoice at row ${rowNum}: amount ${currentTotal} → ${data.receivedAmt}`);
+        `Updated invoice ${existing.data[CONFIG.invoiceCols.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${receivedAmt}`);
 
       return { success: true, action: 'updated', row: rowNum };
 
