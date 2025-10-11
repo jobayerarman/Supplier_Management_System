@@ -23,11 +23,11 @@ function onEdit(e) {
 
   const sheet = e.range.getSheet();
   const sheetName = sheet.getName();
-  const sheetRow = e.range.getRow();
-  const sheetCol = e.range.getColumn();
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
 
   // Skip non-daily sheets or header rows immediately
-  if (sheetRow < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
+  if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
 
   // Acquire document lock for concurrent safety
   const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
@@ -37,11 +37,11 @@ function onEdit(e) {
     const configCols = CONFIG.cols;
 
     // ═══ SINGLE BATCH READ - ONE API CALL ═══
-    const activeRow = sheet.getRange(sheetRow, 1, 1, CONFIG.totalColumns.daily);
+    const activeRow = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily);
     const rowValues = activeRow.getValues()[0];
 
     // Pre-extract commonly used values
-    const editedValue = rowValues[sheetCol - 1];
+    const editedValue = rowValues[col - 1];
     const paymentType = rowValues[configCols.paymentType];
     const supplier = rowValues[configCols.supplier];
     const invoiceNo = rowValues[configCols.invoiceNo];
@@ -49,19 +49,19 @@ function onEdit(e) {
     const paymentAmt = parseFloat(rowValues[configCols.paymentAmt]) || 0;
 
     // ═══ CENTRALIZED BRANCHING - MINIMAL WRITES ═══
-    switch (sheetCol) {
+    switch (col) {
       // ═══ 1. HANDLE POSTING ═══
       case configCols.post + 1:
         if (editedValue === true || String(editedValue).toUpperCase() === 'TRUE') {
           // Pass pre-read data to avoid redundant read
-          processPostedRowWithLock(sheet, sheetRow, rowValues);
+          processPostedRowWithLock(sheet, row, rowValues);
         }
         break;
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
-        buildPrevInvoiceDropdown(sheet, sheetRow, rowValues);
-        updateCurrentBalance(sheet, sheetRow, false, rowValues);
+        buildPrevInvoiceDropdown(sheet, row, rowValues);
+        updateCurrentBalance(sheet, row, false, rowValues);
         break;
 
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
@@ -74,34 +74,34 @@ function onEdit(e) {
       // ═══ 4. HANDLE RECEIVED AMOUNT EDIT ═══
       case configCols.receivedAmt + 1:
         if (paymentType === 'Regular') {
-          sheet.getRange(sheetRow, configCols.paymentAmt + 1).setValue(receivedAmt);
+          sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
         }
-        updateCurrentBalance(sheet, sheetRow, false, rowValues);
+        updateCurrentBalance(sheet, row, false, rowValues);
         break;
 
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
-        clearPaymentFieldsForTypeChange(sheet, sheetRow, paymentType);
-        buildPrevInvoiceDropdown(sheet, sheetRow, rowValues);
+        clearPaymentFieldsForTypeChange(sheet, row, paymentType);
+        buildPrevInvoiceDropdown(sheet, row, rowValues);
         
         if (['Regular', 'Partial'].includes(paymentType)) {
-          autoPopulatePaymentFields(sheet, sheetRow, paymentType, rowValues);
+          autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
         }
         
-        updateCurrentBalance(sheet, sheetRow, false, rowValues);
+        updateCurrentBalance(sheet, row, false, rowValues);
         break;
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
         if ((paymentType === 'Due') && supplier && editedValue) {
-          autoPopulateDuePaymentAmount(sheet, sheetRow, supplier, editedValue);
+          autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
         }
-        updateCurrentBalance(sheet, sheetRow, false, rowValues);
+        updateCurrentBalance(sheet, row, false, rowValues);
         break;
 
       // ═══ 7. HANDLE PAYMENT AMOUNT EDIT ═══
       case configCols.paymentAmt + 1:
-        updateCurrentBalance(sheet, sheetRow, false, rowValues);
+        updateCurrentBalance(sheet, row, false, rowValues);
         break;
       
       default:
@@ -290,8 +290,8 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
       .setBackground(null);
     
     prevInvoiceCell
-      .clearNote()
       .clearDataValidations()
+      .clearNote()
       .setBackground(null);
 
     if (['Unpaid', 'Due'].includes(newPaymentType))

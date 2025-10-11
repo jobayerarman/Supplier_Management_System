@@ -89,7 +89,7 @@ const CONFIG = {
   // Business rules
   rules: {
     MAX_TRANSACTION_AMOUNT: 1000000,
-    CACHE_TTL_MS: 30000,
+    CACHE_TTL_MS: 60000,
     LOCK_TIMEOUT_MS: 30000,
     MAX_INVOICE_NO_LENGTH: 50,
     SUPPORTED_PAYMENT_TYPES: ['Unpaid', 'Regular', 'Partial', 'Due'],
