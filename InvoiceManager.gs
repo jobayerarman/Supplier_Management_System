@@ -16,7 +16,10 @@
  */
 
 // ═══ INTELLIGENT CACHE ═══
-
+/**
+ * High-performance in-memory + persistent cache for Invoice Sheet
+ * Reduces read latency and redundant sheet access
+ */
 const InvoiceCache = {
   data: null,
   indexMap: null, // NEW: Fast lookup by supplier-invoice key
@@ -196,7 +199,7 @@ const InvoiceManager = {
       AuditLogger.logError('InvoiceManager.create',
         `Failed to create invoice ${data.invoiceNo}: ${error.toString()}`);
       return {success: false, error: error.toString()};
-      
+
     } finally {
       LockManager.releaseLock(lock);
     }
@@ -331,8 +334,7 @@ const InvoiceManager = {
   },
 
   /**
-   * Find invoice record by supplier and invoice number
-   * OPTIMIZED: Uses indexed cache for O(1) lookup
+   * Find invoice record by supplier and invoice number (cached lookup)
    * 
    * @param {string} supplier - Supplier name
    * @param {string} invoiceNo - Invoice number
@@ -340,8 +342,10 @@ const InvoiceManager = {
    */
   find: function (supplier, invoiceNo) {
     if (StringUtils.isEmpty(supplier) || StringUtils.isEmpty(invoiceNo)) {
-      AuditLogger.logWarning('InvoiceManager.find',
-        'Both supplier and invoiceNo are required');
+      AuditLogger.logWarning(
+        'InvoiceManager.find',
+        'Both supplier and invoiceNo are required'
+      );
       return null;
     }
 
@@ -349,27 +353,29 @@ const InvoiceManager = {
       // Get cached data with index
       const { data, indexMap } = InvoiceCache.getInvoiceData();
 
-      const normalizedSupplier = StringUtils.normalize(supplier);
-      const normalizedInvoice = StringUtils.normalize(invoiceNo);
-      const key = `${normalizedSupplier}|${normalizedInvoice}`;
-
-      // O(1) lookup using index map
+      const key = `${StringUtils.normalize(supplier)}|${StringUtils.normalize(invoiceNo)}`;
       const rowIndex = indexMap.get(key);
-      if (rowIndex !== undefined) {
-        return { row: rowIndex + 1, data: data[rowIndex] };
+
+      if (!rowIndex) {
+        return null;
       }
-      return null;
+      
+      return {
+        row: rowIndex + 1, // convert to 1-based sheet index
+        data: data[rowIndex],
+      };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.find',
-        `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
+      AuditLogger.logError(
+        'InvoiceManager.find',
+        `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`
+      );
       return null;
     }
   },
 
   /**
-   * Get unpaid invoices for supplier
-   * OPTIMIZED: Single data read, memory-efficient filtering
+   * Get unpaid invoices for supplier (cached + in-memory filtering)
    * 
    * @param {string} supplier - Supplier name
    * @returns {Array} Array of unpaid invoice objects
@@ -382,34 +388,42 @@ const InvoiceManager = {
     try {
       // Use cached data
       const { data } = InvoiceCache.getInvoiceData();
-      const normalizedSupplier = StringUtils.normalize(supplier);
+      if (data.length <= 1) return [];
+
+      const normSupplier = StringUtils.normalize(supplier);
+      const col = CONFIG.invoiceCols;
 
       // Single-pass filter and map
       const unpaidInvoices = [];
+
+      // Start from row 1 to skip headers (if row 0 is header)
       for (let i = 1; i < data.length; i++) {
         const row = data[i];
-        if (StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier)) {
-          const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
-          if (balanceDue > 0) {
-            unpaidInvoices.push({
-              invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-              date: row[CONFIG.invoiceCols.date],
-              invoiceDate: row[CONFIG.invoiceCols.invoiceDate],
-              totalAmount: row[CONFIG.invoiceCols.totalAmount],
-              totalPaid: row[CONFIG.invoiceCols.totalPaid],
-              balanceDue: balanceDue,
-              status: row[CONFIG.invoiceCols.status],
-              daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding]
-            });
-          }
+        if (!row) continue;
+
+        const rowSupplier = StringUtils.normalize(row[col.supplier]);
+        const balanceDue = Number(row[col.balanceDue]) || 0;
+
+        if (rowSupplier === normSupplier && balanceDue > 0) {
+          unpaidInvoices.push({
+            invoiceNo: row[col.invoiceNo],
+            date: row[col.date],
+            totalAmount: row[col.totalAmount],
+            totalPaid: row[col.totalPaid],
+            balanceDue: balanceDue,
+            status: row[col.status],
+            daysOutstanding: row[col.daysOutstanding],
+          });
         }
       }
 
       return unpaidInvoices;
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getUnpaidForSupplier',
-        `Failed to get unpaid invoices for ${supplier}: ${error.toString()}`);
+      AuditLogger.logError(
+        'InvoiceManager.getUnpaidForSupplier',
+        `Failed to get unpaid invoices for ${supplier}: ${error.toString()}`
+      );
       return [];
     }
   },
