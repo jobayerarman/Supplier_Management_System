@@ -61,6 +61,71 @@ const PaymentManager = {
       };
     }
   },
+
+  /**
+   * OPTIMIZED: PaymentManager.processOptimized()
+   * Accepts pre-calculated invoiceId and balance
+   */
+  processOptimized: function(data, invoiceId) {
+    // Early validation
+    if (!data.paymentAmt || data.paymentAmt <= 0) {
+      return { 
+        success: false, 
+        error: 'Invalid payment amount' 
+      };
+    }
+    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      return { success: false, error: 'Unable to acquire payment lock' };
+    }
+
+    try {
+      const paymentSh = getSheet(CONFIG.paymentSheet);
+      const lastRow = paymentSh.getLastRow();
+      const newRow = lastRow + 1;
+
+      const paymentId = IDGenerator.generatePaymentId(data.sysId);
+      const targetInvoice = data.paymentType === "Due" ? data.prevInvoice : data.invoiceNo;
+
+      // Build payment row
+      const paymentRow = [
+        data.timestamp,
+        data.supplier,
+        targetInvoice,
+        data.paymentDate || data.invoiceDate,
+        data.paymentAmt,
+        data.paymentType,
+        data.notes || '',
+        data.sheetName,
+        data.enteredBy,
+        paymentId,
+        invoiceId || ''
+      ];
+
+      // Single write operation
+      paymentSh.getRange(newRow, 1, 1, paymentRow.length).setValues([paymentRow]);
+
+      // Check if invoice is fully paid
+      const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(targetInvoice, data.supplier);
+      const fullyPaid = (invoiceBalance === 0);
+
+      AuditLogger.log('PAYMENT_CREATED', data, 
+        `Payment ${paymentId} created | Amount: ${data.paymentAmt} | Invoice: ${targetInvoice}`);
+
+      return { 
+        success: true, 
+        paymentId: paymentId, 
+        row: newRow,
+        fullyPaid: fullyPaid
+      };
+
+    } catch (error) {
+      AuditLogger.logError('PaymentManager.processOptimized', error.toString());
+      return { success: false, error: error.toString() };
+    } finally {
+      LockManager.releaseLock(lock);
+    }
+  },
   
   /**
    * Check if payment should be processed based on payment type

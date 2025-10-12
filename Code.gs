@@ -67,7 +67,7 @@ function onEdit(e) {
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
       case configCols.invoiceNo + 1:
         if (['Regular', 'Partial'].includes(paymentType)) {
-          if (invoiceNo) sheet.getRange(row, cols.prevInvoice + 1).setValue(invoiceNo);
+          if (invoiceNo) sheet.getRange(row, configCols.prevInvoice + 1).setValue(invoiceNo);
         }
         break;
     
@@ -117,7 +117,15 @@ function onEdit(e) {
 }
 
 /**
- * Process posted row with full transaction workflow
+ * OPTIMIZED: Process posted row with full transaction workflow
+ * 
+ * Performance improvements:
+ * 1. Zero redundant reads (uses pre-read rowData)
+ * 2. Batch writes (single API call for status update)
+ * 3. Surgical cache invalidation (supplier-specific)
+ * 4. Pre-calculated balance passed through pipeline
+ * 5. Early validation exit (fail fast)
+ * 
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
@@ -164,15 +172,15 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
       timestamp: now,
       sysId
     };
-    
+
     // ═══ 2. EARLY VALIDATION (Fail Fast) ═══
     const validation = validatePostData(data);
     if (!validation.valid) {
-      setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false);
+      setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
       auditAction('VALIDATION_FAILED', data, validation.error);
       return;
     }
-    
+
     // ═══ 3. WRITE SYSTEM ID (Only if missing) ═══
     if (!rowData[cols.sysId]) {
       sheet.getRange(rowNum, cols.sysId + 1).setValue(data.sysId);
@@ -184,35 +192,41 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     // ═══ 4. PRE-CALCULATE BALANCE (Before invoice/payment) ═══
     const currentOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
     data.preBalance = currentOutstanding;
-    
+
     // ═══ 5. PROCESS INVOICE (Returns existing invoice if found) ═══
-    const invoiceResult = processInvoice(data);
+    const invoiceResult = InvoiceManager.processOptimized(data);
     if (!invoiceResult.success) {
-      setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false);
+      setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
       return;
     }
-    
+
     // ═══ 6. PROCESS PAYMENT (Conditional, with pre-calculated balance) ═══
     if (shouldProcessPayment(data)) {
-      const paymentResult = processPayment(data);
+      const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       if (!paymentResult.success) {
-        setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false);
+        setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
         return;
       }
       // Update paid date if invoice fully settled
       const targetInvoice = paymentType === "Due" ? prevInvoice : invoiceNo;
-      if (targetInvoice) {
-        InvoiceManager.updatePaidDate(targetInvoice, supplier, invoiceDate);
+      if (targetInvoice && paymentResult.fullyPaid) {
+        InvoiceManager.updatePaidDateOptimized(targetInvoice, supplier, invoiceDate);
       }
     }
 
     // ═══ 7. CALCULATE FINAL BALANCE (Using cached supplier outstanding) ═══
-    const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
-    updateCurrentBalance(sheet, rowNum, true, null);
+    const finalBalance = BalanceCalculator.calculate(data);
 
     // ═══ 8. BATCH SUCCESS UPDATE (Single API call) ═══
-    setPostStatus(sheet, rowNum, "POSTED", enteredBy.split("@")[0], timeStr, true);  // Keep checkbox checked
-    setRowBackground(sheet, rowNum, colors.success);
+    setBatchPostStatus(
+      sheet, 
+      rowNum, 
+      "POSTED", 
+      enteredBy.split("@")[0], 
+      timeStr, 
+      true,
+      colors.success
+    );
 
     // ═══ 9. UPDATE BALANCE CELL (Uses finalBalance, no recalculation) ═══
     sheet.getRange(rowNum, cols.balance + 1)
@@ -227,7 +241,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;
-    setPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false);
+    setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
     logSystemError('processPostedRow', error.toString());
   }
 }

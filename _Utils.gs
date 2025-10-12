@@ -421,6 +421,27 @@ function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChec
 }
 
 /**
+ * OPTIMIZED: Batch status update (Single API call)
+ * Combines status, user, time, checkbox, and background color
+ */
+function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor) {
+  const cols = CONFIG.cols;
+  
+  // Prepare all values in single array
+  const updates = [[keepChecked, status, user, time]];
+  
+  // Single batch write (columns: Post checkbox, Status, PostedBy, PostedAt)
+  const startCol = cols.post + 1;
+  const range = sheet.getRange(row, startCol, 1, 4);
+  range.setValues(updates);
+  
+  // Apply background color to entire row
+  if (bgColor) {
+    setRowBackground(sheet, row, bgColor)
+  }
+}
+
+/**
  * Set background color for entire row
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number

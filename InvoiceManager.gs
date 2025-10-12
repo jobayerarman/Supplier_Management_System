@@ -226,6 +226,40 @@ const InvoiceManager = {
   },
 
   /**
+   * OPTIMIZED: InvoiceManager.processOptimized()
+   * Returns invoiceId immediately for payment processing
+   */
+  processOptimized: function(data) {
+    try {
+      // Skip for Due payments without invoice
+      if (data.paymentType === 'Due' && !data.invoiceNo) {
+        return { success: true, action: 'none', invoiceId: null };
+      }
+
+      // Check existence using cached data
+      const existingInvoice = data.invoiceNo ? this.find(data.supplier, data.invoiceNo) : null;
+      
+      if (existingInvoice) {
+        // Update if needed
+        const result = this.updateOptimized(existingInvoice, data);
+        const invoiceId = existingInvoice.data[CONFIG.invoiceCols.sysId] || 
+                          IDGenerator.generateInvoiceId(data.sysId);
+        return { 
+          ...result, 
+          invoiceId: invoiceId
+        };
+      } else {
+        // Create new
+        return this.create(data);
+      }
+
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.processOptimized', error.toString());
+      return { success: false, error: `Invoice processing failed: ${error.message}` };
+    }
+  },
+
+  /**
    * Create new invoice with atomic duplicate check
    * 
     * @param {Object} data - Transaction data
@@ -283,7 +317,7 @@ const InvoiceManager = {
       invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
 
       // Invalidate supplier-level cache (scoped)
-      InvoiceCache.invalidate('create');
+      InvoiceCache.invalidateSupplierCache(supplier);
 
       AuditLogger.log('INVOICE_CREATED', data,
         `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate}`);
@@ -343,7 +377,7 @@ const InvoiceManager = {
       }
 
       if (updates.length) {
-        const range = invoiceSh.getRange(rowNum, 1, 1, invoiceSh.getLastColumn());
+        const range = invoiceSh.getRange(rowNum, 1, 1, CONFIG.totalColumns.invoice);
         const values = range.getValues()[0];
         updates.forEach(u => (values[u.col - 1] = u.val));
         range.setValues([values]);
@@ -360,6 +394,57 @@ const InvoiceManager = {
     } catch (error) {
       AuditLogger.logError('InvoiceManager.update',
         `Failed to update invoice: ${error.toString()}`);
+      return { success: false, error: error.toString() };
+    }
+  },
+
+  /**
+   * OPTIMIZED: InvoiceManager.updateOptimized()
+   * Only writes if data actually changed
+   */
+  updateOptimized: function(existingInvoice, data) {
+    try {
+      const col = CONFIG.invoiceCols;
+      const rowNum = existingInvoice.row;
+      
+      const oldTotal = Number(existingInvoice.data[col.totalAmount]) || 0;
+      const oldOrigin = String(existingInvoice.data[col.originDay]);
+      const newTotal = Number(data.receivedAmt);
+      const newOrigin = String(data.sheetName);
+      
+      // Early exit if no changes
+      if (newTotal === oldTotal && newOrigin === oldOrigin) {
+        return { success: true, action: 'no_change', row: rowNum };
+      }
+      
+      // Batch write only changed columns
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      const updates = [];
+      
+      if (newTotal !== oldTotal) {
+        updates.push({ col: col.totalAmount + 1, val: newTotal });
+      }
+      if (newOrigin !== oldOrigin) {
+        updates.push({ col: col.originDay + 1, val: newOrigin });
+      }
+      
+      if (updates.length > 0) {
+        const range = invoiceSh.getRange(rowNum, 1, 1, CONFIG.totalColumns.invoice);
+        const values = range.getValues()[0];
+        updates.forEach(u => (values[u.col - 1] = u.val));
+        range.setValues([values]);
+        
+        // Only invalidate supplier cache (not global)
+        InvoiceCache.invalidateSupplierCache(data.supplier);
+      }
+
+      AuditLogger.log('INVOICE_UPDATED', data, 
+        `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
+      
+      return { success: true, action: 'updated', row: rowNum };
+
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.updateOptimized', error.toString());
       return { success: false, error: error.toString() };
     }
   },
@@ -394,6 +479,32 @@ const InvoiceManager = {
     } catch (error) {
       AuditLogger.logError('InvoiceManager.updatePaidDate',
         `Failed to update paid date: ${error.toString()}`);
+    }
+  },
+
+  /**
+   * OPTIMIZED: InvoiceManager.updatePaidDateOptimized()
+   * Only writes if balance is zero and date is empty
+   */
+  updatePaidDateOptimized: function(invoiceNo, supplier, paymentDate) {
+    try {
+      const invoice = this.find(supplier, invoiceNo);
+      if (!invoice) return;
+
+      const col = CONFIG.invoiceCols;
+      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
+      const currentPaidDate = invoice.data[col.paidDate];
+
+      // Only write if conditions met
+      if (balanceDue === 0 && !currentPaidDate) {
+        const invoiceSh = getSheet(CONFIG.invoiceSheet);
+        invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paymentDate);
+
+        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
+          `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
+      }
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.updatePaidDateOptimized', error.toString());
     }
   },
 
