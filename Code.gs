@@ -60,7 +60,7 @@ function onEdit(e) {
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
-        buildPrevInvoiceDropdown(sheet, row, rowValues);
+        buildUnpaidDropdown(sheet, row, supplier, paymentType);
         updateCurrentBalance(sheet, row, false, rowValues);
         break;
 
@@ -82,7 +82,7 @@ function onEdit(e) {
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
-        buildPrevInvoiceDropdown(sheet, row, rowValues);
+        buildUnpaidDropdown(sheet, row, supplier, paymentType);
         
         if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
@@ -131,12 +131,12 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
   const sheetName = sheet.getName();
 
   try {
+    // ═══ 1. DATA EXTRACTION (Zero additional reads) ═══
     // Fallback to single batch read only if not provided
     if (!rowData) {
       rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
     }
 
-    // Pre-extract values efficiently
     const supplier = rowData[cols.supplier];
     const invoiceNo = rowData[cols.invoiceNo];
     const paymentType = rowData[cols.paymentType];
@@ -148,6 +148,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     const invoiceDate = getDailySheetDate(sheetName) || now;
     const enteredBy = Session.getEffectiveUser().getEmail();
 
+    // Build transaction context object
     const data = {
       sheetName,
       rowNum,
@@ -164,15 +165,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
       sysId
     };
     
-    // If system ID is missing, write once
-    if (!rowData[cols.sysId]) {
-      sheet.getRange(rowNum, cols.sysId + 1).setValue(data.sysId);
-    }
-    
-    // BEFORE-POST AUDIT
-    auditAction("BEFORE-POST", data, "Starting posting process");
-  
-    // ─── 1. VALIDATION - Uses ValidationEngine.gs ───
+    // ═══ 2. EARLY VALIDATION (Fail Fast) ═══
     const validation = validatePostData(data);
     if (!validation.valid) {
       setPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false);
@@ -180,37 +173,57 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
       return;
     }
     
-    // ─── 2. PROCESS INVOICE - Uses InvoiceManager.gs ───
+    // ═══ 3. WRITE SYSTEM ID (Only if missing) ═══
+    if (!rowData[cols.sysId]) {
+      sheet.getRange(rowNum, cols.sysId + 1).setValue(data.sysId);
+    }
+
+    // BEFORE-POST AUDIT
+    auditAction("BEFORE-POST", data, "Starting posting process");
+
+    // ═══ 4. PRE-CALCULATE BALANCE (Before invoice/payment) ═══
+    const currentOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
+    data.preBalance = currentOutstanding;
+    
+    // ═══ 5. PROCESS INVOICE (Returns existing invoice if found) ═══
     const invoiceResult = processInvoice(data);
     if (!invoiceResult.success) {
       setPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false);
       return;
     }
     
-    // ─── 3. PROCESS PAYMENT - Uses PaymentManager.gs ───
+    // ═══ 6. PROCESS PAYMENT (Conditional, with pre-calculated balance) ═══
     if (shouldProcessPayment(data)) {
       const paymentResult = processPayment(data);
       if (!paymentResult.success) {
         setPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false);
         return;
       }
-      
+      // Update paid date if invoice fully settled
       const targetInvoice = paymentType === "Due" ? prevInvoice : invoiceNo;
       if (targetInvoice) {
         InvoiceManager.updatePaidDate(targetInvoice, supplier, invoiceDate);
       }
     }
 
-    // ─── 4. SUCCESS STATUS ───
-    setPostStatus(sheet, rowNum, "POSTED", enteredBy.split("@")[0], timeStr, true);  // Keep checkbox checked
-    setRowBackground(sheet, rowNum, colors.success);
-
-    // ─── 5. BALANCE UPDATE ───
+    // ═══ 7. CALCULATE FINAL BALANCE (Using cached supplier outstanding) ═══
     const supplierOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
     updateCurrentBalance(sheet, rowNum, true, null);
 
-    // ─── 6. FINAL AUDIT ───
-    auditAction('AFTER-POST', data, `Posting completed. Supplier outstanding: ${supplierOutstanding}`);
+    // ═══ 8. BATCH SUCCESS UPDATE (Single API call) ═══
+    setPostStatus(sheet, rowNum, "POSTED", enteredBy.split("@")[0], timeStr, true);  // Keep checkbox checked
+    setRowBackground(sheet, rowNum, colors.success);
+
+    // ═══ 9. UPDATE BALANCE CELL (Uses finalBalance, no recalculation) ═══
+    sheet.getRange(rowNum, cols.balance + 1)
+      .setValue(finalBalance)
+      .setNote(`Posted: Supplier outstanding = ${finalBalance}`);
+
+    // ═══ 10. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
+    InvoiceCache.invalidateSupplierCache(supplier);
+
+    // ═══ 11. FINAL AUDIT ═══
+    auditAction('AFTER-POST', data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;
