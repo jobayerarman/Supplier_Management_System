@@ -17,82 +17,177 @@
 
 // ═══ INTELLIGENT CACHE ═══
 /**
- * High-performance in-memory + persistent cache for Invoice Sheet
- * Reduces read latency and redundant sheet access
+ * Optimized Invoice Cache Module
+ * ----------------------------------------------------
+ * Features:
+ *  - Global invoice data cache (in-memory)
+ *  - Fast lookup by supplier|invoiceNo
+ *  - Supplier-wise index for quick filtering
+ *  - TTL-based auto-expiration
+ *  - Supplier-specific invalidation
  */
 const InvoiceCache = {
   data: null,
-  indexMap: null, // NEW: Fast lookup by supplier-invoice key
+  indexMap: null,        // "SUPPLIER|INVOICE NO" -> row index
+  supplierIndex: null,   // "SUPPLIER" -> [row indices]
   timestamp: null,
   TTL: CONFIG.rules.CACHE_TTL_MS,
 
   /**
-   * Get cached data with validation
+   * Get cached data if valid (within TTL)
+   * @returns {{data:Array, indexMap:Map, supplierIndex:Map}|null}
    */
   get: function () {
     const now = Date.now();
     if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
-      return { data: this.data, indexMap: this.indexMap };
+      AuditLogger.logWarning('InvoiceCache', 'Using cached invoice data');
+      return {
+        data: this.data,
+        indexMap: this.indexMap,
+        supplierIndex: this.supplierIndex
+      };
+    }
+    // Expired or not initialized
+    if (this.timestamp && (now - this.timestamp) >= this.TTL) {
+      AuditLogger.logWarning('InvoiceCache', 'Cache expired, reloading data');
     }
     return null;
   },
 
   /**
-   * Set cache with index map generation
+   * Set new cache with supplier/invoice indexing
+   * @param {Array[]} data - Sheet data array
    */
   set: function (data) {
     this.data = data;
     this.timestamp = Date.now();
-
-    // Build fast lookup index: "SUPPLIER|INVOICENO" -> row index
     this.indexMap = new Map();
+    this.supplierIndex = new Map();
+
+    const col = CONFIG.invoiceCols;
+
+    // Start from 1 if row 0 = header
     for (let i = 1; i < data.length; i++) {
-      const supplier = StringUtils.normalize(data[i][CONFIG.invoiceCols.supplier]);
-      const invoiceNo = StringUtils.normalize(data[i][CONFIG.invoiceCols.invoiceNo]);
-      if (supplier && invoiceNo) {
-        const key = `${supplier}|${invoiceNo}`;
-        this.indexMap.set(key, i);
+      const supplier = StringUtils.normalize(data[i][col.supplier]);
+      const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
+      if (!supplier || !invoiceNo) continue;
+
+      const key = `${supplier}|${invoiceNo}`;
+      this.indexMap.set(key, i);
+
+      if (!this.supplierIndex.has(supplier)) {
+        this.supplierIndex.set(supplier, []);
       }
+      this.supplierIndex.get(supplier).push(i);
     }
+
+    AuditLogger.logWarning('InvoiceCache', `Cache refreshed with ${data.length - 1} rows`);
   },
 
   /**
-   * Selective cache invalidation
-   * Only clear if operation affects queries
+   * Invalidate based on operation type
+   * @param {string} operation - Action type (create, updateAmount, etc.)
    */
-  invalidate: function(operation) {
-    // SMART: Only clear cache for operations that change dropdown/balance data
+  invalidate: function (operation) {
     const invalidatingOps = ['create', 'updateAmount', 'updateStatus'];
     if (invalidatingOps.includes(operation)) {
       this.clear();
+      AuditLogger.logWarning('InvoiceCache', `Cache invalidated due to operation: ${operation}`);
     }
-    // Don't clear for: 'updatePaidDate', 'noChange', etc.
   },
 
   /**
-   * Clear cache
+   * Invalidate all cache (manual or force reload)
+   */
+  invalidateGlobal: function () {
+    this.clear();
+    AuditLogger.logInfo('InvoiceCache', 'Global cache invalidated');
+  },
+
+  /**
+   * Invalidate only one supplier’s cache index
+   * (does NOT reload data, just removes supplier from supplierIndex)
+   * @param {string} supplier - Supplier name
+   */
+  invalidateSupplierCache: function (supplier) {
+    if (!supplier) return;
+    const normalized = StringUtils.normalize(supplier);
+
+    if (this.supplierIndex && this.supplierIndex.has(normalized)) {
+      this.supplierIndex.delete(normalized);
+
+      AuditLogger.logWarning('InvoiceCache', `Supplier cache invalidated: ${supplier}`);
+    }
+  },
+
+  /**
+   * Clear entire cache memory
    */
   clear: function () {
     this.data = null;
     this.indexMap = null;
+    this.supplierIndex = null;
     this.timestamp = null;
   },
 
   /**
-   * Get cached invoice sheet data (single API call)
+   * Lazy load invoice data and build indices
+   * @returns {{data:Array,indexMap:Map,supplierIndex:Map}}
    */
   getInvoiceData: function () {
-    let cached = this.get();
-    if (cached) {
-      return cached;
-    }
+    const cached = this.get();
+    if (cached) return cached;
 
     // Cache miss - load data
     const invoiceSh = getSheet(CONFIG.invoiceSheet);
-    const data = invoiceSh.getDataRange().getValues();
+    const lastRow = invoiceSh.getLastRow();
+
+    if (lastRow < 2) {
+      const emptyData = [[]]; // Header placeholder
+      this.set(emptyData);
+      return {
+        data: emptyData,
+        indexMap: new Map(),
+        supplierIndex: new Map()
+      };
+    }
+
+    // OPTIMIZED: Read only used range
+    const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
     this.set(data);
 
-    return { data: data, indexMap: this.indexMap };
+    return {
+      data: this.data,
+      indexMap: this.indexMap,
+      supplierIndex: this.supplierIndex
+    };
+  },
+
+  /**
+   * Get all invoice rows for a specific supplier
+   * @param {string} supplier
+   * @returns {Array<{invoiceNo:string,status:string,amount:number,rowIndex:number}>}
+   */
+  getSupplierData: function (supplier) {
+    if (!supplier) return [];
+    const normalized = StringUtils.normalize(supplier);
+    const { data, supplierIndex } = this.getInvoiceData();
+
+    const rows = supplierIndex.get(normalized) || [];
+    if (rows.length === 0) {
+      AuditLogger.logWarning('InvoiceCache', `No invoice data found for supplier: ${supplier}`);
+      return [];
+    }
+
+    return rows.map(i => {
+      const row = data[i];
+      return {
+        invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
+        status: row[CONFIG.invoiceCols.paymentStatus],
+        amount: row[CONFIG.invoiceCols.totalAmount],
+        rowIndex: i
+      };
+    });
   }
 };
 
@@ -118,7 +213,7 @@ const InvoiceManager = {
 
       // Check if invoice already exists
       const existingInvoice = data.invoiceNo ? this.find(data.supplier, data.invoiceNo) : null;
-      return existingInvoice ? this.update(existingInvoice, data) : this.create(data);
+      return existingInvoice ? this.update(existingInvoice, data) : this.create(data, existingInvoice);
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.process',
@@ -133,10 +228,10 @@ const InvoiceManager = {
   /**
    * Create new invoice with atomic duplicate check
    * 
-   * @param {Object} data - Transaction data
-   * @returns {Object} Result with success flag and invoice details
-   */
-  create: function (data) {
+    * @param {Object} data - Transaction data
+    * @returns {Object} Result with success flag and invoice details
+    */
+  create: function (data, invoice = null) {
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
       return { success: false, error: 'Unable to acquire lock for invoice creation' };
@@ -146,10 +241,10 @@ const InvoiceManager = {
       const { supplier, invoiceNo, sheetName, sysId, receivedAmt, timestamp } = data;
 
       // Double-check invoice doesn't exist (atomic check with lock)
-      const existingInvoice = this.find(supplier, invoiceNo);
+      const existingInvoice = invoice || this.find(supplier, invoiceNo);
 
       if (existingInvoice) {
-        const msg = `Invoice ${invoiceNo} already exists at row ${existing.row}`;
+        const msg = `Invoice ${invoiceNo} already exists at row ${existingInvoice.row}`;
 
         AuditLogger.log('DUPLICATE_PREVENTED', data, msg);
         return { success: false, error: msg, existingRow: existingInvoice.row };
@@ -163,7 +258,7 @@ const InvoiceManager = {
       const invoiceId = IDGenerator.generateInvoiceId(sysId);
 
       // Cached formula templates (avoids repetitive string concatenations)
-      const F = `=IF(C${newRow}="","",IFERROR(SUMIF(PaymentLog!C:C,C${newRow},PaymentLog!E:E),0))`;
+      const F = `=IF(C${newRow}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${newRow}, PaymentLog!B:B,B${newRow}),0))`;
       const G = `=IF(E${newRow}="","",E${newRow}-F${newRow})`;
       const H = `=IFS(G${newRow}=0,"Paid",G${newRow}=E${newRow},"Unpaid",G${newRow}<E${newRow},"Partial")`;
       const K = `=IF(G${newRow}=0,0,TODAY()-D${newRow})`;
@@ -188,7 +283,7 @@ const InvoiceManager = {
       invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
 
       // Invalidate supplier-level cache (scoped)
-      InvoiceCache.invalidateForSupplier(supplier);
+      InvoiceCache.invalidate('create');
 
       AuditLogger.log('INVOICE_CREATED', data,
         `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate}`);
@@ -216,18 +311,19 @@ const InvoiceManager = {
   update: function (existingInvoice, data) {
     try {
       if (!existingInvoice) return { success: false, error: 'Invoice not found' };
+      const col = CONFIG.invoiceCols;
       
-      const { supplier, sheetName, receivedAmt } = data;
+      const { supplier, sheetName, receivedAmt } = InvoiceCache.getInvoiceData();
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
       const rowNum = existingInvoice.row;
 
-      const currentTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
-      const currentOrigin = existingInvoice.data[CONFIG.invoiceCols.originDay];
+      const currentTotal = Number(existingInvoice.data[col.totalAmount]) || 0;
+      const currentOrigin = existingInvoice.data[col.originDay];
 
-      const totalCol = CONFIG.invoiceCols.totalAmount + 1;
-      const originCol = CONFIG.invoiceCols.originDay + 1;
-      const oldTotal = Number(existingInvoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
-      const oldOrigin = String(existingInvoice.data[CONFIG.invoiceCols.originDay]);
+      const totalCol = col.totalAmount + 1;
+      const originCol = col.originDay + 1;
+      const oldTotal = Number(existingInvoice.data[col.totalAmount]) || 0;
+      const oldOrigin = String(existingInvoice.data[col.originDay]);
       
       // Check if updates are needed
       const amountChanged = Number(receivedAmt) !== oldTotal;
@@ -254,10 +350,10 @@ const InvoiceManager = {
       }
 
       // Cache invalidation only if numeric data changed
-      if (amountChanged) InvoiceCache.clear();
+      if (amountChanged) InvoiceCache.invalidate('updateAmount');
 
       AuditLogger.log('INVOICE_UPDATED', data,
-        `Updated invoice ${existing.data[CONFIG.invoiceCols.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${receivedAmt}`);
+        `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${receivedAmt}`);
 
       return { success: true, action: 'updated', row: rowNum };
 
@@ -278,15 +374,16 @@ const InvoiceManager = {
   updatePaidDate: function (invoiceNo, supplier, paymentDate) {
     try {
       const invoice = this.find(supplier, invoiceNo);
+      const col = CONFIG.invoiceCols;
       if (!invoice) return;
 
       const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const balanceDue = Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
-      const currentPaidDate = invoice.data[CONFIG.invoiceCols.paidDate];
+      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
+      const currentPaidDate = invoice.data[col.paidDate];
 
       // If balance is zero and paid date is empty, set it
       if (balanceDue === 0 && !currentPaidDate) {
-        invoiceSh.getRange(invoice.row, CONFIG.invoiceCols.paidDate + 1)
+        invoiceSh.getRange(invoice.row, col.paidDate + 1)
           .setValue(paymentDate);
 
         AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
@@ -310,20 +407,22 @@ const InvoiceManager = {
    */
   setFormulas: function (sheet, row) {
     try {
+      const col = CONFIG.invoiceCols;
+
       // TARGETED UPDATE: Set formula for 'Total Paid' (Column F)
-      sheet.getRange(row, CONFIG.invoiceCols.totalPaid + 1)
-        .setFormula(`=IF(C${row}="","", IFERROR(SUMIF(PaymentLog!C:C, C${row}, PaymentLog!E:E), 0))`);
+      sheet.getRange(row, col.totalPaid + 1)
+        .setFormula(`=IF(C${row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${row}, PaymentLog!B:B,B${row}),0))`);
 
       // TARGETED UPDATE: Set formula for 'Balance Due' (Column G)
-      sheet.getRange(row, CONFIG.invoiceCols.balanceDue + 1)
+      sheet.getRange(row, col.balanceDue + 1)
         .setFormula(`=IF(E${row}="","", E${row} - F${row})`);
 
       // TARGETED UPDATE: Set formula for 'Status' (Column H)
-      sheet.getRange(row, CONFIG.invoiceCols.status + 1)
+      sheet.getRange(row, col.status + 1)
         .setFormula(`=IFS(G${row}=0,"Paid", G${row}=E${row},"Unpaid", G${row}<E${row},"Partial")`);
 
       // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column K)
-      sheet.getRange(row, CONFIG.invoiceCols.daysOutstanding + 1)
+      sheet.getRange(row, col.daysOutstanding + 1)
         .setFormula(`=IF(G${row}=0, 0, TODAY() - D${row})`);
 
     } catch (error) {
@@ -353,7 +452,10 @@ const InvoiceManager = {
       // Get cached data with index
       const { data, indexMap } = InvoiceCache.getInvoiceData();
 
-      const key = `${StringUtils.normalize(supplier)}|${StringUtils.normalize(invoiceNo)}`;
+      const normalizedSupplier = StringUtils.normalize(supplier);
+      const normalizedInvoice = StringUtils.normalize(invoiceNo);
+      const key = `${normalizedSupplier}|${normalizedInvoice}`;
+      
       const rowIndex = indexMap.get(key);
 
       if (!rowIndex) {
@@ -375,44 +477,42 @@ const InvoiceManager = {
   },
 
   /**
-   * Get unpaid invoices for supplier (cached + in-memory filtering)
+   * Return all unpaid invoices for a given supplier.
+   * Uses InvoiceCache for instant lookup.
    * 
    * @param {string} supplier - Supplier name
    * @returns {Array} Array of unpaid invoice objects
    */
   getUnpaidForSupplier: function (supplier) {
-    if (StringUtils.isEmpty(supplier)) {
-      return [];
-    }
+    if (StringUtils.isEmpty(supplier)) return [];
 
     try {
       // Use cached data
-      const { data } = InvoiceCache.getInvoiceData();
-      if (data.length <= 1) return [];
+      const { data, supplierIndex } = InvoiceCache.getInvoiceData();
 
-      const normSupplier = StringUtils.normalize(supplier);
+      const normalizedSupplier = StringUtils.normalize(supplier);
+      const rows = supplierIndex.get(normalizedSupplier ) || [];
+      
+      if (!rows  || rows.length === 0) {
+        AuditLogger.logWarning('InvoiceManager.getUnpaidForSupplier', `No cached rows for ${supplier}`);
+        return [];
+      }
+
       const col = CONFIG.invoiceCols;
-
-      // Single-pass filter and map
       const unpaidInvoices = [];
 
-      // Start from row 1 to skip headers (if row 0 is header)
-      for (let i = 1; i < data.length; i++) {
+      for (let i of rows) {
         const row = data[i];
-        if (!row) continue;
+        const status = StringUtils.normalize(row[col.status]);
+        const invoiceNo = row[col.invoiceNo];
+        const totalAmount = row[col.totalAmount];
+        const totalPaid = row[col.totalPaid] || 0;
 
-        const rowSupplier = StringUtils.normalize(row[col.supplier]);
-        const balanceDue = Number(row[col.balanceDue]) || 0;
-
-        if (rowSupplier === normSupplier && balanceDue > 0) {
+        if (status === 'Unpaid' || status === 'Partial' || (totalAmount > totalPaid)) {
           unpaidInvoices.push({
-            invoiceNo: row[col.invoiceNo],
-            date: row[col.date],
-            totalAmount: row[col.totalAmount],
-            totalPaid: row[col.totalPaid],
-            balanceDue: balanceDue,
-            status: row[col.status],
-            daysOutstanding: row[col.daysOutstanding],
+            invoiceNo,
+            rowIndex: i,
+            amount: totalAmount - totalPaid
           });
         }
       }
@@ -443,27 +543,28 @@ const InvoiceManager = {
     try {
       // Use cached data
       const { data } = InvoiceCache.getInvoiceData();
+      const col = CONFIG.invoiceCols;
       const normalizedSupplier = StringUtils.normalize(supplier);
 
       // Single-pass filter and map
       const invoices = [];
       for (let i = 1; i < data.length; i++) {
         const row = data[i];
-        if (StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier)) {
-          const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
+        if (StringUtils.equals(row[col.supplier], normalizedSupplier)) {
+          const balanceDue = Number(row[col.balanceDue]) || 0;
 
           if (includePaid || balanceDue > 0) {
             invoices.push({
-              invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-              date: row[CONFIG.invoiceCols.date],
-              invoiceDate: row[CONFIG.invoiceCols.invoiceDate],
-              totalAmount: row[CONFIG.invoiceCols.totalAmount],
-              totalPaid: row[CONFIG.invoiceCols.totalPaid],
+              invoiceNo: row[col.invoiceNo],
+              date: row[col.date],
+              invoiceDate: row[col.invoiceDate],
+              totalAmount: row[col.totalAmount],
+              totalPaid: row[col.totalPaid],
               balanceDue: balanceDue,
-              status: row[CONFIG.invoiceCols.status],
-              originDay: row[CONFIG.invoiceCols.originDay],
-              daysOutstanding: row[CONFIG.invoiceCols.daysOutstanding],
-              sysId: row[CONFIG.invoiceCols.sysId]
+              status: row[col.status],
+              originDay: row[col.originDay],
+              daysOutstanding: row[col.daysOutstanding],
+              sysId: row[col.sysId]
             });
           }
         }
@@ -488,6 +589,7 @@ const InvoiceManager = {
     try {
       // Use cached data
       const { data } = InvoiceCache.getInvoiceData();
+      const col = CONFIG.invoiceCols;
 
       if (data.length < 2) {
         return {
@@ -505,8 +607,8 @@ const InvoiceManager = {
 
       for (let i = 1; i < data.length; i++) {
         const row = data[i];
-        const status = row[CONFIG.invoiceCols.status];
-        const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]) || 0;
+        const status = row[col.status];
+        const balanceDue = Number(row[col.balanceDue]) || 0;
 
         if (StringUtils.equals(status, 'Unpaid')) unpaid++;
         else if (StringUtils.equals(status, 'Partial')) partial++;
@@ -532,7 +634,7 @@ const InvoiceManager = {
 
   /**
    * Build dropdown list of unpaid invoices for a supplier
-   * Used for Due payment dropdown
+   * Used for "Due" payment type dropdown in daily sheet.
    * 
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Daily sheet
    * @param {number} row - Target row
@@ -543,10 +645,12 @@ const InvoiceManager = {
   buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
-    // Clear dropdown if not Due payment or no supplier
+    // Clear dropdown if not "Due" or missing supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
-        targetCell.clearDataValidations();
+        targetCell.clearDataValidations()
+          .clearNote()
+          .setBackground(null);
       } catch (e) {
         AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
           `Failed to clear dropdown at row ${row}: ${e.toString()}`);
@@ -689,7 +793,7 @@ const InvoiceManager = {
             data.invoiceNo,
             invoiceDate,
             data.receivedAmt,
-            `=IF(C${currentRowNum}="","", IFERROR(SUMIF(PaymentLog!C:C, C${currentRowNum}, PaymentLog!E:E), 0))`,
+            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,
             `=IF(E${currentRowNum}="","", E${currentRowNum} - F${currentRowNum})`,
             `=IFS(G${currentRowNum}=0,"Paid", G${currentRowNum}=E${currentRowNum},"Unpaid", G${currentRowNum}<E${currentRowNum},"Partial")`,
             '', // Paid Date
@@ -776,7 +880,7 @@ function getInvoiceStatistics() {
   return InvoiceManager.getStatistics();
 }
 
-function buildInvoiceDropdown(sheet, row, supplier, paymentType) {
+function buildUnpaidDropdown(sheet, row, supplier, paymentType) {
   return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
 }
 
