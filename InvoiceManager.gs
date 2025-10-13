@@ -40,7 +40,6 @@ const InvoiceCache = {
   get: function () {
     const now = Date.now();
     if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
-      AuditLogger.logWarning('InvoiceCache', 'Using cached invoice data');
       return {
         data: this.data,
         indexMap: this.indexMap,

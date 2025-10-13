@@ -177,7 +177,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     const validation = validatePostData(data);
     if (!validation.valid) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
-      auditAction('VALIDATION_FAILED', data, validation.error);
+      auditAction("VALIDATION_FAILED", data, validation.error);
       return;
     }
 
@@ -187,7 +187,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     }
 
     // BEFORE-POST AUDIT
-    auditAction("BEFORE-POST", data, "Starting posting process");
+    auditAction("══NEW-POST══", data, "Starting posting process");
 
     // ═══ 4. PRE-CALCULATE BALANCE (Before invoice/payment) ═══
     const currentOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
@@ -237,7 +237,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     InvoiceCache.invalidateSupplierCache(supplier);
 
     // ═══ 11. FINAL AUDIT ═══
-    auditAction('AFTER-POST', data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
+    auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;
