@@ -64,7 +64,8 @@ const CONFIG = {
     fromSheet: 7,       // H
     enteredBy: 8,       // I
     timestamp: 9,       // J
-    sysId: 10           // K
+    sysId: 10,          // K
+    invoiceId: 11       // L
   },
   
   // Ledger sheet column mappings (0-based indices)
@@ -110,7 +111,7 @@ const CONFIG = {
   totalColumns: {
     daily: 14,          // A through N
     invoice: 12,        // A through L
-    payment: 11,        // A through K
+    payment: 12,        // A through L
     ledger: 4,          // A through D
     audit: 7            // A through G
   },

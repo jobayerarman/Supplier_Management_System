@@ -86,24 +86,26 @@ const PaymentManager = {
 
       const paymentId = IDGenerator.generatePaymentId(data.sysId);
       const targetInvoice = data.paymentType === "Due" ? data.prevInvoice : data.invoiceNo;
+      const paymentMethod = this.getPaymentMethod(data.paymentType);
 
       // Build payment row
       const paymentRow = [
-        data.timestamp,
+        data.paymentDate || data.invoiceDate,
         data.supplier,
         targetInvoice,
-        data.paymentDate || data.invoiceDate,
-        data.paymentAmt,
         data.paymentType,
+        data.paymentAmt,
+        paymentMethod,
         data.notes || '',
         data.sheetName,
         data.enteredBy,
+        data.timestamp,
         paymentId,
         invoiceId || ''
       ];
 
       // Single write operation
-      paymentSh.getRange(newRow, 1, 1, paymentRow.length).setValues([paymentRow]);
+      paymentSh.getRange(newRow, 1, 1, CONFIG.totalColumns.payment).setValues([paymentRow]);
 
       // Check if invoice is fully paid
       const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(targetInvoice, data.supplier);
