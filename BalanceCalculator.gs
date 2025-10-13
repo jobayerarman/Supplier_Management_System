@@ -13,88 +13,140 @@
 
 const BalanceCalculator = {
   /**
-   * Calculate balance and update supplier ledger
-   * ALWAYS returns supplier's total outstanding after transaction
+   * Calculate transaction impact on balance
+   * INTERNAL: Core calculation logic used by both calculate() and calculatePreview()
+   * 
+   * @private
+   * @param {string} paymentType - Transaction payment type
+   * @param {number} receivedAmt - Amount received
+   * @param {number} paymentAmt - Amount paid
+   * @param {string} prevInvoice - Previous invoice reference (for Due payments)
+   * @returns {Object} {change: number, description: string, error: string|null}
    */
-  calculate: function(data) {
-    const supplierOutstanding = this.getSupplierOutstanding(data.supplier); 
-    let newBalance = supplierOutstanding;
-
-    switch (data.paymentType) {
+  _calculateTransactionImpact: function(paymentType, receivedAmt, paymentAmt, prevInvoice) {
+    switch (paymentType) {
       case "Unpaid":
-        newBalance = supplierOutstanding + data.receivedAmt;
-        break;
-
-      case "Partial":
-        newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
-        break;
+        return {
+          change: receivedAmt,
+          description: `Invoice received: +${receivedAmt}`,
+          error: null
+        };
 
       case "Regular":
-        newBalance = supplierOutstanding + data.receivedAmt - data.paymentAmt;
-        break;
+        return {
+          change: receivedAmt - paymentAmt,
+          description: `Invoice received (+${receivedAmt}), paid immediately (-${paymentAmt})`,
+          error: null
+        };
+
+      case "Partial":
+        return {
+          change: receivedAmt - paymentAmt,
+          description: `Invoice received (+${receivedAmt}), partial payment (-${paymentAmt})`,
+          error: null
+        };
 
       case "Due":
-        if (!data.prevInvoice) {
-          logSystemError('BalanceCalculator.calculate', 'Due payment missing prevInvoice reference');
-          return supplierOutstanding;
+        if (!prevInvoice) {
+          return {
+            change: 0,
+            description: 'Due payment missing invoice reference',
+            error: 'Due payment requires prevInvoice reference'
+          };
         }
-        newBalance = supplierOutstanding - data.paymentAmt;
-        break;
+        return {
+          change: -paymentAmt,
+          description: `Payment on existing invoice: -${paymentAmt}`,
+          error: null
+        };
 
       default:
-        logSystemError('BalanceCalculator.calculate', `Unknown payment type: ${data.paymentType}`);
-        newBalance = supplierOutstanding;
+        return {
+          change: 0,
+          description: `Unknown payment type: ${paymentType}`,
+          error: `Invalid payment type: ${paymentType}`
+        };
     }
+  },
 
+  /**
+   * Calculate balance after transaction
+   * ALWAYS returns supplier's total outstanding after transaction
+   * 
+   * @param {Object} data - Transaction data
+   * @returns {number} New balance after transaction
+   */
+  calculate: function(data) {
+    const supplierOutstanding = this.getSupplierOutstanding(data.supplier);
+    
+    // Calculate impact using centralized logic
+    const impact = this._calculateTransactionImpact(
+      data.paymentType,
+      data.receivedAmt,
+      data.paymentAmt,
+      data.prevInvoice
+    );
+    
+    // Log errors if any
+    if (impact.error) {
+      logSystemError('BalanceCalculator.calculate', 
+        `${impact.error} | Supplier: ${data.supplier}, Type: ${data.paymentType}`);
+    }
+    
+    const newBalance = supplierOutstanding + impact.change;
+    
     return newBalance;
   },
 
   /**
    * Calculate balance preview (before post)
+   * Shows what the balance will be after transaction is posted
+   * 
    * @param {string} supplier - Supplier name
    * @param {string} paymentType - Payment type
    * @param {number} receivedAmt - Received amount
    * @param {number} paymentAmt - Payment amount
    * @param {string} prevInvoice - Previous invoice reference
-   * @returns {Object} Object with balance and note
+   * @returns {Object} {balance: number, note: string}
    */
   calculatePreview: function(supplier, paymentType, receivedAmt, paymentAmt, prevInvoice) {
     if (StringUtils.isEmpty(supplier) || !paymentType) {
-      return { balance: 0, note: "Balance requires supplier & payment type" };
+      return { 
+        balance: 0, 
+        note: "⚠️ Supplier and payment type required" 
+      };
     }
 
-    let balance = 0;
-    let note = "";
-
-    switch (paymentType) {
-      case "Unpaid":
-        balance = this.getSupplierOutstanding(supplier) + receivedAmt;
-        note = "Preview: Supplier outstanding after receiving";
-        break;
-      
-      case "Partial":
-        balance = this.getSupplierOutstanding(supplier) + receivedAmt - paymentAmt;
-        note = "Preview: Supplier outstanding after partial payment";
-        break;
-
-      case "Regular":
-        balance = this.getSupplierOutstanding(supplier) + receivedAmt - paymentAmt;
-        note = "Preview: Supplier outstanding (net zero expected)";
-        break;
-
-      case "Due":
-        if (StringUtils.isEmpty(prevInvoice)) {
-          return { balance: 0, note: "Select previous invoice" };
-        }
-        balance = this.getSupplierOutstanding(supplier) - paymentAmt;
-        note = `Preview: Supplier outstanding after paying ${paymentAmt}`;
-        break;
-
-      default:
-        return { balance: 0, note: "Invalid payment type" };
+    const currentOutstanding = this.getSupplierOutstanding(supplier);
+    
+    // Calculate impact using centralized logic
+    const impact = this._calculateTransactionImpact(
+      paymentType,
+      receivedAmt,
+      paymentAmt,
+      prevInvoice
+    );
+    
+    // Handle errors
+    if (impact.error) {
+      return {
+        balance: currentOutstanding,
+        note: `⚠️ ${impact.error}`
+      };
     }
-
-    return { balance: balance, note: note };
+    
+    const projectedBalance = currentOutstanding + impact.change;
+    
+    // Generate user-friendly note
+    let note = `Preview: ${impact.description}`;
+    if (paymentType === 'Regular' && Math.abs(impact.change) < 0.01) {
+      note += ' (net zero expected)';
+    }
+    
+    return { 
+      balance: projectedBalance, 
+      note: note 
+    };
   },
 
   /**
