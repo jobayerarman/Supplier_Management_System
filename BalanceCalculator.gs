@@ -7,7 +7,8 @@
  * OPTIMIZATIONS:
  * - getSupplierOutstanding() uses InvoiceCache.supplierIndex for O(m) performance
  * - Consolidated calculate() and calculatePreview() logic via _calculateTransactionImpact()
- * - Single source of truth for balance calculation rules
+ * - Moved updateBalanceCell() from Code.gs for better encapsulation
+ * - Single source of truth for all balance operations
  * - Added error logging for skipped rows
  */
 
@@ -150,6 +151,79 @@ const BalanceCalculator = {
   },
 
   /**
+   * Update balance cell in daily sheet
+   * Shows preview before post, actual balance after post
+   * MOVED FROM Code.gs for better encapsulation
+   * 
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+   * @param {number} row - Row number
+   * @param {boolean} afterPost - Whether this is after posting
+   * @param {Array} rowData - Pre-read row values (REQUIRED - no fallback reads)
+   */
+  updateBalanceCell: function(sheet, row, afterPost, rowData) {
+    // Validate required parameter
+    if (!rowData) {
+      logSystemError('BalanceCalculator.updateBalanceCell',
+        'rowData parameter is required (no fallback reads allowed)');
+      return;
+    }
+
+    const supplier = rowData[CONFIG.cols.supplier];
+    const paymentType = rowData[CONFIG.cols.paymentType];
+    const balanceCell = sheet.getRange(row, CONFIG.cols.balance + 1);
+
+    // Validate minimum required data
+    if (StringUtils.isEmpty(supplier) || !paymentType) {
+      balanceCell
+        .clearContent()
+        .setNote("⚠️ Supplier and payment type required")
+        .setBackground(null);
+      return;
+    }
+
+    let balance = 0;
+    let note = "";
+    let bgColor = null;
+
+    if (afterPost) {
+      // AFTER POST: Show actual supplier total outstanding
+      balance = this.getSupplierOutstanding(supplier);
+      note = `Posted: Supplier total outstanding = ${balance}\nUpdated: ${DateUtils.formatDateTime(new Date())}`;
+      bgColor = CONFIG.colors.success;
+
+    } else {
+      // BEFORE POST: Show preview of what balance will be
+      const prevInvoice = rowData[CONFIG.cols.prevInvoice];
+      const receivedAmt = parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0;
+      const paymentAmt = parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0;
+
+      const preview = this.calculatePreview(
+        supplier,
+        paymentType,
+        receivedAmt,
+        paymentAmt,
+        prevInvoice
+      );
+
+      balance = preview.balance;
+      note = `${preview.note}\nCalculated: ${DateUtils.formatDateTime(new Date())}`;
+
+      // Color coding for preview
+      if (preview.note.includes('⚠️')) {
+        bgColor = CONFIG.colors.warning;
+      } else {
+        bgColor = CONFIG.colors.info;
+      }
+    }
+
+    // Single write operation to balance cell
+    balanceCell
+      .setValue(balance)
+      .setNote(note)
+      .setBackground(bgColor);
+  },
+
+  /**
    * Get total outstanding balance for a supplier
    * OPTIMIZED: Uses InvoiceCache.supplierIndex for O(m) performance where m = supplier's invoices
    * 
@@ -241,7 +315,7 @@ const BalanceCalculator = {
     }
 
     try {
-      const invoice = findInvoiceRecord(supplier, invoiceNo);
+      const invoice = InvoiceManager.find(supplier, invoiceNo);
       if (!invoice) {
         return 0;
       }

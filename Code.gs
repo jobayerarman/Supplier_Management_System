@@ -61,7 +61,7 @@ function onEdit(e) {
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
         buildUnpaidDropdown(sheet, row, supplier, paymentType);
-        updateCurrentBalance(sheet, row, false, rowValues);
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
@@ -76,7 +76,7 @@ function onEdit(e) {
         if (paymentType === 'Regular') {
           sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
         }
-        updateCurrentBalance(sheet, row, false, rowValues);
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
@@ -88,7 +88,7 @@ function onEdit(e) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
         }
         
-        updateCurrentBalance(sheet, row, false, rowValues);
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
@@ -96,12 +96,12 @@ function onEdit(e) {
         if ((paymentType === 'Due') && supplier && editedValue) {
           autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
         }
-        updateCurrentBalance(sheet, row, false, rowValues);
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
       // ═══ 7. HANDLE PAYMENT AMOUNT EDIT ═══
       case configCols.paymentAmt + 1:
-        updateCurrentBalance(sheet, row, false, rowValues);
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
       
       default:
@@ -207,11 +207,6 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
         setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
         return;
       }
-      // Update paid date if invoice fully settled
-      const targetInvoice = paymentType === "Due" ? prevInvoice : invoiceNo;
-      if (targetInvoice && paymentResult.fullyPaid) {
-        InvoiceManager.updatePaidDateOptimized(targetInvoice, supplier, invoiceDate);
-      }
     }
 
     // ═══ 7. CALCULATE FINAL BALANCE (Using cached supplier outstanding) ═══
@@ -228,10 +223,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
       colors.success
     );
 
-    // ═══ 9. UPDATE BALANCE CELL (Uses finalBalance, no recalculation) ═══
-    sheet.getRange(rowNum, cols.balance + 1)
-      .setValue(finalBalance)
-      .setNote(`Posted: Supplier outstanding = ${finalBalance}`);
+    // ═══ 9. UPDATE BALANCE CELL (Uses BalanceCalculator) ═══
+    BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
     // ═══ 10. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
     InvoiceCache.invalidateSupplierCache(supplier);
@@ -244,56 +237,6 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
     logSystemError('processPostedRow', error.toString());
   }
-}
-
-/**
- * Update balance preview in daily sheet
- * Shows context-appropriate balance based on payment type and post state
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
- * @param {number} row - Row number
- * @param {boolean} afterPost - Whether this is after post
- * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
- */
-function updateCurrentBalance(sheet, row, afterPost, rowData = null) {
-  // Fallback: read if not provided (for backward compatibility or post-post refresh)
-  if (!rowData) {
-    rowData = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
-  }
-
-  const supplier = rowData[CONFIG.cols.supplier];
-  const prevInvoice = rowData[CONFIG.cols.prevInvoice];
-  const receivedAmt = parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0;
-  const paymentAmt = parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0;
-  const paymentType = rowData[CONFIG.cols.paymentType];
-
-  const balanceCell = sheet.getRange(row, CONFIG.cols.balance + 1); // H = Current Balance
-
-  if (StringUtils.isEmpty(supplier) || !paymentType) {
-    balanceCell.clearContent().setNote("Balance requires supplier & payment type");
-    return;
-  }
-
-  let balance = 0;
-  let note = "";
-
-  if (afterPost) {
-    // AFTER-POST: Always show supplier total outstanding
-    balance = BalanceCalculator.getSupplierOutstanding(supplier);
-    note = "Supplier total outstanding";
-  } else {
-    // BEFORE-POST: Show context-specific preview using BalanceCalculator
-    const preview = BalanceCalculator.calculatePreview(
-      supplier,
-      paymentType,
-      receivedAmt,
-      paymentAmt,
-      prevInvoice
-    );
-    balance = preview.balance;
-    note = preview.note;
-  }
-
-  balanceCell.setValue(balance).setNote(note);
 }
 
 // ═══ HELPER FUNCTIONS ═══
