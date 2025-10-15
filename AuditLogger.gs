@@ -83,6 +83,28 @@ const AuditLogger = {
   },
 
   /**
+   * Log info
+   * @param {string} context - Info context
+   * @param {string} message - Info message
+   */
+  logInfo: function (context, message) {
+    try {
+      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      auditSh.appendRow([
+        DateUtils.now(),
+        'SYSTEM',
+        'N/A',
+        'N/A',
+        'INFO',
+        context,
+        message
+      ]);
+    } catch (error) {
+      Logger.log(`INFO: ${context} - ${message}`);
+    }
+  },
+
+  /**
    * Get audit trail for specific record
    * @param {string} sysId - System ID to search for
    * @returns {Array} Array of audit records

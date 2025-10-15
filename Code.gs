@@ -32,7 +32,7 @@ function onEdit(e) {
   // Acquire document lock for concurrent safety
   const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
   if (!lock) return;
-  
+
   try {
     const configCols = CONFIG.cols;
 
@@ -70,7 +70,7 @@ function onEdit(e) {
           if (invoiceNo) sheet.getRange(row, configCols.prevInvoice + 1).setValue(invoiceNo);
         }
         break;
-    
+
       // ═══ 4. HANDLE RECEIVED AMOUNT EDIT ═══
       case configCols.receivedAmt + 1:
         if (paymentType === 'Regular') {
@@ -83,11 +83,11 @@ function onEdit(e) {
       case configCols.paymentType + 1:
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
         buildUnpaidDropdown(sheet, row, supplier, paymentType);
-        
+
         if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
         }
-        
+
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
@@ -103,7 +103,7 @@ function onEdit(e) {
       case configCols.paymentAmt + 1:
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
-      
+
       default:
         return; // Nothing to process
     }
@@ -147,9 +147,9 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 
     const supplier = rowData[cols.supplier];
     const invoiceNo = rowData[cols.invoiceNo];
+    const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
     const paymentType = rowData[cols.paymentType];
     const prevInvoice = rowData[cols.prevInvoice];
-    const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
     const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
     const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
 
@@ -214,11 +214,11 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 
     // ═══ 8. BATCH SUCCESS UPDATE (Single API call) ═══
     setBatchPostStatus(
-      sheet, 
-      rowNum, 
-      "POSTED", 
-      enteredBy.split("@")[0], 
-      timeStr, 
+      sheet,
+      rowNum,
+      "POSTED",
+      enteredBy.split("@")[0],
+      timeStr,
       true,
       colors.success
     );
@@ -252,13 +252,13 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
   const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
   const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
-  
+
   try {
     paymentAmtCell
       .clearContent()
       .clearNote()
       .setBackground(null);
-    
+
     prevInvoiceCell
       .clearDataValidations()
       .clearNote()
@@ -266,9 +266,9 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
 
     if (['Unpaid', 'Due'].includes(newPaymentType))
       prevInvoiceCell.clearContent();
-    
+
   } catch (error) {
-    logSystemError('clearPaymentFieldsForTypeChange', 
+    logSystemError('clearPaymentFieldsForTypeChange',
       `Failed to clear fields at row ${row}: ${error.toString()}`);
   }
 }
@@ -287,7 +287,7 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
     // Get the balance due for the selected invoice
     const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
     const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
-    
+
     if (invoiceBalance > 0) {
       // Set payment amount to invoice balance
       targetCell
@@ -301,11 +301,11 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
         .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance`)
         .setBackground(CONFIG.colors.warning);
     }
-    
+
   } catch (error) {
-    logSystemError('autoPopulateDuePaymentAmount', 
+    logSystemError('autoPopulateDuePaymentAmount',
       `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
-    
+
     targetCell
       .clearContent()
       .setNote('Error loading invoice balance')
@@ -327,27 +327,27 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
     // Extract values from pre-read data
     const invoiceNo = rowData[CONFIG.cols.invoiceNo];
     const receivedAmt = rowData[CONFIG.cols.receivedAmt];
-    
+
     // Set payment amount (column G) = received amount
     // For Regular: This will be full amount (validation enforces equality)
     // For Partial: This is just a starting point (user should adjust down)
     if (receivedAmt && receivedAmt !== '') {
       sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
     }
-    
+
     // Set previous invoice (column F) = invoice number
     // Note: For Regular/Partial, this field is informational (not used in logic)
     // But it helps user see which invoice is being paid
     if (invoiceNo && invoiceNo !== '') {
       const note = StringUtils.equals(paymentType, 'Regular')
-        ? 'Auto-populated for Regular payment' 
+        ? 'Auto-populated for Regular payment'
         : 'Auto-populated for Partial payment - adjust payment amount as needed';
-      
+
       sheet.getRange(row, CONFIG.cols.prevInvoice + 1)
         .setValue(invoiceNo)
         .setNote(note);
     }
-    
+
     // Add visual cue for Partial payments
     if (StringUtils.equals(paymentType, 'Partial')) {
       // Highlight payment amount cell to remind user to adjust
@@ -360,9 +360,9 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
         .setBackground(null)
         .setNote('Auto-populated (equals received amount)');
     }
-    
+
   } catch (error) {
-    logSystemError('autoPopulatePaymentFields', 
+    logSystemError('autoPopulatePaymentFields',
       `Failed to auto-populate at row ${row}: ${error.toString()}`);
   }
 }
@@ -380,9 +380,9 @@ function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
   if (!rowData) {
     rowData = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
   }
-  
+
   const supplier = rowData[CONFIG.cols.supplier];
   const paymentType = rowData[CONFIG.cols.paymentType];
-  
+
   return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
 }
