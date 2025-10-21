@@ -60,7 +60,7 @@ function onEdit(e) {
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
-        buildUnpaidDropdown(sheet, row, supplier, paymentType);
+        InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
@@ -82,7 +82,7 @@ function onEdit(e) {
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
-        buildUnpaidDropdown(sheet, row, supplier, paymentType);
+        InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
 
         if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
@@ -292,8 +292,7 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
       // Set payment amount to invoice balance
       targetCell
         .setValue(invoiceBalance)
-        .setNote(`Auto-populated: Outstanding balance of ${prevInvoice}`)
-        .setBackground(CONFIG.colors.info);
+        .setNote(`Outstanding balance of ${prevInvoice}`)
     } else {
       // Invoice has no balance or not found
       targetCell
@@ -339,13 +338,8 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
     // Note: For Regular/Partial, this field is informational (not used in logic)
     // But it helps user see which invoice is being paid
     if (invoiceNo && invoiceNo !== '') {
-      const note = StringUtils.equals(paymentType, 'Regular')
-        ? 'Auto-populated for Regular payment'
-        : 'Auto-populated for Partial payment - adjust payment amount as needed';
-
       sheet.getRange(row, CONFIG.cols.prevInvoice + 1)
-        .setValue(invoiceNo)
-        .setNote(note);
+        .setValue(invoiceNo);
     }
 
     // Add visual cue for Partial payments
@@ -358,7 +352,6 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
       // Clear any previous highlighting for Regular
       sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
         .setBackground(null)
-        .setNote('Auto-populated (equals received amount)');
     }
 
   } catch (error) {

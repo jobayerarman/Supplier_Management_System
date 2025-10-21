@@ -138,15 +138,11 @@ const BalanceCalculator = {
     
     const projectedBalance = currentOutstanding + impact.change;
     
-    // Generate user-friendly note
     let note = `Preview: ${impact.description}`;
-    if (paymentType === 'Regular' && Math.abs(impact.change) < 0.01) {
-      note += ' (net zero expected)';
-    }
-    
+        
     return { 
-      balance: projectedBalance, 
-      note: note 
+      balance: projectedBalance,
+      note: note
     };
   },
 
@@ -188,7 +184,7 @@ const BalanceCalculator = {
     if (afterPost) {
       // AFTER POST: Show actual supplier total outstanding
       balance = this.getSupplierOutstanding(supplier);
-      note = `Posted: Supplier total outstanding = ${balance}\nUpdated: ${DateUtils.formatDateTime(new Date())}`;
+      note = `Posted: Supplier outstanding = ${balance}/-\nUpdated: ${DateUtils.formatDateTime(new Date())}`;
       bgColor = CONFIG.colors.success;
 
     } else {
