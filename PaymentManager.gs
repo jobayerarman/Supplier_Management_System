@@ -209,33 +209,34 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 2: CALCULATE BALANCE FROM RAW DATA ═══
-      const balanceInfo = this._calculateBalance(invoiceNo, supplier, invoice, currentPaymentAmount);
+      // ═══ STEP 2: CALCULATE BALANCE FROM CACHED DATA ═══
+      // Note: Cache should have been updated in Step 2 of processOptimized
+      const col = CONFIG.invoiceCols;
+      const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
+      const totalPaid = Number(invoice.data[col.totalPaid]) || 0;
+      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
 
-      if (!balanceInfo) {
-        result.reason = 'balance_calculation_failed';
-        result.message = `Failed to calculate balance for invoice ${invoiceNo}`;
-        
-        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
-        return result;
-      }
+      result.balanceInfo = {
+        totalAmount: totalAmount,
+        totalPaid: totalPaid,
+        balanceDue: balanceDue,
+        fullyPaid: Math.abs(balanceDue) < 0.01
+      };
 
-      result.balanceInfo = balanceInfo;
-      result.fullyPaid = balanceInfo.fullyPaid;
+      result.fullyPaid = result.balanceInfo.fullyPaid;
 
       // ═══ STEP 3: CHECK IF FULLY PAID ═══
-      if (!balanceInfo.fullyPaid) {
+      if (!result.balanceInfo.fullyPaid) {
         result.reason = 'partial_payment';
-        result.message = `Invoice ${invoiceNo} partially paid | Balance: ${balanceInfo.balanceDue}`;
-        
+        result.message = `Invoice ${invoiceNo} partially paid | Balance: ${balanceDue}`;
+
         AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
-          `${result.message} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
-        
+          `${result.message} | Total Paid: ${totalPaid}/${totalAmount} | Payment: ${context.paymentId}`);
+
         return result;
       }
 
       // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
-      const col = CONFIG.invoiceCols;
       const currentPaidDate = invoice.data[col.paidDate];
 
       if (currentPaidDate) {
