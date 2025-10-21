@@ -246,14 +246,14 @@ const InvoiceCache = {
       // Update cache with fresh evaluated data
       this.data[arrayIndex] = updatedData;
 
-      const col = CONFIG.invoiceCols;
-      const totalPaid = updatedData[col.totalPaid];
-      const balanceDue = updatedData[col.balanceDue];
-      const status = updatedData[col.status];
+      // const col = CONFIG.invoiceCols;
+      // const totalPaid = updatedData[col.totalPaid];
+      // const balanceDue = updatedData[col.balanceDue];
+      // const status = updatedData[col.status];
 
-      AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
-        `Updated invoice ${invoiceNo} for ${supplier} in cache | ` +
-        `Paid: ${totalPaid} | Balance: ${balanceDue} | Status: ${status}`);
+      // AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
+      //   `Updated invoice ${invoiceNo} for ${supplier} in cache | ` +
+      //   `Paid: ${totalPaid} | Balance: ${balanceDue} | Status: ${status}`);
 
       return true;
 
@@ -297,8 +297,7 @@ const InvoiceCache = {
 
     if (this.supplierIndex && this.supplierIndex.has(normalized)) {
       this.supplierIndex.delete(normalized);
-
-      AuditLogger.logWarning('InvoiceCache', `Supplier cache invalidated: ${supplier}`);
+      // AuditLogger.logWarning('InvoiceCache', `Supplier cache invalidated: ${supplier}`);
     }
   },
 
@@ -501,8 +500,7 @@ const InvoiceManager = {
       // ═══ ADD TO CACHE (Write-Through) - KEY FIX ═══
       InvoiceCache.addInvoiceToCache(newRow, newRowData);
 
-      AuditLogger.log('INVOICE_CREATED', data,
-        `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
+      // AuditLogger.log('INVOICE_CREATED', data, `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
 
       return { success: true, action: 'created', invoiceId, row: newRow };
 
@@ -562,9 +560,7 @@ const InvoiceManager = {
       // Cache invalidation only if numeric data changed
       if (amountChanged) InvoiceCache.invalidate('updateAmount');
 
-      AuditLogger.log('INVOICE_UPDATED', data,
-        `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${data.receivedAmt });
-      }}`);
+      // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${data.receivedAmt }`);
 
       return { success: true, action: 'updated', row: rowNum };
 
@@ -615,8 +611,7 @@ const InvoiceManager = {
         InvoiceCache.invalidateSupplierCache(data.supplier);
       }
 
-      AuditLogger.log('INVOICE_UPDATED', data, 
-        `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
+      // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
       
       return { success: true, action: 'updated', row: rowNum };
 
@@ -775,7 +770,7 @@ const InvoiceManager = {
       const normalizedSupplier = StringUtils.normalize(supplier);
       const rows = supplierIndex.get(normalizedSupplier) || [];
       
-      if (!rows  || rows.length === 0) {
+      if (!rows || rows.length === 0) {
         return [];
       }
 
