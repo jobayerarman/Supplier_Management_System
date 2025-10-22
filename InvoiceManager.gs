@@ -49,9 +49,9 @@ const InvoiceCache = {
       };
     }
     // Expired or not initialized
-    if (this.timestamp && (now - this.timestamp) >= this.TTL) {
-      AuditLogger.logWarning('InvoiceCache', 'Cache expired, reloading data');
-    }
+    // if (this.timestamp && (now - this.timestamp) >= this.TTL) {
+    //   AuditLogger.logWarning('InvoiceCache', 'Cache expired, reloading data');
+    // }
     return null;
   },
 
@@ -173,11 +173,11 @@ const InvoiceCache = {
       const balanceDue = evaluatedData[col.balanceDue];
       const status = evaluatedData[col.status];
 
-      AuditLogger.logWarning('InvoiceCache.addInvoiceToCache',
-        `Added invoice ${invoiceNo} for ${supplier} at row ${rowNumber} to cache | ` +
-        `Amount: ${totalAmount} (${typeof totalAmount}) | ` +
-        `Due: ${balanceDue} (${typeof balanceDue}) | ` +
-        `Status: ${status}`);
+      // AuditLogger.logWarning('InvoiceCache.addInvoiceToCache',
+      //   `Added invoice ${invoiceNo} for ${supplier} at row ${rowNumber} to cache | ` +
+      //   `Amount: ${totalAmount} (${typeof totalAmount}) | ` +
+      //   `Due: ${balanceDue} (${typeof balanceDue}) | ` +
+      //   `Status: ${status}`);
 
     } catch (error) {
       AuditLogger.logError('InvoiceCache.addInvoiceToCache',
@@ -274,7 +274,6 @@ const InvoiceCache = {
     const invalidatingOps = ['updateAmount', 'updateStatus'];
     if (invalidatingOps.includes(operation)) {
       this.clear();
-      AuditLogger.logWarning('InvoiceCache', `Cache invalidated due to operation: ${operation}`);
     }
   },
 
@@ -283,7 +282,6 @@ const InvoiceCache = {
    */
   invalidateGlobal: function () {
     this.clear();
-    AuditLogger.logInfo('InvoiceCache', 'Global cache invalidated');
   },
 
   /**
@@ -724,7 +722,6 @@ const InvoiceManager = {
    */
   find: function (supplier, invoiceNo) {
     if (StringUtils.isEmpty(supplier) || StringUtils.isEmpty(invoiceNo)) {
-      AuditLogger.logWarning('InvoiceManager.find', 'Both supplier and invoiceNo are required');
       return null;
     }
 

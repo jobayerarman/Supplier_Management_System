@@ -210,7 +210,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     }
 
     // ═══ 7. CALCULATE FINAL BALANCE (Using cached supplier outstanding) ═══
-    const finalBalance = BalanceCalculator.calculate(data);
+    // const finalBalance = BalanceCalculator.calculate(data);
 
     // ═══ 8. BATCH SUCCESS UPDATE (Single API call) ═══
     setBatchPostStatus(
@@ -230,7 +230,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     InvoiceCache.invalidateSupplierCache(supplier);
 
     // ═══ 11. FINAL AUDIT ═══
-    auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
+    // auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
+    auditAction("══AFTER-POST══", data, `Posted successfully`);
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;
@@ -346,8 +347,8 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
     if (StringUtils.equals(paymentType, 'Partial')) {
       // Highlight payment amount cell to remind user to adjust
       sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
-        .setBackground(CONFIG.colors.warning)
-        .setNote('⚠️ Adjust this to partial payment amount (must be less than received amount)');
+        .setBackground(CONFIG.colors.warning);
+        // .setNote('⚠️ Adjust this to partial payment amount (must be less than received amount)');
     } else {
       // Clear any previous highlighting for Regular
       sheet.getRange(row, CONFIG.cols.paymentAmt + 1)

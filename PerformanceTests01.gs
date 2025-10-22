@@ -349,6 +349,55 @@ function testLockPerformance() {
 }
 
 // ============================================================================
+// SECTION F: DATA PROCESSING
+// ============================================================================
+
+function testDataProcessing() {
+  console.log('\n=== DATA PROCESSING PERFORMANCE ===');
+  
+  const mockData = {
+    sheetName: 'Daily_2024_10_17',
+    rowNum: 10,
+    supplier: 'Supplier A',
+    invoiceNo: 'INV-001',
+    invoiceDate: new Date(),
+    receivedAmt: 1000,
+    paymentAmt: 1000,
+    paymentType: 'Regular',
+    prevInvoice: '',
+    notes: 'Test transaction',
+    enteredBy: 'user@example.com',
+    timestamp: new Date(),
+    sysId: 'UUID-12345'
+  };
+
+  const validationTest = new PerfTest('Validation: Basic checks');
+  validationTest.run(100, () => {
+    const isValid = mockData.supplier && 
+                   mockData.invoiceNo && 
+                   mockData.receivedAmt > 0;
+  });
+
+  const balanceCalcTest = new PerfTest('Balance: Calculate preview');
+  balanceCalcTest.run(20, () => {
+    const balance = mockData.paymentType === 'Regular' 
+      ? mockData.receivedAmt - mockData.paymentAmt
+      : mockData.receivedAmt;
+    const note = balance === 0 ? 'Paid in full' : `Outstanding: ${balance}`;
+  });
+
+  const stringComparisonTest = new PerfTest('String: Type comparisons (3 checks)');
+  stringComparisonTest.run(50, () => {
+    const type = mockData.paymentType;
+    const isRegular = type === 'Regular';
+    const isPartial = type === 'Partial';
+    const isDue = type === 'Due';
+  });
+
+  return [validationTest.report(), balanceCalcTest.report(), stringComparisonTest.report()];
+}
+
+// ============================================================================
 // SECTION G: SPREADSHEET FLUSH IMPACT
 // ============================================================================
 
@@ -377,11 +426,578 @@ function testFlushPerformance() {
 }
 
 // ============================================================================
-// MASTER TEST RUNNER
+// SECTION I: INVOICE CACHE CORRECTNESS TESTS
+// ============================================================================
+
+function testImmediateFindability() {
+  console.log('\n=== IMMEDIATE FINDABILITY TEST ===');
+  
+  const testSupplier = 'TEST_SUPPLIER_CACHE';
+  const testInvoice = `INV-TEST-${Date.now()}`;
+  
+  try {
+    InvoiceCache.invalidateGlobal();
+    console.log('✓ Cache cleared');
+    
+    const createData = {
+      supplier: testSupplier,
+      invoiceNo: testInvoice,
+      sheetName: '99',
+      sysId: IDGenerator.generateUUID(),
+      receivedAmt: 1000,
+      timestamp: new Date()
+    };
+    
+    console.log('Creating invoice...');
+    const start = Date.now();
+    const createResult = InvoiceManager.create(createData);
+    const createTime = Date.now() - start;
+    
+    if (!createResult.success) {
+      return {
+        name: 'Immediate Findability',
+        avgMs: createTime,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: createResult.error,
+        iterations: 1
+      };
+    }
+    
+    console.log(`✓ Invoice created at row ${createResult.row} (${createTime}ms)`);
+    
+    // CRITICAL TEST: Find immediately
+    const findStart = Date.now();
+    const foundInvoice = InvoiceManager.find(testSupplier, testInvoice);
+    const findTime = Date.now() - findStart;
+    
+    const success = foundInvoice && foundInvoice.row === createResult.row;
+    
+    // Cleanup
+    try {
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      invoiceSh.deleteRow(createResult.row);
+      InvoiceCache.invalidateGlobal();
+    } catch (e) {
+      console.warn(`Cleanup failed: ${e}`);
+    }
+    
+    return {
+      name: 'Immediate Findability',
+      avgMs: findTime,
+      createTime: createTime,
+      findTime: findTime,
+      grade: success ? '✓ EXCELLENT' : '✗ CRITICAL',
+      passed: success,
+      iterations: 1
+    };
+    
+  } catch (error) {
+    console.error(`Test failed: ${error}`);
+    return {
+      name: 'Immediate Findability',
+      avgMs: 0,
+      grade: '✗ CRITICAL',
+      passed: false,
+      error: error.toString(),
+      iterations: 1
+    };
+  }
+}
+
+function testRegularPaymentFlow() {
+  console.log('\n=== REGULAR PAYMENT FLOW TEST (DETAILED) ===');
+  
+  const testSupplier = 'TEST_SUPPLIER_REGULAR';
+  const testInvoice = `INV-REG-${Date.now()}`;
+  
+  const timings = {
+    cacheInvalidate: 0,
+    invoiceCreate: 0,
+    invoiceFind: 0,
+    paymentProcess: 0,
+    cleanup: 0,
+    total: 0
+  };
+  
+  try {
+    // Timing: Cache invalidation
+    const t0 = Date.now();
+    InvoiceCache.invalidateGlobal();
+    timings.cacheInvalidate = Date.now() - t0;
+    console.log(`⏱ Cache invalidation: ${timings.cacheInvalidate}ms`);
+    
+    const data = {
+      supplier: testSupplier,
+      invoiceNo: testInvoice,
+      sheetName: '99',
+      sysId: IDGenerator.generateUUID(),
+      receivedAmt: 1000,
+      paymentAmt: 1000,
+      paymentType: 'Regular',
+      timestamp: new Date(),
+      invoiceDate: new Date(),
+      enteredBy: 'test@example.com',
+      notes: 'Test regular payment'
+    };
+    
+    const testStart = Date.now();
+    
+    // Step 1: Create invoice (DETAILED TIMING)
+    console.log('\n[Step 1: Invoice Creation]');
+    const t1 = Date.now();
+    const invoiceResult = InvoiceManager.create(data);
+    timings.invoiceCreate = Date.now() - t1;
+    
+    if (!invoiceResult.success) {
+      return {
+        name: 'Regular Payment Flow',
+        avgMs: Date.now() - testStart,
+        timings: timings,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: `Invoice creation failed: ${invoiceResult.error}`,
+        iterations: 1
+      };
+    }
+    console.log(`✓ Invoice created at row ${invoiceResult.row}`);
+    console.log(`⏱ Invoice creation time: ${timings.invoiceCreate}ms`);
+    
+    // Step 2: Verify findability (DETAILED TIMING)
+    console.log('\n[Step 2: Invoice Findability]');
+    const t2 = Date.now();
+    const foundInvoice = InvoiceManager.find(testSupplier, testInvoice);
+    timings.invoiceFind = Date.now() - t2;
+    
+    if (!foundInvoice) {
+      return {
+        name: 'Regular Payment Flow',
+        avgMs: Date.now() - testStart,
+        timings: timings,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: 'Invoice not found after creation (cache write-through failure)',
+        iterations: 1
+      };
+    }
+    console.log(`✓ Invoice found at row ${foundInvoice.row}`);
+    console.log(`⏱ Invoice find time: ${timings.invoiceFind}ms`);
+    
+    // Step 3: Process payment (DETAILED TIMING)
+    console.log('\n[Step 3: Payment Processing]');
+    const t3 = Date.now();
+    const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
+    timings.paymentProcess = Date.now() - t3;
+    
+    if (!paymentResult.success) {
+      // Quick cleanup before returning
+      try {
+        const invoiceSh = getSheet(CONFIG.invoiceSheet);
+        invoiceSh.deleteRow(invoiceResult.row);
+      } catch (e) {}
+      
+      return {
+        name: 'Regular Payment Flow',
+        avgMs: Date.now() - testStart,
+        timings: timings,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: `Payment processing failed: ${paymentResult.error}`,
+        iterations: 1
+      };
+    }
+    
+    console.log(`✓ Payment processed: ${paymentResult.paymentId}`);
+    console.log(`✓ Fully paid: ${paymentResult.fullyPaid}`);
+    console.log(`✓ Paid date updated: ${paymentResult.paidDateUpdated}`);
+    console.log(`⏱ Payment processing time: ${timings.paymentProcess}ms`);
+    
+    // Step 4: Cleanup (DETAILED TIMING)
+    console.log('\n[Step 4: Cleanup]');
+    const t4 = Date.now();
+    try {
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      invoiceSh.deleteRow(invoiceResult.row);
+      
+      const paymentSh = getSheet(CONFIG.paymentSheet);
+      paymentSh.deleteRow(paymentResult.row);
+      
+      InvoiceCache.invalidateGlobal();
+      timings.cleanup = Date.now() - t4;
+      console.log(`✓ Test data cleaned up`);
+      console.log(`⏱ Cleanup time: ${timings.cleanup}ms`);
+    } catch (e) {
+      timings.cleanup = Date.now() - t4;
+      console.warn(`⚠ Cleanup failed: ${e}`);
+    }
+    
+    timings.total = Date.now() - testStart;
+    
+    // Performance analysis
+    console.log('\n' + '═'.repeat(60));
+    console.log('PERFORMANCE BREAKDOWN:');
+    console.log('═'.repeat(60));
+    console.log(`  Cache Invalidation:  ${timings.cacheInvalidate.toString().padStart(5)}ms  (${((timings.cacheInvalidate/timings.total)*100).toFixed(1)}%)`);
+    console.log(`  Invoice Creation:    ${timings.invoiceCreate.toString().padStart(5)}ms  (${((timings.invoiceCreate/timings.total)*100).toFixed(1)}%)`);
+    console.log(`  Invoice Find:        ${timings.invoiceFind.toString().padStart(5)}ms  (${((timings.invoiceFind/timings.total)*100).toFixed(1)}%)`);
+    console.log(`  Payment Processing:  ${timings.paymentProcess.toString().padStart(5)}ms  (${((timings.paymentProcess/timings.total)*100).toFixed(1)}%)`);
+    console.log(`  Cleanup:             ${timings.cleanup.toString().padStart(5)}ms  (${((timings.cleanup/timings.total)*100).toFixed(1)}%)`);
+    console.log('  ' + '-'.repeat(58));
+    console.log(`  TOTAL:               ${timings.total.toString().padStart(5)}ms  (100.0%)`);
+    console.log('═'.repeat(60));
+    
+    // Identify bottleneck
+    const bottleneck = Object.entries(timings)
+      .filter(([key]) => key !== 'total')
+      .reduce((max, [key, val]) => val > max[1] ? [key, val] : max, ['', 0]);
+    
+    console.log(`\n🔍 BOTTLENECK: ${bottleneck[0]} (${bottleneck[1]}ms - ${((bottleneck[1]/timings.total)*100).toFixed(1)}%)`);
+    
+    // Success validation
+    const success = paymentResult.fullyPaid && paymentResult.paidDateUpdated;
+    
+    return {
+      name: 'Regular Payment Flow',
+      avgMs: timings.total,
+      timings: timings,
+      bottleneck: `${bottleneck[0]} (${bottleneck[1]}ms)`,
+      grade: success ? (timings.total < 2000 ? '✓ EXCELLENT' : timings.total < 4000 ? '○ GOOD' : '△ NEEDS IMPROVEMENT') : '✗ CRITICAL',
+      passed: success,
+      fullyPaid: paymentResult.fullyPaid,
+      paidDateUpdated: paymentResult.paidDateUpdated,
+      iterations: 1
+    };
+    
+  } catch (error) {
+    console.error(`✗ Test failed: ${error}`);
+    console.error(error.stack);
+    return {
+      name: 'Regular Payment Flow',
+      avgMs: timings.total || 0,
+      timings: timings,
+      grade: '✗ CRITICAL',
+      passed: false,
+      error: error.toString(),
+      iterations: 1
+    };
+  }
+}
+
+function testCacheDataTypes() {
+  console.log('\n=== CACHE DATA TYPE INTEGRITY TEST ===');
+  
+  const testSupplier = 'TEST_SUPPLIER_TYPES';
+  const testInvoice = `INV-TYPE-${Date.now()}`;
+  
+  try {
+    InvoiceCache.invalidateGlobal();
+    
+    const createData = {
+      supplier: testSupplier,
+      invoiceNo: testInvoice,
+      sheetName: '01',
+      sysId: IDGenerator.generateUUID(),
+      receivedAmt: 5000,
+      timestamp: new Date()
+    };
+    
+    console.log('Creating invoice...');
+    const start = Date.now();
+    const createResult = InvoiceManager.create(createData);
+    
+    if (!createResult.success) {
+      return {
+        name: 'Cache Data Type Integrity',
+        avgMs: Date.now() - start,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: createResult.error,
+        iterations: 1
+      };
+    }
+    
+    console.log(`✓ Invoice created at row ${createResult.row}`);
+    
+    // Find and validate data types
+    console.log('Reading from cache and validating data types...');
+    const foundInvoice = InvoiceManager.find(testSupplier, testInvoice);
+    
+    if (!foundInvoice) {
+      return {
+        name: 'Cache Data Type Integrity',
+        avgMs: Date.now() - start,
+        grade: '✗ CRITICAL',
+        passed: false,
+        error: 'Invoice not found in cache',
+        iterations: 1
+      };
+    }
+    
+    const col = CONFIG.invoiceCols;
+    const checks = [
+      { name: 'Total Amount', value: foundInvoice.data[col.totalAmount], expected: 'number' },
+      { name: 'Total Paid', value: foundInvoice.data[col.totalPaid], expected: 'number' },
+      { name: 'Balance Due', value: foundInvoice.data[col.balanceDue], expected: 'number' },
+      { name: 'Status', value: foundInvoice.data[col.status], expected: 'string' }
+    ];
+    
+    let allPassed = true;
+    const errors = [];
+    
+    checks.forEach(check => {
+      const actualType = typeof check.value;
+      const isFormula = typeof check.value === 'string' && check.value.toString().startsWith('=');
+      
+      if (isFormula) {
+        console.log(`  ✗ ${check.name}: FORMULA STRING DETECTED`);
+        errors.push(`${check.name}: Formula string detected`);
+        allPassed = false;
+      } else if (actualType !== check.expected) {
+        console.log(`  ✗ ${check.name}: Expected ${check.expected}, got ${actualType}`);
+        errors.push(`${check.name}: Type mismatch`);
+        allPassed = false;
+      } else {
+        console.log(`  ✓ ${check.name}: ${actualType} (valid)`);
+      }
+    });
+    
+    const totalTime = Date.now() - start;
+    
+    // Cleanup
+    try {
+      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      invoiceSh.deleteRow(createResult.row);
+      InvoiceCache.invalidateGlobal();
+    } catch (e) {
+      console.warn(`Cleanup failed: ${e}`);
+    }
+    
+    return {
+      name: 'Cache Data Type Integrity',
+      avgMs: totalTime,
+      grade: allPassed ? '✓ EXCELLENT' : '✗ CRITICAL',
+      passed: allPassed,
+      errors: errors.length > 0 ? errors.join(', ') : undefined,
+      iterations: 1
+    };
+    
+  } catch (error) {
+    console.error(`Test failed: ${error}`);
+    return {
+      name: 'Cache Data Type Integrity',
+      avgMs: 0,
+      grade: '✗ CRITICAL',
+      passed: false,
+      error: error.toString(),
+      iterations: 1
+    };
+  }
+}
+
+function debugCacheState() {
+  console.log('\n=== CACHE STATE DEBUG ===');
+  
+  const cacheData = InvoiceCache.get();
+  
+  if (!cacheData) {
+    console.log('Cache is EMPTY or EXPIRED');
+    return {
+      name: 'Cache State Debug',
+      status: 'EMPTY/EXPIRED',
+      avgMs: 0,
+      grade: '○ INFO',
+      passed: true,
+      iterations: 1
+    };
+  }
+  
+  console.log(`Cache timestamp: ${new Date(InvoiceCache.timestamp)}`);
+  console.log(`Cache age: ${Date.now() - InvoiceCache.timestamp}ms`);
+  console.log(`Cache TTL: ${InvoiceCache.TTL}ms`);
+  console.log(`Data rows: ${cacheData.data.length}`);
+  console.log(`Index entries: ${cacheData.indexMap.size}`);
+  console.log(`Suppliers indexed: ${cacheData.supplierIndex.size}`);
+  
+  console.log('\nSupplier Index:');
+  let supplierCount = 0;
+  for (const [supplier, rows] of cacheData.supplierIndex) {
+    console.log(`  ${supplier}: ${rows.length} invoices`);
+    supplierCount++;
+    if (supplierCount >= 10) {
+      console.log(`  ... and ${cacheData.supplierIndex.size - 10} more suppliers`);
+      break;
+    }
+  }
+  
+  return {
+    name: 'Cache State Debug',
+    status: 'ACTIVE',
+    dataRows: cacheData.data.length,
+    indexEntries: cacheData.indexMap.size,
+    suppliers: cacheData.supplierIndex.size,
+    avgMs: 0,
+    grade: '○ INFO',
+    passed: true,
+    iterations: 1
+  };
+}
+
+function testOnEditSimulation() {
+  console.log('\n=== onEdit BOTTLENECK SIMULATION ===');
+  
+  // Use sheet '01' (or modify to use your preferred test sheet)
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('99') || ss.getActiveSheet();
+  const row = 10; // Test row (modify if needed)
+  const cols = CONFIG.cols;
+
+  const onEditPathTest = new PerfTest('onEdit: Full critical path');
+  onEditPathTest.run(10, () => {
+    const rowValues = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
+    
+    const supplier = rowValues[cols.supplier];
+    const paymentType = rowValues[cols.paymentType];
+    const invoiceNo = rowValues[cols.invoiceNo];
+    
+    if (paymentType === 'Regular') {
+      sheet.getRange(row, cols.paymentAmt + 1).clearContent();
+      
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireValueInList(['Invoice1', 'Invoice2'], true)
+        .build();
+      sheet.getRange(row, cols.prevInvoice + 1).setDataValidation(rule);
+      
+      sheet.getRange(row, cols.balance + 1).setValue(0).setNote('Test');
+    }
+  });
+
+  return [onEditPathTest.report()];
+}
+
+function testPostingWorkflow() {
+  console.log('\n=== POSTING WORKFLOW TEST ===');
+  
+  clearInvoiceCache();
+  
+  const testData = {
+    supplier: 'TestSupplier',
+    invoiceNo: 'PERF-' + Date.now(),
+    receivedAmt: 5000,
+    paymentAmt: 5000,
+    paymentType: 'Regular',
+    prevInvoice: '',
+    notes: 'Performance test',
+    timestamp: new Date(),
+    sheetName: 'TEST',
+    sysId: IDGenerator.generateUUID(),
+    invoiceDate: new Date(),
+    enteredBy: 'test@example.com',
+    rowNum: 10
+  };
+  
+  const start = Date.now();
+  const invoiceResult = InvoiceManager.process(testData);
+  
+  if (invoiceResult.success) {
+    const balance = BalanceCalculator.getSupplierOutstanding(testData.supplier);
+    const unpaid = InvoiceManager.getUnpaidForSupplier(testData.supplier);
+  }
+  
+  const totalTime = Date.now() - start;
+  console.log(`Complete posting workflow: ${totalTime}ms`);
+  
+  return {
+    name: 'Posting Workflow',
+    totalTime: totalTime,
+    invoiceSuccess: invoiceResult.success,
+    avgMs: totalTime,
+    grade: totalTime < 2000 ? '✓ EXCELLENT' : totalTime < 4000 ? '○ GOOD' : '△ NEEDS IMPROVEMENT',
+    passed: totalTime < 2000,
+    iterations: 1
+  };
+}
+
+// ============================================================================
+// FOCUSED TEST RUNNERS
+// ============================================================================
+
+function runFocusedTests() {
+  console.clear();
+  console.log('╔═══════════════════════════════════════════════════════════╗');
+  console.log('║  FOCUSED PERFORMANCE TESTS (3 Critical Tests)             ║');
+  console.log('║  Started: ' + new Date().toLocaleTimeString() + '                          ║');
+  console.log('╚═══════════════════════════════════════════════════════════╝');
+
+  const results = [];
+
+  results.push(...testDataProcessing());
+  results.push(...testOnEditSimulation());
+  results.push(testPostingWorkflow());
+
+  console.log('\n╔═══════════════════════════════════════════════════════════╗');
+  console.log('║  RESULTS SUMMARY                                          ║');
+  console.log('╚═══════════════════════════════════════════════════════════╝\n');
+
+  results.forEach(result => {
+    console.log(`${result.grade} ${result.name}`);
+    console.log(`   Avg: ${result.avgMs}ms | Min: ${result.minMs || '-'}ms | Max: ${result.maxMs || '-'}ms | P95: ${result.p95Ms || '-'}ms`);
+    console.log(`   Iterations: ${result.iterations}\n`);
+  });
+
+  const passed = results.filter(r => r.passed !== false).length;
+  const failed = results.filter(r => r.passed === false).length;
+  console.log(`\nTOTAL: ${passed} PASSED | ${failed} FAILED\n`);
+
+  exportResultsToSheet(results);
+  return results;
+}
+
+function runCacheTests() {
+  
+  console.log('╔═══════════════════════════════════════════════════════════╗');
+  console.log('║  CACHE CORRECTNESS & PERFORMANCE TESTS               ║');
+  console.log('║  Started: ' + new Date().toLocaleTimeString() + '    ║');
+  console.log('╚═══════════════════════════════════════════════════════════╝');
+
+  const results = [];
+
+  // results.push(testCachePerformance());
+  // results.push(testCacheInvalidation());
+  // results.push(compareWithoutCache());
+  // results.push(testImmediateFindability());
+  results.push(testRegularPaymentFlow());
+  // results.push(testCacheDataTypes());
+  // results.push(debugCacheState());
+
+  console.log('\n╔═══════════════════════════════════════════════════════════╗');
+  console.log('║  CACHE TEST RESULTS                                    ║');
+  console.log('╚═══════════════════════════════════════════════════════════╝\n');
+
+  results.forEach(result => {
+    console.log(`${result.grade} ${result.name}`);
+    if (result.avgMs) {
+      console.log(`   Avg: ${result.avgMs}ms`);
+    }
+    if (result.error) {
+      console.log(`   Error: ${result.error}`);
+    }
+    console.log('');
+  });
+
+  const passed = results.filter(r => r.passed !== false).length;
+  const failed = results.filter(r => r.passed === false).length;
+  console.log(`\nTOTAL: ${passed} PASSED | ${failed} FAILED\n`);
+
+  exportResultsToSheet(results);
+  return results;
+}
+
+// ============================================================================
+// MASTER TEST RUNNER (ALL TESTS)
 // ============================================================================
 
 function runAllPerformanceTests() {
-  // console.clear();
+  
   console.log('╔═══════════════════════════════════════════════════════════╗');
   console.log('║  INTEGRATED PERFORMANCE TEST SUITE                   ║');
   console.log('║  Code.gs Financial Management System                 ║');
@@ -438,9 +1054,43 @@ function exportResultsToSheet(results) {
     }
 
     sheet.clearContents();
-    sheet.appendRow(['Test Name', 'Grade', 'Avg (ms)', 'Min (ms)', 'Max (ms)', 'P95 (ms)', 'Iterations', 'Timestamp']);
     
+    // Header with detailed columns
+    sheet.appendRow([
+      'Test Name', 
+      'Grade', 
+      'Avg (ms)', 
+      'Min (ms)', 
+      'Max (ms)', 
+      'P95 (ms)', 
+      'Iterations', 
+      'Bottleneck',
+      'Details',
+      'Timestamp'
+    ]);
+    
+    // Data rows with conditional detail rendering
     results.forEach(result => {
+      let details = '';
+      
+      // Add timing breakdown for detailed tests
+      if (result.timings) {
+        details = `Create:${result.timings.invoiceCreate}ms | Find:${result.timings.invoiceFind}ms | Payment:${result.timings.paymentProcess}ms | Cleanup:${result.timings.cleanup}ms`;
+      }
+      
+      // Add error details if present
+      if (result.error) {
+        details = details ? `${details} | Error: ${result.error}` : `Error: ${result.error}`;
+      }
+      
+      // Add extra info for cache tests
+      if (result.speedup) {
+        details = `Speedup: ${result.speedup}x`;
+      }
+      if (result.improvement) {
+        details = `Improvement: ${result.improvement}%`;
+      }
+      
       sheet.appendRow([
         result.name,
         result.grade,
@@ -449,9 +1099,38 @@ function exportResultsToSheet(results) {
         result.maxMs || '-',
         result.p95Ms || '-',
         result.iterations,
+        result.bottleneck || '-',
+        details || '-',
         new Date().toLocaleString()
       ]);
     });
+
+    // Format header
+    const headerRange = sheet.getRange(1, 1, 1, 10);
+    headerRange.setFontWeight('bold');
+    headerRange.setBackground('#4285F4');
+    headerRange.setFontColor('#FFFFFF');
+    
+    // Auto-resize columns
+    // for (let i = 1; i <= 10; i++) {
+    //   sheet.autoResizeColumn(i);
+    // }
+    
+    // Add summary section
+    const lastRow = sheet.getLastRow();
+    sheet.getRange(lastRow + 2, 1).setValue('SUMMARY');
+    sheet.getRange(lastRow + 2, 1).setFontWeight('bold');
+    
+    const passed = results.filter(r => r.passed !== false).length;
+    const failed = results.filter(r => r.passed === false).length;
+    const avgTime = (results.reduce((sum, r) => sum + (r.avgMs || 0), 0) / results.length).toFixed(0);
+    
+    sheet.getRange(lastRow + 3, 1, 4, 2).setValues([
+      ['Total Tests:', results.length],
+      ['Passed:', passed],
+      ['Failed:', failed],
+      ['Avg Time:', `${avgTime}ms`]
+    ]);
 
     console.log('✓ Results exported to "PerfResults" sheet');
   } catch (e) {
