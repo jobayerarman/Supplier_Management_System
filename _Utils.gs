@@ -305,34 +305,6 @@ const LockManager = {
   }
 };
 
-// ==================== DATA LOOKUP ====================
-
-/**
- * Find invoice record by supplier and invoice number
- * Used by InvoiceManager and BalanceCalculator
- * @param {string} supplier - Supplier name
- * @param {string} invoiceNo - Invoice number
- * @returns {Object|null} Object with {row, data} or null if not found
- */
-function findInvoiceRecord(supplier, invoiceNo) {
-  try {
-    const invoiceSh = getSheet(CONFIG.invoiceSheet);
-    const data = invoiceSh.getDataRange().getValues();
-    
-    for (let i = 1; i < data.length; i++) {
-      if (StringUtils.equals(data[i][CONFIG.invoiceCols.supplier], supplier) &&
-          StringUtils.equals(data[i][CONFIG.invoiceCols.invoiceNo], invoiceNo)) {
-        return { row: i + 1, data: data[i] };
-      }
-    }
-    return null;
-  } catch (error) {
-    logSystemError('findInvoiceRecord', 
-      `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
-    return null;
-  }
-}
-
 // ==================== PAYMENT HELPERS ====================
 
 /**

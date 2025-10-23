@@ -145,7 +145,7 @@ function validateDuePayment(data) {
   // Check if previous invoice exists and has sufficient balance
   if (data.prevInvoice) {
     try {
-      const prevInvoice = findInvoiceRecord(data.supplier, data.prevInvoice);
+      const prevInvoice = InvoiceManager.find(data.supplier, data.prevInvoice);
       if (!prevInvoice) {
         errors.push(`Previous invoice "${data.prevInvoice}" not found for supplier "${data.supplier}"`);
       } else {
@@ -179,7 +179,7 @@ function validateBusinessLogic(data) {
   // Check for duplicate invoice (only for new invoices, not Due payments)
   if (data.invoiceNo && data.paymentType !== 'Due') {
     try {
-      const existing = findInvoiceRecord(data.supplier, data.invoiceNo);
+      const existing = InvoiceManager.find(data.supplier, data.invoiceNo);
       if (existing) {
         errors.push(`Invoice "${data.invoiceNo}" already exists for supplier "${data.supplier}" at row ${existing.row}`);
       }
