@@ -505,3 +505,11 @@ function formatTime(date) {
 function normalizeString(str) {
   return StringUtils.normalize(str);
 }
+
+/**
+ * Get current user email with reliable fallback
+ * @returns {string} User email address
+ */
+function getCurrentUserEmail() {
+  return UserResolver.getCurrentUser();
+}

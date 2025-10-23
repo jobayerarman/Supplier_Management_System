@@ -154,7 +154,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
 
     const invoiceDate = getDailySheetDate(sheetName) || now;
-    const enteredBy = Session.getEffectiveUser().getEmail();
+    const enteredBy = getCurrentUserEmail();
 
     // Build transaction context object
     const data = {
