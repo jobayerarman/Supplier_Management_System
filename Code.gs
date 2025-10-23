@@ -187,7 +187,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     }
 
     // BEFORE-POST AUDIT
-    auditAction("══NEW-POST══", data, "Starting posting process");
+    // auditAction("══NEW-POST══", data, "Starting posting process");
 
     // ═══ 4. PRE-CALCULATE BALANCE (Before invoice/payment) ═══
     const currentOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
@@ -231,7 +231,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 
     // ═══ 11. FINAL AUDIT ═══
     // auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
-    auditAction("══AFTER-POST══", data, `Posted successfully`);
+    // auditAction("══AFTER-POST══", data, `Posted successfully`);
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;

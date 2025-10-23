@@ -498,7 +498,7 @@ const InvoiceManager = {
       // ═══ ADD TO CACHE (Write-Through) - KEY FIX ═══
       InvoiceCache.addInvoiceToCache(newRow, newRowData);
 
-      // AuditLogger.log('INVOICE_CREATED', data, `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
+      AuditLogger.log('INVOICE_CREATED', data, `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
 
       return { success: true, action: 'created', invoiceId, row: newRow };
 
