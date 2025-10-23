@@ -377,15 +377,18 @@ const PaymentManager = {
    */
   isDuplicate: function(sysId) {
     if (!sysId) return false;
+
+    const SYS_ID_COL = CONFIG.paymentCols.sysId + 1;
+    const paymentSheet = CONFIG.paymentSheet;
     
     try {
-      const paymentSh = SheetUtils.getSheet(CONFIG.paymentSheet);
+      const paymentSh = SheetUtils.getSheet(paymentSheet);
       const lastRow = paymentSh.getLastRow();
       
       if (lastRow < 2) return false;
       
       const searchId = IDGenerator.generatePaymentId(sysId);
-      const data = paymentSh.getRange(2, CONFIG.paymentCols.sysId + 1, lastRow - 1, 1).getValues();
+      const data = paymentSh.getRange(2, SYS_ID_COL, lastRow - 1, 1).getValues();
       
       return data.some(row => row[0] === searchId);
       

@@ -364,32 +364,7 @@ function shouldProcessPayment(data) {
  * @param {string} sysId - System ID to check
  * @returns {boolean} True if duplicate exists
  */
-function isDuplicatePayment(sysId) {
-  try {
-    const paymentSh = getSheet(CONFIG.paymentSheet);
-    if (!paymentSh) return false;
-    
-    const lastCol = paymentSh.getLastColumn();
-    const headers = paymentSh.getRange(1, 1, 1, lastCol).getValues()[0];
-    const idIndex = headers.indexOf(CONFIG.idColHeader);
 
-    const searchId = IDGenerator.generatePaymentId(sysId);
-    const startRow = 2;
-    const lastRow = paymentSh.getLastRow();
-    if (lastRow < startRow) return false;
-
-    if (idIndex >= 0) {
-      const vals = paymentSh.getRange(startRow, idIndex + 1, lastRow - 1, 1).getValues().flat();
-      return vals.some(v => v === searchId);
-    } else {
-      const vals = paymentSh.getRange(startRow, lastCol, lastRow - 1, 1).getValues().flat();
-      return vals.some(v => v === searchId);
-    }
-  } catch (error) {
-    logSystemError('isDuplicatePayment', `Error checking duplicate: ${error.toString()}`);
-    return false;
-  }
-}
 
 // ==================== UI HELPERS ====================
 
