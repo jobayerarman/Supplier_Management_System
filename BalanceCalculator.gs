@@ -202,7 +202,7 @@ const BalanceCalculator = {
       );
 
       balance = preview.balance;
-      note = `${preview.note}\nCalculated: ${DateUtils.formatDateTime(new Date())}`;
+      note = `${preview.note}\nTime: ${DateUtils.formatDateTime(new Date())}`;
 
       // Color coding for preview
       if (preview.note.includes('⚠️')) {
@@ -215,8 +215,7 @@ const BalanceCalculator = {
     // Single write operation to balance cell
     balanceCell
       .setValue(balance)
-      .setNote(note)
-      .setBackground(bgColor);
+      .setNote(note);
   },
 
   /**

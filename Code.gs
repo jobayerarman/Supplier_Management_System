@@ -38,7 +38,7 @@ function onEdit(e) {
 
     // ═══ SINGLE BATCH READ - ONE API CALL ═══
     const activeRow = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily);
-    const rowValues = activeRow.getValues()[0];
+    let rowValues = activeRow.getValues()[0];
 
     // Pre-extract commonly used values
     const editedValue = rowValues[col - 1];
@@ -75,6 +75,7 @@ function onEdit(e) {
       case configCols.receivedAmt + 1:
         if (paymentType === 'Regular') {
           sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
+          rowValues = activeRow.getValues()[0];
         }
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
@@ -82,10 +83,13 @@ function onEdit(e) {
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
-        InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
 
         if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
+          rowValues = activeRow.getValues()[0];
+        } else if (paymentType === 'Due') {
+          // Due: Build dropdown for previous invoices, calculate balance
+          InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
         }
 
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
@@ -95,13 +99,16 @@ function onEdit(e) {
       case configCols.prevInvoice + 1:
         if ((paymentType === 'Due') && supplier && editedValue) {
           autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
+          rowValues = activeRow.getValues()[0];
         }
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
         break;
 
       // ═══ 7. HANDLE PAYMENT AMOUNT EDIT ═══
       case configCols.paymentAmt + 1:
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        if (paymentType !== 'Unpaid') {
+          BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        }
         break;
 
       default:
@@ -243,30 +250,53 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
 // ═══ HELPER FUNCTIONS ═══
 
 /**
- * Clear payment fields when changing payment type
- * Handles cleanup based on new payment type selected
+ * Clear only necessary fields based on payment type
+ * Uses batch range operations to minimize API calls
+ * 
+ * STRATEGY:
+ * - Unpaid: Clear both paymentAmt and prevInvoice (no payments made)
+ * - Regular/Partial: Clear prevInvoice only (payment amount will auto-populate)
+ * - Due: Clear paymentAmt only (user will select previous invoice from dropdown)
+ * 
+ * OPTIMIZATION: Batch clear multiple cells in single operation when possible
  * 
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} row - Row number
  * @param {string} newPaymentType - New payment type selected
  */
 function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
-  const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
-  const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
-
   try {
-    paymentAmtCell
-      .clearContent()
-      .clearNote()
-      .setBackground(null);
+    const cols = CONFIG.cols;
+    const paymentAmtCol = cols.paymentAmt + 1;
+    const prevInvoiceCol = cols.prevInvoice + 1;
 
-    prevInvoiceCell
-      .clearDataValidations()
-      .clearNote()
-      .setBackground(null);
+    switch (newPaymentType) {
+      case 'Unpaid':
+        // ✓ BATCH CLEAR: Both fields at once (2 cells)
+        const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2); // F:G
+        unpaidRange.clearContent().clearNote().clearDataValidations();
+        unpaidRange.setBackground(null);
+        break;
 
-    if (['Unpaid', 'Due'].includes(newPaymentType))
-      prevInvoiceCell.clearContent();
+      case 'Regular':
+      case 'Partial':
+        // ✓ SINGLE CELL: Only clear prevInvoice (Regular/Partial auto-populate paymentAmt)
+        const invoiceRange = sheet.getRange(row, prevInvoiceCol);
+        invoiceRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+        break;
+
+      case 'Due':
+        // ✓ SINGLE CELL: Only clear paymentAmt (user selects from dropdown, amount auto-populates)
+        const amountRange = sheet.getRange(row, paymentAmtCol);
+        amountRange.clearContent().setBackground(null);
+        break;
+
+      default:
+        // Unknown type - clear both for safety
+        const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
+        defaultRange.clearContent().clearNote().clearDataValidations();
+        defaultRange.setBackground(null);
+    }
 
   } catch (error) {
     logSystemError('clearPaymentFieldsForTypeChange',
