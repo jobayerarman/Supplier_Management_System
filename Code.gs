@@ -234,7 +234,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
     // ═══ 10. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
-    InvoiceCache.invalidateSupplierCache(supplier);
+    CacheManager.invalidateSupplierCache(supplier);
 
     // ═══ 11. FINAL AUDIT ═══
     // auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);

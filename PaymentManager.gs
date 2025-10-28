@@ -52,7 +52,7 @@ const PaymentManager = {
       // ═══ STEP 2: UPDATE INVOICE CACHE ═══
       // ✓ NEW: Refresh cached invoice data after payment
       if (targetInvoice) {
-        const cacheUpdated = InvoiceCache.updateInvoiceInCache(
+        const cacheUpdated = CacheManager.updateInvoiceInCache(
           data.supplier,
           targetInvoice
         );
@@ -260,7 +260,7 @@ const PaymentManager = {
 
       // ═══ STEP 6: UPDATE CACHE WITH NEW PAID DATE ═══
       // ✓ NEW: Refresh cache after updating paid date
-      InvoiceCache.updateInvoiceInCache(supplier, invoiceNo);
+      CacheManager.updateInvoiceInCache(supplier, invoiceNo);
 
       // ═══ STEP 7: LOG SUCCESS ═══
       // AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,

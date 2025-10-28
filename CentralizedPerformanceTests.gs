@@ -380,7 +380,7 @@ function testCachePerformance() {
   try {
     // Clear cache to start fresh
     audit.start("Cache Invalidation");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     audit.end("Cache Invalidation");
 
     // Test 1: Cold start (cache miss)
@@ -415,15 +415,15 @@ function testCacheInvalidation() {
   try {
     // Clear and load cache
     audit.start("Initial Cache Load");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     InvoiceManager.find('TestSupplier', 'TEST-001');
-    const cached1 = InvoiceCache.get();
+    const cached1 = CacheManager.get();
     audit.end("Initial Cache Load");
 
     // updatePaidDate should NOT invalidate
     audit.start("Test Selective Preservation");
     InvoiceManager.updatePaidDate('TEST-001', 'TestSupplier', new Date());
-    const cached2 = InvoiceCache.get();
+    const cached2 = CacheManager.get();
     audit.end("Test Selective Preservation");
 
     // create should invalidate
@@ -436,7 +436,7 @@ function testCacheInvalidation() {
       sheetName: 'TestSheet',
       sysId: IDGenerator.generateUUID()
     });
-    const cached3 = InvoiceCache.get();
+    const cached3 = CacheManager.get();
     audit.end("Test Invalidation on Create");
 
     const passed = (cached2 !== null) && (cached3 === null);
@@ -463,7 +463,7 @@ function testRegularPaymentFlow() {
   try {
     // Step 0: Cache Invalidation
     audit.start("Cache Invalidation");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     audit.end("Cache Invalidation");
 
     const data = {
@@ -518,7 +518,7 @@ function testRegularPaymentFlow() {
       invoiceSh.deleteRow(invoiceResult.row);
       const paymentSh = getSheet(CONFIG.paymentSheet);
       paymentSh.deleteRow(paymentResult.row);
-      InvoiceCache.invalidateGlobal();
+      CacheManager.invalidateGlobal();
       cleanupAudit.end();
     } catch (e) {
       cleanupAudit.end();
@@ -553,7 +553,7 @@ function testBalanceCalculation() {
     ];
 
     audit.start("Cache Warmup");
-    InvoiceCache.getInvoiceData();
+    CacheManager.getInvoiceData();
     audit.end("Cache Warmup");
 
     testCases.forEach(testCase => {
@@ -580,7 +580,7 @@ function testSupplierOutstanding() {
     const testSuppliers = ["HEALTHCARE", "INCEPTA", "Test Supplier", "Non-Existent"];
 
     audit.start("Cache Initialization");
-    const cacheData = InvoiceCache.getInvoiceData();
+    const cacheData = CacheManager.getInvoiceData();
     audit.end("Cache Initialization");
 
     testSuppliers.forEach(supplier => {
@@ -621,7 +621,7 @@ function testOnEditPerformance() {
     ];
 
     audit.start("System Warmup");
-    InvoiceCache.getInvoiceData();
+    CacheManager.getInvoiceData();
     audit.end("System Warmup");
 
     editScenarios.forEach(scenario => {

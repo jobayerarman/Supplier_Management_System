@@ -16,7 +16,8 @@ _Utils.gs            → Utilities (string/date/sheet helpers, ID generation, lo
 _UserResolver.gs     → Reliable user identification with fallback strategy
 AuditLogger.gs       → Audit trail operations
 ValidationEngine.gs  → Business rule validation
-InvoiceManager.gs    → Invoice CRUD + intelligent caching
+CacheManager.gs      → Centralized invoice data caching with write-through support
+InvoiceManager.gs    → Invoice CRUD operations
 PaymentManager.gs    → Payment processing + paid date workflow
 BalanceCalculator.gs → Balance calculations
 UIMenu.gs            → Custom menu for batch operations
@@ -63,7 +64,7 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
 3. **Partial**: Incomplete payment (`0 < paymentAmt < receivedAmt`)
 4. **Due**: Payment on existing invoice (`receivedAmt = 0, paymentAmt > 0`, requires `prevInvoice`)
 
-### Critical Performance System: InvoiceCache
+### Critical Performance System: CacheManager
 
 **Purpose**: Eliminate redundant sheet reads during transaction processing
 
@@ -159,7 +160,7 @@ sheet.getRange(row, startCol, 1, 4).setValues(updates);
 ### 3. Cache-First Lookups
 ```javascript
 // ✅ GOOD: Use cached data
-const { data, indexMap } = InvoiceCache.getInvoiceData();
+const { data, indexMap } = CacheManager.getInvoiceData();
 const key = `${supplier}|${invoiceNo}`;
 const rowIndex = indexMap.get(key);
 ```
@@ -261,7 +262,7 @@ Enforced in `ValidationEngine.gs`:
 5. Check `UserResolver.getConfig()` for current settings
 
 ### Debugging Balance Issues
-1. Check cache freshness: `InvoiceCache.timestamp`
+1. Check cache freshness: `CacheManager.timestamp`
 2. Verify formula evaluation: Inspect cached values for formula strings
 3. Compare preview vs actual: `BalanceCalculator.validatePreviewAccuracy(data)`
 4. Check AuditLog for calculation warnings
@@ -269,7 +270,7 @@ Enforced in `ValidationEngine.gs`:
 ### Performance Optimization
 1. Minimize `sheet.getRange()` calls (batch reads/writes)
 2. Pass `rowData` to functions (avoid re-reads)
-3. Use cached lookups: `InvoiceCache.getInvoiceData()`
+3. Use cached lookups: `CacheManager.getInvoiceData()`
 4. Profile with `Logger.log()` timestamps
 5. Use batch operations for bulk processing
 
@@ -348,7 +349,7 @@ When working with this codebase:
 **Get supplier balance**: `BalanceCalculator.getSupplierOutstanding(supplier)`  
 **Log action**: `AuditLogger.log(action, data, message)`  
 **Validate data**: `validatePostData(data)`  
-**Clear cache**: `InvoiceCache.clear()`  
+**Clear cache**: `CacheManager.clear()`  
 **Acquire lock**: `LockManager.acquireDocumentLock(timeout)`  
 **Get current user**: `UserResolver.getCurrentUser()`  
 **Batch validate**: `batchValidateAllRows()` (from menu)  
@@ -390,6 +391,16 @@ When working with this codebase:
 - Due payment validation: `validateDuePayment(data)`
 - Business logic validation: `validateBusinessLogic(data)`
 - Optional supplier/invoice/amount validators
+
+### CacheManager.gs
+- Get invoice data: `getInvoiceData()` - lazy load with automatic refresh
+- Add to cache: `addInvoiceToCache(rowNum, rowData)` - write-through on invoice creation
+- Update cache: `updateInvoiceInCache(supplier, invoiceNo)` - sync after payment processing
+- Invalidate cache: `invalidate(operation)`, `invalidateGlobal()` - operation-based clearing
+- Invalidate supplier: `invalidateSupplierCache(supplier)` - surgical supplier-specific invalidation
+- Get supplier data: `getSupplierData(supplier)` - O(m) supplier invoice lookups
+- Clear cache: `clear()` - complete cache reset
+- Cache features: TTL-based expiration, write-through support, dual indexing (primary + supplier)
 
 ### InvoiceManager.gs
 - Process invoice: `processOptimized(data)` - returns invoiceId immediately
