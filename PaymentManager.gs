@@ -14,19 +14,21 @@ const PaymentManager = {
    * Process and log payment with delegated paid date workflow
    *
    * ✓ OPTIMIZED: Lock-free coordination with granular locking in sub-functions
+   * ✓ OPTIMIZED: Eliminated double cache update by passing cached invoice
    *
    * SIMPLIFIED RESPONSIBILITIES:
    * 1. Validate payment amount
    * 2. Write payment record to PaymentLog (lock acquired in _recordPayment)
-   * 3. Update invoice cache (no lock needed - in-memory)
+   * 3. Update invoice cache and fetch cached data (no lock - in-memory)
    * 4. Determine if paid status check is needed
-   * 5. Delegate to _updateInvoicePaidDate if needed (lock acquired if sheet write occurs)
+   * 5. Pass cached invoice to _updateInvoicePaidDate (eliminates redundant read)
    * 6. Return consolidated result
    *
-   * PERFORMANCE IMPROVEMENT:
-   * - Locks are now acquired only during actual sheet writes
+   * PERFORMANCE IMPROVEMENTS:
+   * - Locks acquired only during sheet writes (~75% reduction: 100-200ms → 20-50ms)
    * - Cache operations no longer block other transactions
-   * - ~75% reduction in lock duration (100-200ms → 20-50ms)
+   * - Eliminated double cache update (~50% reduction in cache operations)
+   * - Single invoice lookup instead of two for Regular/Due payments
    *
    * @param {Object} data - Transaction data
    * @param {string} invoiceId - Invoice ID from InvoiceManager
@@ -52,8 +54,10 @@ const PaymentManager = {
 
       const { paymentId, targetInvoice } = paymentRecorded;
 
-      // ═══ STEP 2: UPDATE INVOICE CACHE ═══
+      // ═══ STEP 2: UPDATE INVOICE CACHE & FETCH UPDATED DATA ═══
       // ✓ No lock needed: Cache operations are in-memory
+      let cachedInvoice = null;
+
       if (targetInvoice) {
         const cacheUpdated = InvoiceCache.updateInvoiceInCache(
           data.supplier,
@@ -64,11 +68,16 @@ const PaymentManager = {
           // Log warning but don't fail - cache inconsistency is recoverable
           AuditLogger.logWarning('PaymentManager.processOptimized',
             `Cache update failed for invoice ${targetInvoice}, cache may be stale`);
+        } else {
+          // ✓ OPTIMIZATION: Fetch cached invoice to pass to paid date workflow
+          // This eliminates redundant sheet read in _updateInvoicePaidDate
+          cachedInvoice = InvoiceManager.find(data.supplier, targetInvoice);
         }
       }
 
       // ═══ STEP 3: UPDATE PAID STATUS (If Applicable) ═══
       // ✓ Lock is acquired inside _updateInvoicePaidDate if sheet write is needed
+      // ✓ OPTIMIZATION: Pass cached invoice to avoid redundant sheet read
       let paidStatusResult = {
         attempted: false,
         fullyPaid: false,
@@ -79,7 +88,7 @@ const PaymentManager = {
       const shouldCheckPaidStatus = this._shouldUpdatePaidDate(data.paymentType);
 
       if (shouldCheckPaidStatus && targetInvoice) {
-        // Delegate entire workflow to _updateInvoicePaidDate
+        // Delegate entire workflow to _updateInvoicePaidDate with cached invoice
         paidStatusResult = this._updateInvoicePaidDate(
           targetInvoice,
           data.supplier,
@@ -89,7 +98,8 @@ const PaymentManager = {
             paymentId: paymentId,
             paymentType: data.paymentType,
             transactionData: data
-          }
+          },
+          cachedInvoice  // ✓ Pass cached invoice to avoid redundant read
         );
       }
 
@@ -184,18 +194,22 @@ const PaymentManager = {
    * ALL-IN-ONE HANDLER: Check invoice balance and update paid date if fully settled
    *
    * ✓ OPTIMIZED: Lock acquired only during sheet write operation
+   * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
    *
    * COMPREHENSIVE WORKFLOW:
-   * 1. Find invoice record (uses cache - no lock)
+   * 1. Find invoice record (uses cached data if provided - no lock)
    * 2. Calculate balance from cached data (no lock)
    * 3. Determine if invoice is fully paid (no lock)
    * 4. Check if paid date already set (no lock)
    * 5. Acquire lock, update paid date in sheet, release lock
-   * 6. Update cache with new paid date (no lock)
+   * 6. Update cache with new paid date only if written (no lock)
    * 7. Log appropriate audit trail based on outcome
    * 8. Return comprehensive result object
    *
-   * PERFORMANCE: Lock held only for ~10-20ms during setValue operation
+   * PERFORMANCE:
+   * - Lock held only for ~10-20ms during setValue operation
+   * - Accepts pre-cached invoice to eliminate redundant InvoiceManager.find() call
+   * - Cache update skipped if no sheet write occurred
    *
    * @private
    * @param {string} invoiceNo - Invoice number
@@ -203,9 +217,10 @@ const PaymentManager = {
    * @param {Date} paidDate - Date to set as paid date
    * @param {number} currentPaymentAmount - Amount just paid (for immediate context)
    * @param {Object} context - Additional context {paymentId, paymentType, transactionData}
+   * @param {Object} cachedInvoice - Optional pre-cached invoice data from InvoiceManager.find()
    * @returns {Object} Comprehensive result with all workflow details
    */
-  _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}) {
+  _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
     const result = {
       attempted: true,
       success: false,
@@ -217,13 +232,14 @@ const PaymentManager = {
     };
 
     try {
-      // ═══ STEP 1: FIND INVOICE ═══
-      const invoice = InvoiceManager.find(supplier, invoiceNo);
+      // ═══ STEP 1: FIND INVOICE (Use cached if provided) ═══
+      // ✓ OPTIMIZATION: Avoid redundant sheet read by using pre-cached invoice
+      const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
 
       if (!invoice) {
         result.reason = 'invoice_not_found';
         result.message = `Invoice ${invoiceNo} not found for supplier ${supplier}`;
-        
+
         AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
         return result;
       }
@@ -292,8 +308,11 @@ const PaymentManager = {
       }
 
       // ═══ STEP 6: UPDATE CACHE WITH NEW PAID DATE ═══
-      // ✓ No lock needed: Cache operations are in-memory
-      InvoiceCache.updateInvoiceInCache(supplier, invoiceNo);
+      // ✓ OPTIMIZATION: Only update cache if we actually wrote the paid date
+      // If cachedInvoice was provided, cache is already up-to-date except for paid date field
+      if (result.paidDateUpdated) {
+        InvoiceCache.updateInvoiceInCache(supplier, invoiceNo);
+      }
 
       // ═══ STEP 7: LOG SUCCESS ═══
       // AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
