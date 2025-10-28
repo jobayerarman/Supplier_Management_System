@@ -251,7 +251,7 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
   const numRows = endRow - startRow + 1;
 
   // Read all data at once for performance
-  const dataRange = sheet.getRange(startRow, 2, numRows, CONFIG.totalColumns.daily);
+  const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
   const allData = dataRange.getValues();
 
   const results = {
@@ -339,7 +339,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   const numRows = endRow - startRow + 1;
 
   // Read all data at once for performance
-  const dataRange = sheet.getRange(startRow, 2, numRows, CONFIG.totalColumns.daily);
+  const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
   const allData = dataRange.getValues();
 
   const results = {
@@ -438,7 +438,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       InvoiceCache.invalidateSupplierCache(data.supplier);
 
       // Log success
-      AuditLogger.log('BATCH_POST', data, 'Posted via batch operation');
+      // AuditLogger.log('BATCH_POST', data, 'Posted via batch operation');
 
       results.posted++;
 
@@ -456,7 +456,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        Utils.getCurrentUserEmail(),
+        getCurrentUserEmail().split("@")[0],
         new Date(),
         false,
         CONFIG.colors.error
@@ -488,7 +488,7 @@ function buildDataObject(rowData, rowNum, sheetName) {
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
-    enteredBy: getCurrentUserEmail(),
+    enteredBy: getCurrentUserEmail().split("@")[0],
     timestamp: new Date(),
     row: rowNum,
     sheetName: sheetName
