@@ -12,7 +12,7 @@
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
 
-  ui.createMenu('SMS Operations')
+  ui.createMenu('📋FP - Operations')
     .addItem('Batch Validate All Rows', 'batchValidateAllRows')
     .addItem('Batch Post All Valid Rows', 'batchPostAllRows')
     .addSeparator()
@@ -97,7 +97,7 @@ function batchValidateSelectedRows() {
   const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.sheets.daily.includes(sheetName)) {
+  if (!CONFIG.dailySheets.includes(sheetName)) {
     ui.alert('Invalid Sheet',
              'Batch validation can only be performed on daily sheets (01-31).',
              ui.ButtonSet.OK);
@@ -128,7 +128,7 @@ function batchPostSelectedRows() {
   const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.sheets.daily.includes(sheetName)) {
+  if (!CONFIG.dailySheets.includes(sheetName)) {
     ui.alert('Invalid Sheet',
              'Batch posting can only be performed on daily sheets (01-31).',
              ui.ButtonSet.OK);
@@ -172,7 +172,7 @@ function clearAllPostCheckboxes() {
   const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.sheets.daily.includes(sheetName)) {
+  if (!CONFIG.dailySheets.includes(sheetName)) {
     ui.alert('Invalid Sheet',
              'This operation can only be performed on daily sheets (01-31).',
              ui.ButtonSet.OK);
