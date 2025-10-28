@@ -334,56 +334,6 @@ const PaymentManager = {
   },
 
   /**
-   * Calculate invoice balance from raw data (formula-independent)
-   * INTERNAL: Encapsulates balance calculation logic
-   * 
-   * @private
-   * @param {string} invoiceNo - Invoice number
-   * @param {string} supplier - Supplier name
-   * @param {Object} invoice - Invoice record from InvoiceManager.find()
-   * @param {number} currentPaymentAmount - Amount being paid right now
-   * @returns {Object|null} Balance information object
-   */
-  _calculateBalance: function(invoiceNo, supplier, invoice, currentPaymentAmount = 0) {
-    try {
-      // Get invoice total amount (column E)
-      const totalAmount = Number(invoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
-
-      // Get all existing payments from PaymentLog
-      const existingPayments = this.getHistoryForInvoice(invoiceNo);
-
-      // Sum existing payments
-      const existingTotalPaid = existingPayments.reduce((sum, payment) => {
-        return sum + (Number(payment.amount) || 0);
-      }, 0);
-
-      // Add current payment (not yet in history)
-      const totalPaid = existingTotalPaid + currentPaymentAmount;
-
-      // Calculate balance
-      const balanceDue = totalAmount - totalPaid;
-      const fullyPaid = Math.abs(balanceDue) < 0.01; // 1 cent tolerance
-
-      return {
-        invoiceNo: invoiceNo,
-        supplier: supplier,
-        totalAmount: totalAmount,
-        totalPaid: totalPaid,
-        balanceDue: balanceDue,
-        fullyPaid: fullyPaid,
-        paymentCount: existingPayments.length + (currentPaymentAmount > 0 ? 1 : 0),
-        calculationMethod: 'raw_data',
-        timestamp: new Date()
-      };
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager._calculateBalance',
-        `Error calculating balance for ${invoiceNo}: ${error.toString()}`);
-      return null;
-    }
-  },
-
-  /**
    * Determine if paid date should be checked/updated based on payment type
    * 
    * BUSINESS RULES:
