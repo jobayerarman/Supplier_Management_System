@@ -58,12 +58,15 @@ function onEdit(e) {
         if (editedValue === true || String(editedValue).toUpperCase() === 'TRUE') {
           // ═══ EARLY VALIDATION (Fail Fast Without Lock) ═══
           const now = DateUtils.now();
+          // Read invoice date once from sheet cell A3
+          const invoiceDate = sheet.getRange('A3').getValue() || now;
+
           const quickValidationData = {
             sheetName,
             rowNum: row,
             supplier,
             invoiceNo,
-            invoiceDate: getDailySheetDate(sheetName) || now,
+            invoiceDate: invoiceDate,
             receivedAmt,
             paymentAmt,
             paymentType,
@@ -108,8 +111,8 @@ function onEdit(e) {
           }
 
           try {
-            // Pass pre-read data to avoid redundant read
-            processPostedRowWithLock(sheet, row, rowValues);
+            // Pass pre-read data and date to avoid redundant reads
+            processPostedRowWithLock(sheet, row, rowValues, invoiceDate);
           } finally {
             LockManager.releaseLock(lock);
           }
@@ -181,19 +184,21 @@ function onEdit(e) {
 
 /**
  * OPTIMIZED: Process posted row with full transaction workflow
- * 
+ *
  * Performance improvements:
  * 1. Zero redundant reads (uses pre-read rowData)
  * 2. Batch writes (single API call for status update)
  * 3. Surgical cache invalidation (supplier-specific)
  * 4. Pre-calculated balance passed through pipeline
  * 5. Early validation exit (fail fast)
- * 
+ * 6. Invoice date passed as parameter (eliminates redundant sheet read)
+ *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
+ * @param {Date} invoiceDate - Invoice date (optional, will read from sheet if not provided)
  */
-function processPostedRowWithLock(sheet, rowNum, rowData = null) {
+function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = null) {
   const cols = CONFIG.cols;
   const totalCols = CONFIG.totalColumns.daily;
   const colors = CONFIG.colors;
@@ -216,7 +221,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
     const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
     const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
 
-    const invoiceDate = getDailySheetDate(sheetName) || now;
+    // Use provided date or fallback to reading from sheet
+    const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
     const enteredBy = getCurrentUserEmail();
 
     // Build transaction context object
@@ -225,7 +231,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null) {
       rowNum,
       supplier,
       invoiceNo,
-      invoiceDate,
+      invoiceDate: finalInvoiceDate,
       receivedAmt,
       paymentAmt,
       paymentType,
