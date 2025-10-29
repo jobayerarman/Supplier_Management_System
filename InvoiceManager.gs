@@ -202,7 +202,11 @@ const InvoiceManager = {
       }
 
       // Cache invalidation only if numeric data changed
-      if (amountChanged) CacheManager.invalidate('updateAmount');
+      // NEW: Use incremental update instead of full cache clear
+      if (amountChanged) {
+        const invoiceNo = existingInvoice.data[col.invoiceNo];
+        CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
+      }
 
       // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${data.receivedAmt }`);
 
@@ -250,9 +254,10 @@ const InvoiceManager = {
         const values = range.getValues()[0];
         updates.forEach(u => (values[u.col - 1] = u.val));
         range.setValues([values]);
-        
-        // Only invalidate supplier cache (not global)
-        CacheManager.invalidateSupplierCache(data.supplier);
+
+        // NEW: Use incremental update instead of supplier cache invalidation
+        const invoiceNo = existingInvoice.data[col.invoiceNo];
+        CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
       }
 
       // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
