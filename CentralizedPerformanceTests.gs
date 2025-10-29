@@ -208,7 +208,7 @@ function testSheetReads() {
   const results = [];
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName("99") || ss.getActiveSheet();
-  const testRow = 10;
+  const testRow = 7;
   const numCols = 15;
 
   // Test 1: Batch Read
