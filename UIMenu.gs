@@ -490,7 +490,7 @@ function buildDataObject(rowData, rowNum, sheetName) {
     sysId: rowData[CONFIG.cols.sysId],
     enteredBy: getCurrentUserEmail().split("@")[0],
     timestamp: new Date(),
-    row: rowNum,
+    rowNum: rowNum,
     sheetName: sheetName
   };
 }
