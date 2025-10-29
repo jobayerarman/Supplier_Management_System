@@ -108,9 +108,9 @@ function batchValidateSelectedRows() {
   const startRow = selection.getRow();
   const numRows = selection.getNumRows();
 
-  if (startRow < 7) {
+  if (startRow < CONFIG.dataStartRow) {
     ui.alert('Invalid Selection',
-             'Please select data rows (row 7 and below).',
+             `Please select data rows (row ${CONFIG.dataStartRow} and below).`,
              ui.ButtonSet.OK);
     return;
   }
@@ -139,9 +139,9 @@ function batchPostSelectedRows() {
   const startRow = selection.getRow();
   const numRows = selection.getNumRows();
 
-  if (startRow < 7) {
+  if (startRow < CONFIG.dataStartRow) {
     ui.alert('Invalid Selection',
-             'Please select data rows (row 7 and below).',
+             `Please select data rows (row ${CONFIG.dataStartRow} and below).`,
              ui.ButtonSet.OK);
     return;
   }
@@ -191,14 +191,14 @@ function clearAllPostCheckboxes() {
   }
 
   const lastRow = sheet.getLastRow();
-  if (lastRow < 7) {
+  if (lastRow < CONFIG.dataStartRow) {
     ui.alert('No Data', 'No data rows found in this sheet.', ui.ButtonSet.OK);
     return;
   }
 
   // Clear all checkboxes in column J
   const postCol = CONFIG.cols.post + 1; // Convert to 1-based
-  const range = sheet.getRange(7, postCol, lastRow - 7 + 1, 1);
+  const range = sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1);
   range.uncheck();
 
   SpreadsheetApp.getActiveSpreadsheet().toast(
@@ -218,7 +218,7 @@ function clearAllPostCheckboxes() {
  */
 function validateRowsInSheet(sheet, startRow = null, endRow = null) {
   const sheetName = sheet.getName();
-  const dataStartRow = 7;
+  const dataStartRow = CONFIG.dataStartRow;
   const lastRow = sheet.getLastRow();
 
   // Set default row range
@@ -306,7 +306,7 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
  */
 function postRowsInSheet(sheet, startRow = null, endRow = null) {
   const sheetName = sheet.getName();
-  const dataStartRow = 7;
+  const dataStartRow = CONFIG.dataStartRow;
   const lastRow = sheet.getLastRow();
 
   // Set default row range
