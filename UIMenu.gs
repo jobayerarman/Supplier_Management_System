@@ -385,7 +385,10 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         });
 
         // Update status to show error
-        const errorMsg = validation.error || validation.errors[0];
+        const errorMsg = validation.error ||
+                         (validation.errors && validation.errors.length > 0
+                           ? validation.errors[0]
+                           : 'Validation failed');
         setBatchPostStatus(
           sheet,
           rowNum,
@@ -456,7 +459,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        getCurrentUserEmail().split("@")[0],
+        UserResolver.getCurrentUser().split("@")[0],
         new Date(),
         false,
         CONFIG.colors.error
@@ -488,7 +491,7 @@ function buildDataObject(rowData, rowNum, sheetName) {
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
-    enteredBy: getCurrentUserEmail().split("@")[0],
+    enteredBy: UserResolver.getCurrentUser().split("@")[0],
     timestamp: new Date(),
     rowNum: rowNum,
     sheetName: sheetName
