@@ -427,7 +427,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         'POSTED',
         data.enteredBy,
         data.timestamp,
-        false,
+        true,
         CONFIG.colors.success
       );
 
