@@ -153,11 +153,10 @@ function onEdit(e) {
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
 
         if (['Regular', 'Partial'].includes(paymentType)) {
-          autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
-          // Update local array instead of re-reading from sheet
-          // autoPopulatePaymentFields sets: paymentAmt = receivedAmt, prevInvoice = invoiceNo
-          rowValues[configCols.paymentAmt] = receivedAmt;
-          rowValues[configCols.prevInvoice] = invoiceNo;
+          // Update local array with returned values (eliminates redundant read/recalculation)
+          const populatedValues = autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
+          rowValues[configCols.paymentAmt] = populatedValues.paymentAmt;
+          rowValues[configCols.prevInvoice] = populatedValues.prevInvoice;
         } else if (paymentType === 'Due') {
           // Due: Build dropdown for previous invoices, calculate balance
           InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
@@ -169,11 +168,9 @@ function onEdit(e) {
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
         if ((paymentType === 'Due') && supplier && editedValue) {
-          autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
-          // Update local array instead of re-reading from sheet
-          // autoPopulateDuePaymentAmount sets paymentAmt to invoice balance or clears it
-          const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(editedValue, supplier);
-          rowValues[configCols.paymentAmt] = invoiceBalance > 0 ? invoiceBalance : '';
+          // Update local array with returned value (eliminates redundant recalculation)
+          const populatedAmount = autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
+          rowValues[configCols.paymentAmt] = populatedAmount;
         }
         updateBalance = true;
         break;
@@ -265,6 +262,11 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     const validation = validatePostData(data);
     if (!validation.valid) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
+      // Clear balance cell with error indicator (consistent error state)
+      sheet.getRange(rowNum, cols.balance + 1)
+        .clearContent()
+        .setNote(`⚠️ Validation failed - balance not calculated\n${validation.error}`)
+        .setBackground(colors.error);
       auditAction("VALIDATION_FAILED", data, validation.error);
       return;
     }
@@ -282,6 +284,11 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     const invoiceResult = InvoiceManager.processOptimized(data);
     if (!invoiceResult.success) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
+      // Clear balance cell with error indicator (consistent error state)
+      sheet.getRange(rowNum, cols.balance + 1)
+        .clearContent()
+        .setNote(`⚠️ Invoice processing failed\n${invoiceResult.error}`)
+        .setBackground(colors.error);
       return;
     }
 
@@ -290,6 +297,11 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       if (!paymentResult.success) {
         setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
+        // Clear balance cell with error indicator (consistent error state)
+        sheet.getRange(rowNum, cols.balance + 1)
+          .clearContent()
+          .setNote(`⚠️ Payment processing failed\n${paymentResult.error}`)
+          .setBackground(colors.error);
         return;
       }
     }
@@ -381,11 +393,14 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
 /**
  * Auto-populate payment amount for Due payment type
  * Fills payment amount with the balance due of selected invoice
- * 
+ *
+ * OPTIMIZED: Returns updated value for local array update (eliminates redundant reads)
+ *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} row - Row number
  * @param {string} supplier - Supplier name
  * @param {string} prevInvoice - Selected previous invoice number
+ * @returns {number|string} The payment amount that was set (or empty string if error)
  */
 function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
   try {
@@ -398,33 +413,40 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
       targetCell
         .setValue(invoiceBalance)
         .setNote(`Outstanding balance of ${prevInvoice}`)
+      return invoiceBalance;  // Return value for caller to update local array
     } else {
       // Invoice has no balance or not found
       targetCell
         .clearContent()
         .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance`)
         .setBackground(CONFIG.colors.warning);
+      return '';  // Return empty for caller to update local array
     }
 
   } catch (error) {
     logSystemError('autoPopulateDuePaymentAmount',
       `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
 
+    const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
     targetCell
       .clearContent()
       .setNote('Error loading invoice balance')
       .setBackground(CONFIG.colors.error);
+    return '';  // Return empty on error
   }
 }
 
 /**
  * Auto-populate payment fields for Regular and Partial payment types
  * Copies Invoice No to Previous Invoice and Received Amount to Payment Amount
- * 
+ *
+ * OPTIMIZED: Returns updated values for local array update (eliminates redundant reads)
+ *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} row - Row number
  * @param {string} paymentType - Payment type (Regular or Partial)
  * @param {Array} rowData - Pre-read row values
+ * @returns {Object} Object with {paymentAmt, prevInvoice} values that were set
  */
 function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
   try {
@@ -459,9 +481,16 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
         .setBackground(null)
     }
 
+    // Return values for caller to update local array (eliminates redundant read)
+    return {
+      paymentAmt: receivedAmt || '',
+      prevInvoice: invoiceNo || ''
+    };
+
   } catch (error) {
     logSystemError('autoPopulatePaymentFields',
       `Failed to auto-populate at row ${row}: ${error.toString()}`);
+    return { paymentAmt: '', prevInvoice: '' };  // Return empty on error
   }
 }
 

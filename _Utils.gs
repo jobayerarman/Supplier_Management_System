@@ -371,25 +371,38 @@ function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChec
  * OPTIMIZED: Batch status update (Single API call)
  * Combines status, user, time, checkbox, and background color
  */
+/**
+ * Set post status and metadata in daily sheet
+ * OPTIMIZED: Reduced from 2 separate function calls to inline operations
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
+ * @param {number} row - Row number
+ * @param {string} status - Status message
+ * @param {string} user - User name
+ * @param {string} time - Timestamp string
+ * @param {boolean} keepChecked - Keep post checkbox checked
+ * @param {string} bgColor - Background color hex code
+ */
 function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor) {
   const cols = CONFIG.cols;
-  
+
   // Prepare all values in single array
   const updates = [[keepChecked, status, user, time]];
-  
+
   // Single batch write (columns: Post checkbox, Status, PostedBy, PostedAt)
   const startCol = cols.post + 1;
-  const range = sheet.getRange(row, startCol, 1, 4);
-  range.setValues(updates);
-  
-  // Apply background color to entire row
+  sheet.getRange(row, startCol, 1, 4).setValues(updates);
+
+  // Apply background color to entire row (inline to avoid function call overhead)
   if (bgColor) {
-    setRowBackground(sheet, row, bgColor)
+    const totalCols = CONFIG.totalColumns.daily - 4; // A:J Column
+    sheet.getRange(row, 1, 1, totalCols).setBackground(bgColor);
   }
 }
 
 /**
  * Set background color for entire row
+ * NOTE: This function kept for backward compatibility but setBatchPostStatus now inlines this logic
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {string} color - Hex color code
