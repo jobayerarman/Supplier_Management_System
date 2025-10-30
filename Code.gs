@@ -51,6 +51,9 @@ function onEdit(e) {
     const receivedAmt = parseFloat(rowValues[configCols.receivedAmt]) || 0;
     const paymentAmt = parseFloat(rowValues[configCols.paymentAmt]) || 0;
 
+    // Track if balance update is needed (consolidated at end)
+    let updateBalance = false;
+
     // ═══ CENTRALIZED BRANCHING - MINIMAL WRITES ═══
     switch (col) {
       // ═══ 1. HANDLE POSTING ═══
@@ -121,8 +124,11 @@ function onEdit(e) {
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
-        InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        // Only build dropdown for Due payment type
+        if (paymentType === 'Due') {
+          InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+        }
+        updateBalance = true;
         break;
 
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
@@ -136,9 +142,10 @@ function onEdit(e) {
       case configCols.receivedAmt + 1:
         if (paymentType === 'Regular') {
           sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
-          rowValues = activeRow.getValues()[0];
+          // Update local array instead of re-reading from sheet
+          rowValues[configCols.paymentAmt] = receivedAmt;
         }
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        updateBalance = true;
         break;
 
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
@@ -147,33 +154,45 @@ function onEdit(e) {
 
         if (['Regular', 'Partial'].includes(paymentType)) {
           autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
-          rowValues = activeRow.getValues()[0];
+          // Update local array instead of re-reading from sheet
+          // autoPopulatePaymentFields sets: paymentAmt = receivedAmt, prevInvoice = invoiceNo
+          rowValues[configCols.paymentAmt] = receivedAmt;
+          rowValues[configCols.prevInvoice] = invoiceNo;
         } else if (paymentType === 'Due') {
           // Due: Build dropdown for previous invoices, calculate balance
           InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
         }
 
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        updateBalance = true;
         break;
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
         if ((paymentType === 'Due') && supplier && editedValue) {
           autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
-          rowValues = activeRow.getValues()[0];
+          // Update local array instead of re-reading from sheet
+          // autoPopulateDuePaymentAmount sets paymentAmt to invoice balance or clears it
+          const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(editedValue, supplier);
+          rowValues[configCols.paymentAmt] = invoiceBalance > 0 ? invoiceBalance : '';
         }
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        updateBalance = true;
         break;
 
       // ═══ 7. HANDLE PAYMENT AMOUNT EDIT ═══
       case configCols.paymentAmt + 1:
         if (paymentType !== 'Unpaid') {
-          BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+          updateBalance = true;
         }
         break;
 
       default:
         return; // Nothing to process
+    }
+
+    // ═══ CONSOLIDATED BALANCE UPDATE ═══
+    // Single balance calculation and sheet write (reduces 5 calls to 1)
+    if (updateBalance) {
+      BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
     }
 
   } catch (error) {
@@ -258,18 +277,15 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     // BEFORE-POST AUDIT
     // auditAction("══NEW-POST══", data, "Starting posting process");
 
-    // ═══ 4. PRE-CALCULATE BALANCE (Before invoice/payment) ═══
-    const currentOutstanding = BalanceCalculator.getSupplierOutstanding(supplier);
-    data.preBalance = currentOutstanding;
-
-    // ═══ 5. PROCESS INVOICE (Returns existing invoice if found) ═══
+    // ═══ 4. PROCESS INVOICE (Returns existing invoice if found) ═══
+    // Note: preBalance calculation removed - was unused (balance calculated after posting)
     const invoiceResult = InvoiceManager.processOptimized(data);
     if (!invoiceResult.success) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
       return;
     }
 
-    // ═══ 6. PROCESS PAYMENT (Conditional, with pre-calculated balance) ═══
+    // ═══ 5. PROCESS PAYMENT (Conditional) ═══
     if (shouldProcessPayment(data)) {
       const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       if (!paymentResult.success) {
@@ -278,10 +294,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
-    // ═══ 7. CALCULATE FINAL BALANCE (Using cached supplier outstanding) ═══
-    // const finalBalance = BalanceCalculator.calculate(data);
-
-    // ═══ 8. BATCH SUCCESS UPDATE (Single API call) ═══
+    // ═══ 6. BATCH SUCCESS UPDATE (Single API call) ═══
     setBatchPostStatus(
       sheet,
       rowNum,
@@ -292,14 +305,13 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       colors.success
     );
 
-    // ═══ 9. UPDATE BALANCE CELL (Uses BalanceCalculator) ═══
+    // ═══ 7. UPDATE BALANCE CELL (Uses BalanceCalculator) ═══
     BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
-    // ═══ 10. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
+    // ═══ 8. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
     InvoiceCache.invalidateSupplierCache(supplier);
 
-    // ═══ 11. FINAL AUDIT ═══
-    // auditAction("══AFTER-POST══", data, `Posted successfully | Balance: ${currentOutstanding} → ${finalBalance}`);
+    // ═══ 9. FINAL AUDIT ═══
     // auditAction("══AFTER-POST══", data, `Posted successfully`);
 
   } catch (error) {
