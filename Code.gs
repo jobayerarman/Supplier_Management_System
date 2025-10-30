@@ -307,13 +307,19 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
-    // ═══ 4. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
+    // ═══ 4. INVALIDATE CACHE (Before balance calculation) ═══
+    // CRITICAL: Must invalidate BEFORE getSupplierOutstanding() to ensure fresh data
+    // Invoice/payment processing updated formulas in InvoiceDatabase sheet
+    // Cache must be cleared so balance calculation reads updated values
+    InvoiceCache.invalidateSupplierCache(supplier);
+
+    // ═══ 5. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
     // Calculate final balance after invoice/payment processing
     const finalBalance = BalanceCalculator.getSupplierOutstanding(supplier);
     const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
     const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
 
-    // ═══ 5. BATCHED WRITES (Minimize API calls) ═══
+    // ═══ 6. BATCHED WRITES (Minimize API calls) ═══
     // Write 1: Status columns (J-M: post, status, enteredBy, timestamp)
     const statusUpdates = [[true, "POSTED", enteredBy.split("@")[0], timeStr]];
     sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
@@ -333,9 +339,6 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     // Extends to include balance cell (H) in the success color
     const bgRange = CONFIG.totalColumns.daily - 4; // A:J
     sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
-
-    // ═══ 6. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
-    InvoiceCache.invalidateSupplierCache(supplier);
 
     // ═══ 7. FINAL AUDIT ═══
     // auditAction("══AFTER-POST══", data, `Posted successfully`);
