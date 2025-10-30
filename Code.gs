@@ -97,6 +97,20 @@ function onEdit(e) {
             break; // Exit without processing
           }
 
+          // ═══ IMMEDIATE UX FEEDBACK (Before lock acquisition) ═══
+          // Show "PROCESSING..." status immediately so user knows system is working
+          // This provides instant feedback during the 200-500ms processing delay
+          const processingTimeStr = DateUtils.formatTime(now);
+          setBatchPostStatus(
+            sheet,
+            row,
+            "PROCESSING...",
+            "SYSTEM",
+            processingTimeStr,
+            true, // Keep checkbox checked
+            CONFIG.colors.processing
+          );
+
           // ═══ ACQUIRE LOCK ONLY AFTER VALIDATION PASSES ═══
           const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
           if (!lock) {
