@@ -203,11 +203,20 @@ function onEdit(e) {
  *
  * Performance improvements:
  * 1. Zero redundant reads (uses pre-read rowData)
- * 2. Batch writes (single API call for status update)
- * 3. Surgical cache invalidation (supplier-specific)
- * 4. Pre-calculated balance passed through pipeline
+ * 2. Batched writes (5 separate calls, down from 6)
+ *    - Status columns (1 setValues)
+ *    - Balance value + note (2 separate calls - setValue + setNote)
+ *    - System ID if missing (1 setValue)
+ *    - Consolidated background (1 setBackground for entire row including balance)
+ * 3. Pre-calculated balance before writes (eliminates updateBalanceCell call)
+ * 4. Surgical cache invalidation (supplier-specific)
  * 5. Early validation exit (fail fast)
  * 6. Invoice date passed as parameter (eliminates redundant sheet read)
+ *
+ * Write sequence:
+ * - All processing done first (invoice + payment)
+ * - All values pre-calculated
+ * - All writes done in batch at end
  *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
@@ -271,16 +280,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       return;
     }
 
-    // ═══ 3. WRITE SYSTEM ID (Only if missing) ═══
-    if (!rowData[cols.sysId]) {
-      sheet.getRange(rowNum, cols.sysId + 1).setValue(data.sysId);
-    }
-
-    // BEFORE-POST AUDIT
-    // auditAction("══NEW-POST══", data, "Starting posting process");
-
-    // ═══ 4. PROCESS INVOICE (Returns existing invoice if found) ═══
-    // Note: preBalance calculation removed - was unused (balance calculated after posting)
+    // ═══ 3. PROCESS INVOICE & PAYMENT (Before any sheet writes) ═══
+    // Process invoice first
     const invoiceResult = InvoiceManager.processOptimized(data);
     if (!invoiceResult.success) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
@@ -292,7 +293,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       return;
     }
 
-    // ═══ 5. PROCESS PAYMENT (Conditional) ═══
+    // Process payment if applicable
     if (shouldProcessPayment(data)) {
       const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       if (!paymentResult.success) {
@@ -306,24 +307,37 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
-    // ═══ 6. BATCH SUCCESS UPDATE (Single API call) ═══
-    setBatchPostStatus(
-      sheet,
-      rowNum,
-      "POSTED",
-      enteredBy.split("@")[0],
-      timeStr,
-      true,
-      colors.success
-    );
+    // ═══ 4. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
+    // Calculate final balance after invoice/payment processing
+    const finalBalance = BalanceCalculator.getSupplierOutstanding(supplier);
+    const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
+    const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
 
-    // ═══ 7. UPDATE BALANCE CELL (Uses BalanceCalculator) ═══
-    BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+    // ═══ 5. BATCHED WRITES (Minimize API calls) ═══
+    // Write 1: Status columns (J-M: post, status, enteredBy, timestamp)
+    const statusUpdates = [[true, "POSTED", enteredBy.split("@")[0], timeStr]];
+    sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
 
-    // ═══ 8. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
+    // Write 2: Balance value (H)
+    sheet.getRange(rowNum, cols.balance + 1).setValue(finalBalance);
+
+    // Write 3: Balance note
+    sheet.getRange(rowNum, cols.balance + 1).setNote(balanceNote);
+
+    // Write 4: System ID if missing (N)
+    if (sysIdValue) {
+      sheet.getRange(rowNum, cols.sysId + 1).setValue(sysIdValue);
+    }
+
+    // Write 5: Consolidated background color (A-J including balance)
+    // Extends to include balance cell (H) in the success color
+    const bgRange = CONFIG.totalColumns.daily - 4; // A:J
+    sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
+
+    // ═══ 6. SURGICAL CACHE INVALIDATION (Supplier-specific only) ═══
     InvoiceCache.invalidateSupplierCache(supplier);
 
-    // ═══ 9. FINAL AUDIT ═══
+    // ═══ 7. FINAL AUDIT ═══
     // auditAction("══AFTER-POST══", data, `Posted successfully`);
 
   } catch (error) {
