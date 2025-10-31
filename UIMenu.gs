@@ -30,13 +30,9 @@ function onOpen() {
 function batchValidateAllRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet (01-31)
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch validation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -62,13 +58,9 @@ function batchValidateAllRows() {
 function batchPostAllRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet (01-31)
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch posting can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -94,13 +86,9 @@ function batchPostAllRows() {
 function batchValidateSelectedRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch validation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -125,13 +113,9 @@ function batchValidateSelectedRows() {
 function batchPostSelectedRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch posting can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -169,13 +153,9 @@ function batchPostSelectedRows() {
 function clearAllPostCheckboxes() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'This operation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -206,6 +186,27 @@ function clearAllPostCheckboxes() {
     'Success',
     5
   );
+}
+
+/**
+ * Validates that the current sheet is a daily sheet (01-31)
+ * Helper function to eliminate code duplication across menu functions
+ *
+ * @param {Sheet} sheet - The sheet to validate
+ * @return {boolean} True if valid daily sheet, false otherwise (alert shown to user)
+ */
+function validateDailySheet(sheet) {
+  const ui = SpreadsheetApp.getUi();
+  const sheetName = sheet.getName();
+
+  if (!CONFIG.dailySheets.includes(sheetName)) {
+    ui.alert('Invalid Sheet',
+             'This operation can only be performed on daily sheets (01-31).',
+             ui.ButtonSet.OK);
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -250,10 +251,6 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
-  // Read all data at once for performance
-  const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
-  const allData = dataRange.getValues();
-
   const results = {
     total: numRows,
     valid: 0,
@@ -262,34 +259,60 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     errors: []
   };
 
-  // Validate each row
-  for (let i = 0; i < allData.length; i++) {
-    const rowNum = startRow + i;
-    const rowData = allData[i];
+  try {
+    // Read all data at once for performance
+    const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
+    const allData = dataRange.getValues();
 
-    // Skip empty rows (no supplier)
-    if (!rowData[CONFIG.cols.supplier]) {
-      results.skipped++;
-      continue;
+    // Validate each row
+    for (let i = 0; i < allData.length; i++) {
+      const rowNum = startRow + i;
+      const rowData = allData[i];
+
+      // Skip empty rows (no supplier)
+      if (!rowData[CONFIG.cols.supplier]) {
+        results.skipped++;
+        continue;
+      }
+
+      try {
+        // Build validation data object
+        const data = buildDataObject(rowData, rowNum, sheetName);
+
+        // Validate
+        const validation = validatePostData(data);
+
+        if (validation.valid) {
+          results.valid++;
+        } else {
+          results.invalid++;
+          results.errors.push({
+            row: rowNum,
+            supplier: data.supplier,
+            invoiceNo: data.invoiceNo || 'N/A',
+            error: validation.error || validation.errors.join(', ')
+          });
+        }
+      } catch (rowError) {
+        // Handle individual row validation errors
+        results.invalid++;
+        results.errors.push({
+          row: rowNum,
+          supplier: rowData[CONFIG.cols.supplier] || 'Unknown',
+          invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A',
+          error: `Validation error: ${rowError.message}`
+        });
+      }
     }
-
-    // Build validation data object
-    const data = buildDataObject(rowData, rowNum, sheetName);
-
-    // Validate
-    const validation = validatePostData(data);
-
-    if (validation.valid) {
-      results.valid++;
-    } else {
-      results.invalid++;
-      results.errors.push({
-        row: rowNum,
-        supplier: data.supplier,
-        invoiceNo: data.invoiceNo || 'N/A',
-        error: validation.error || validation.errors.join(', ')
-      });
-    }
+  } catch (error) {
+    // Handle critical errors (sheet access, config issues, etc.)
+    Logger.log(`Critical error in validateRowsInSheet: ${error.message}`);
+    results.errors.push({
+      row: 'N/A',
+      supplier: 'SYSTEM',
+      invoiceNo: 'N/A',
+      error: `System error: ${error.message}`
+    });
   }
 
   return results;
@@ -440,8 +463,9 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       // Invalidate cache for this supplier
       InvoiceCache.invalidateSupplierCache(data.supplier);
 
-      // Log success
-      // AuditLogger.log('BATCH_POST', data, 'Posted via batch operation');
+      // Note: Success audit logging disabled to avoid redundancy
+      // InvoiceManager and PaymentManager already log INVOICE_CREATED and PAYMENT_CREATED
+      // This batch-level log would create duplicate entries in AuditLog
 
       results.posted++;
 
@@ -506,7 +530,6 @@ function buildDataObject(rowData, rowNum, sheetName) {
  */
 function showValidationResults(results, isPosting) {
   const ui = SpreadsheetApp.getUi();
-  const operation = isPosting ? 'Posting' : 'Validation';
 
   let message = `Total Rows Processed: ${results.total}\n`;
 
