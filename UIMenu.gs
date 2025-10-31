@@ -361,6 +361,13 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
+  // ═══ UX FEEDBACK: Show initial toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Starting batch post of ${numRows} rows...`,
+    'Processing',
+    3
+  );
+
   // Read all data at once for performance
   const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
   const allData = dataRange.getValues();
@@ -377,6 +384,15 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   for (let i = 0; i < allData.length; i++) {
     const rowNum = startRow + i;
     const rowData = allData[i];
+
+    // ═══ UX FEEDBACK: Progress toast every 25 rows ═══
+    if ((i + 1) % 25 === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `Processed ${i + 1} of ${numRows} rows...`,
+        'Progress',
+        2
+      );
+    }
 
     // Skip empty rows (no supplier)
     if (!rowData[CONFIG.cols.supplier]) {
@@ -446,6 +462,18 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       }
 
+      // ═══ CRITICAL FIX: Invalidate cache BEFORE balance calculation ═══
+      // Invoice/payment processing updated formulas in InvoiceDatabase
+      // Cache must be cleared so balance calculation reads updated values
+      // This ensures we always get fresh data for accurate balance
+      CacheManager.invalidateSupplierCache(data.supplier);
+
+      // ═══ PRE-CALCULATE BALANCE: Instead of calling updateBalanceCell ═══
+      // Get fresh balance after cache cleared by invoice/payment processing
+      const finalBalance = BalanceCalculator.getSupplierOutstanding(data.supplier);
+      const now = new Date();
+      const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
+
       // Update status to POSTED
       setBatchPostStatus(
         sheet,
@@ -457,11 +485,9 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         CONFIG.colors.success
       );
 
-      // Update balance cell
-      BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
-
-      // Invalidate cache for this supplier
-      CacheManager.invalidateSupplierCache(data.supplier);
+      // Write balance value and note
+      const balanceCell = sheet.getRange(rowNum, CONFIG.cols.balance + 1);
+      balanceCell.setValue(finalBalance).setNote(balanceNote);
 
       // Note: Success audit logging disabled to avoid redundancy
       // InvoiceManager and PaymentManager already log INVOICE_CREATED and PAYMENT_CREATED
@@ -493,6 +519,13 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
     }
   }
+
+  // ═══ UX FEEDBACK: Final completion toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Completed: ${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
+    'Success',
+    5
+  );
 
   return results;
 }
