@@ -325,7 +325,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     // CRITICAL: Must invalidate BEFORE getSupplierOutstanding() to ensure fresh data
     // Invoice/payment processing updated formulas in InvoiceDatabase sheet
     // Cache must be cleared so balance calculation reads updated values
-    InvoiceCache.invalidateSupplierCache(supplier);
+    CacheManager.invalidateSupplierCache(supplier);
 
     // ═══ 5. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
     // Calculate final balance after invoice/payment processing

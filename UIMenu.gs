@@ -435,7 +435,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
       // Invalidate cache for this supplier
-      InvoiceCache.invalidateSupplierCache(data.supplier);
+      CacheManager.invalidateSupplierCache(data.supplier);
 
       // Log success
       // AuditLogger.log('BATCH_POST', data, 'Posted via batch operation');
