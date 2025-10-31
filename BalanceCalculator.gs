@@ -5,7 +5,7 @@
  * Handles all balance-related calculations and supplier ledger updates
  * 
  * OPTIMIZATIONS:
- * - getSupplierOutstanding() uses InvoiceCache.supplierIndex for O(m) performance
+ * - getSupplierOutstanding() uses CacheManager.supplierIndex for O(m) performance
  * - Consolidated calculate() and calculatePreview() logic via _calculateTransactionImpact()
  * - Moved updateBalanceCell() from Code.gs for better encapsulation
  * - Single source of truth for all balance operations
@@ -220,7 +220,7 @@ const BalanceCalculator = {
 
   /**
    * Get total outstanding balance for a supplier
-   * OPTIMIZED: Uses InvoiceCache.supplierIndex for O(m) performance where m = supplier's invoices
+   * OPTIMIZED: Uses CacheManager.supplierIndex for O(m) performance where m = supplier's invoices
    * 
    * Performance improvements:
    * - Leverages cached data (no sheet read)
@@ -238,7 +238,7 @@ const BalanceCalculator = {
 
     try {
       // Get cached data with supplier index (zero API calls when cache is warm)
-      const { data, supplierIndex } = InvoiceCache.getInvoiceData();
+      const { data, supplierIndex } = CacheManager.getInvoiceData();
 
       const normalizedSupplier = StringUtils.normalize(supplier);
       const rowIndices = supplierIndex.get(normalizedSupplier);

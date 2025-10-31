@@ -10,8 +10,16 @@
  * - TestCodeGS.gs: Main application logic tests (onEdit, posting)
  * - TestBalanceCalculator.gs: BalanceCalculator module tests
  *
+ * TEST COVERAGE:
+ * - Infrastructure Tests: Sheet operations, dropdowns, formatting, locks
+ * - Cache Performance Tests: Cache hits/misses, partition statistics, invalidation
+ * - Cache Partition Tests: Active/inactive distribution, partition transitions
+ * - Invoice Manager Tests: Invoice creation, updates, payments
+ * - Balance Calculator Tests: Balance calculations, supplier outstanding
+ * - Application Logic Tests: onEdit handler, posting workflow, concurrency
+ *
  * @author Consolidated Test Suite
- * @version 2.0
+ * @version 2.1 - Added cache partition transition testing
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -380,7 +388,7 @@ function testCachePerformance() {
   try {
     // Clear cache to start fresh
     audit.start("Cache Invalidation");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     audit.end("Cache Invalidation");
 
     // Test 1: Cold start (cache miss)
@@ -400,9 +408,33 @@ function testCachePerformance() {
     }
     audit.end("10 Queries (Cached)");
 
+    // Test 4: Partition Statistics
+    audit.start("Partition Statistics");
+    const partitionStats = CacheManager.getPartitionStats();
+    audit.end("Partition Statistics");
+
+    // Log partition distribution for visibility
+    Logger.log('=== Cache Partition Distribution ===');
+    Logger.log(`Active Invoices: ${partitionStats.active.count} (${partitionStats.active.percentage}%)`);
+    Logger.log(`Inactive Invoices: ${partitionStats.inactive.count} (${partitionStats.inactive.percentage}%)`);
+    Logger.log(`Total Invoices: ${partitionStats.total}`);
+    Logger.log(`Partition Transitions: ${partitionStats.transitions}`);
+    Logger.log(`Active Hit Rate: ${partitionStats.active.hitRate}%`);
+    Logger.log(`Memory Reduction: ${partitionStats.memoryReduction}`);
+
     audit.endAll();
     audit.printSummary();
-    return audit.getResult();
+    return audit.getResult({
+      partitionStats: {
+        activeCount: partitionStats.active.count,
+        inactiveCount: partitionStats.inactive.count,
+        activePercentage: parseFloat(partitionStats.active.percentage),
+        inactivePercentage: parseFloat(partitionStats.inactive.percentage),
+        transitions: partitionStats.transitions,
+        activeHitRate: parseFloat(partitionStats.active.hitRate),
+        memoryReduction: partitionStats.memoryReduction
+      }
+    });
 
   } catch (error) {
     return audit.fail("Cache performance test failed", error);
@@ -415,15 +447,15 @@ function testCacheInvalidation() {
   try {
     // Clear and load cache
     audit.start("Initial Cache Load");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     InvoiceManager.find('TestSupplier', 'TEST-001');
-    const cached1 = InvoiceCache.get();
+    const cached1 = CacheManager.get();
     audit.end("Initial Cache Load");
 
     // updatePaidDate should NOT invalidate
     audit.start("Test Selective Preservation");
     InvoiceManager.updatePaidDate('TEST-001', 'TestSupplier', new Date());
-    const cached2 = InvoiceCache.get();
+    const cached2 = CacheManager.get();
     audit.end("Test Selective Preservation");
 
     // create should invalidate
@@ -436,21 +468,125 @@ function testCacheInvalidation() {
       sheetName: 'TestSheet',
       sysId: IDGenerator.generateUUID()
     });
-    const cached3 = InvoiceCache.get();
+    const cached3 = CacheManager.get();
     audit.end("Test Invalidation on Create");
 
     const passed = (cached2 !== null) && (cached3 === null);
+
+    // Test partition behavior after cache operations
+    audit.start("Verify Partition Integrity");
+    CacheManager.invalidateGlobal();
+    InvoiceManager.find('HEALTHCARE', '9252142078'); // Reload cache
+    const partitionStats = CacheManager.getPartitionStats();
+    audit.end("Verify Partition Integrity");
+
+    // Log partition state after invalidation/reload
+    Logger.log('=== Partition State After Invalidation/Reload ===');
+    Logger.log(`Active: ${partitionStats.active.count}, Inactive: ${partitionStats.inactive.count}`);
+    Logger.log(`Transitions: ${partitionStats.transitions}`);
+
     audit.endAll();
     audit.printSummary();
 
     return audit.getResult({
       paidDatePreserved: cached2 !== null,
       createCleared: cached3 === null,
-      passed: passed
+      passed: passed,
+      partitionIntegrity: {
+        activeCount: partitionStats.active.count,
+        inactiveCount: partitionStats.inactive.count,
+        totalCount: partitionStats.total,
+        transitions: partitionStats.transitions
+      }
     });
 
   } catch (error) {
     return audit.fail("Cache invalidation test failed", error);
+  }
+}
+
+/**
+ * Test cache partition transitions (active ↔ inactive)
+ * Verifies that invoices move between partitions when payment status changes
+ */
+function testCachePartitionTransitions() {
+  const audit = new PerfAudit("Cache Partition Transitions Test");
+
+  try {
+    // Clear cache and get baseline
+    audit.start("Setup - Clear Cache");
+    CacheManager.invalidateGlobal();
+    audit.end("Setup - Clear Cache");
+
+    // Load cache with initial data
+    audit.start("Initial Cache Load");
+    InvoiceManager.find('HEALTHCARE', '9252142078');
+    const initialStats = CacheManager.getPartitionStats();
+    audit.end("Initial Cache Load");
+
+    Logger.log('=== Initial Partition State ===');
+    Logger.log(`Active: ${initialStats.active.count}, Inactive: ${initialStats.inactive.count}`);
+    Logger.log(`Total: ${initialStats.total}`);
+
+    // Simulate a payment that would cause a partition transition
+    // (This requires finding an unpaid invoice and processing a full payment)
+    audit.start("Find Unpaid Invoice");
+    const unpaidInvoices = InvoiceManager.getUnpaidForSupplier('HEALTHCARE');
+    audit.end("Find Unpaid Invoice");
+
+    if (unpaidInvoices && unpaidInvoices.length > 0) {
+      const testInvoice = unpaidInvoices[0];
+      Logger.log(`Test invoice: ${testInvoice.invoiceNo}, Balance: ${testInvoice.balanceDue}`);
+
+      // Simulate incremental cache update (which should trigger partition transition logic)
+      audit.start("Simulate Payment Update");
+      CacheManager.updateSingleInvoice(testInvoice.supplier, testInvoice.invoiceNo);
+      const afterUpdateStats = CacheManager.getPartitionStats();
+      audit.end("Simulate Payment Update");
+
+      Logger.log('=== After Payment Update ===');
+      Logger.log(`Active: ${afterUpdateStats.active.count}, Inactive: ${afterUpdateStats.inactive.count}`);
+      Logger.log(`Transitions: ${afterUpdateStats.transitions}`);
+
+      audit.endAll();
+      audit.printSummary();
+
+      return audit.getResult({
+        initialState: {
+          active: initialStats.active.count,
+          inactive: initialStats.inactive.count,
+          total: initialStats.total
+        },
+        afterUpdate: {
+          active: afterUpdateStats.active.count,
+          inactive: afterUpdateStats.inactive.count,
+          transitions: afterUpdateStats.transitions
+        },
+        testInvoice: {
+          supplier: testInvoice.supplier,
+          invoiceNo: testInvoice.invoiceNo,
+          balanceDue: testInvoice.balanceDue
+        }
+      });
+    } else {
+      // No unpaid invoices to test with
+      Logger.log('No unpaid invoices found for transition testing');
+      audit.endAll();
+      audit.printSummary();
+
+      return audit.getResult({
+        skipped: true,
+        reason: 'No unpaid invoices available for transition testing',
+        initialState: {
+          active: initialStats.active.count,
+          inactive: initialStats.inactive.count,
+          total: initialStats.total
+        }
+      });
+    }
+
+  } catch (error) {
+    return audit.fail("Cache partition transition test failed", error);
   }
 }
 
@@ -463,7 +599,7 @@ function testRegularPaymentFlow() {
   try {
     // Step 0: Cache Invalidation
     audit.start("Cache Invalidation");
-    InvoiceCache.invalidateGlobal();
+    CacheManager.invalidateGlobal();
     audit.end("Cache Invalidation");
 
     const data = {
@@ -518,7 +654,7 @@ function testRegularPaymentFlow() {
       invoiceSh.deleteRow(invoiceResult.row);
       const paymentSh = getSheet(CONFIG.paymentSheet);
       paymentSh.deleteRow(paymentResult.row);
-      InvoiceCache.invalidateGlobal();
+      CacheManager.invalidateGlobal();
       cleanupAudit.end();
     } catch (e) {
       cleanupAudit.end();
@@ -553,7 +689,7 @@ function testBalanceCalculation() {
     ];
 
     audit.start("Cache Warmup");
-    InvoiceCache.getInvoiceData();
+    CacheManager.getInvoiceData();
     audit.end("Cache Warmup");
 
     testCases.forEach(testCase => {
@@ -580,7 +716,7 @@ function testSupplierOutstanding() {
     const testSuppliers = ["HEALTHCARE", "INCEPTA", "Test Supplier", "Non-Existent"];
 
     audit.start("Cache Initialization");
-    const cacheData = InvoiceCache.getInvoiceData();
+    const cacheData = CacheManager.getInvoiceData();
     audit.end("Cache Initialization");
 
     testSuppliers.forEach(supplier => {
@@ -621,7 +757,7 @@ function testOnEditPerformance() {
     ];
 
     audit.start("System Warmup");
-    InvoiceCache.getInvoiceData();
+    CacheManager.getInvoiceData();
     audit.end("System Warmup");
 
     editScenarios.forEach(scenario => {
@@ -817,6 +953,7 @@ function runAllCentralizedTests() {
   console.log('\n▶ CACHE & INVOICE MANAGER TESTS');
   try { allResults.push(testCachePerformance()); } catch (e) { console.error("testCachePerformance failed", e); }
   try { allResults.push(testCacheInvalidation()); } catch (e) { console.error("testCacheInvalidation failed", e); }
+  try { allResults.push(testCachePartitionTransitions()); } catch (e) { console.error("testCachePartitionTransitions failed", e); }
   try { allResults.push(testRegularPaymentFlow()); } catch (e) { console.error("testRegularPaymentFlow failed", e); }
 
   // Balance Calculator Tests

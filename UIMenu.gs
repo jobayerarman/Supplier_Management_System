@@ -461,7 +461,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
       // Invalidate cache for this supplier
-      InvoiceCache.invalidateSupplierCache(data.supplier);
+      CacheManager.invalidateSupplierCache(data.supplier);
 
       // Note: Success audit logging disabled to avoid redundancy
       // InvoiceManager and PaymentManager already log INVOICE_CREATED and PAYMENT_CREATED

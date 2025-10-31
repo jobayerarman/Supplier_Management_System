@@ -287,7 +287,7 @@ const PaymentManager = {
       let cachedInvoice = null;
 
       if (targetInvoice) {
-        const cacheUpdated = InvoiceCache.updateInvoiceInCache(
+        const cacheUpdated = CacheManager.updateInvoiceInCache(
           data.supplier,
           targetInvoice
         );
@@ -543,7 +543,7 @@ const PaymentManager = {
       // ✓ OPTIMIZATION: Only update cache if we actually wrote the paid date
       // If cachedInvoice was provided, cache is already up-to-date except for paid date field
       if (result.paidDateUpdated) {
-        InvoiceCache.updateInvoiceInCache(supplier, invoiceNo);
+        CacheManager.updateInvoiceInCache(supplier, invoiceNo);
       }
 
       // ═══ STEP 7: LOG SUCCESS ═══

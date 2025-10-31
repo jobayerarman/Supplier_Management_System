@@ -106,6 +106,7 @@ const CONFIG = {
     success: '#E8F5E8',      // Light green
     error: '#FFEBEE',        // Light red
     warning: '#FFF4E6',      // Light orange
+    processing: '#FFF9C4',   // Light yellow (for in-progress operations)
     info: '#E3F2FD',         // Light blue
     neutral: '#F5F5F5'       // Light gray
   },

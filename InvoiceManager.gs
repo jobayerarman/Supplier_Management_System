@@ -16,360 +16,6 @@
  * - Memory-efficient filtering
  */
 
-// ═══ INTELLIGENT CACHE WITH WRITE-THROUGH ═══
-/**
- * Optimized Invoice Cache Module
- * ----------------------------------------------------
- * Features:
- *  - Global invoice data cache (in-memory)
- *  - Fast lookup by supplier|invoiceNo
- *  - Supplier-wise index for quick filtering
- *  - TTL-based auto-expiration
- *  - Write-through cache for immediate findability
- *  - Surgical supplier-specific invalidation
- */
-const InvoiceCache = {
-  data: null,
-  indexMap: null,        // "SUPPLIER|INVOICE NO" -> row index
-  supplierIndex: null,   // "SUPPLIER" -> [row indices]
-  timestamp: null,
-  TTL: CONFIG.rules.CACHE_TTL_MS,
-
-  /**
-   * Get cached data if valid (within TTL)
-   * @returns {{data:Array, indexMap:Map, supplierIndex:Map}|null}
-   */
-  get: function () {
-    const now = Date.now();
-    if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
-      return {
-        data: this.data,
-        indexMap: this.indexMap,
-        supplierIndex: this.supplierIndex
-      };
-    }
-    // Expired or not initialized
-    // if (this.timestamp && (now - this.timestamp) >= this.TTL) {
-    //   AuditLogger.logWarning('InvoiceCache', 'Cache expired, reloading data');
-    // }
-    return null;
-  },
-
-  /**
-   * Set new cache with supplier/invoice indexing
-   * @param {Array[]} data - Sheet data array
-   */
-  set: function (data) {
-    this.data = data;
-    this.timestamp = Date.now();
-    this.indexMap = new Map();
-    this.supplierIndex = new Map();
-
-    const col = CONFIG.invoiceCols;
-
-    // Start from 1 if row 0 = header
-    for (let i = 1; i < data.length; i++) {
-      const supplier = StringUtils.normalize(data[i][col.supplier]);
-      const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
-      if (!supplier || !invoiceNo) continue;
-
-      const key = `${supplier}|${invoiceNo}`;
-      this.indexMap.set(key, i);
-
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(i);
-    }
-  },
-
-  /**
-   * ADD INVOICE TO CACHE (Write-Through with Evaluation)
-   * ✓ FIXED: Now reads back evaluated values from sheet
-   * 
-   * KEY FIX: After writing formulas to sheet, immediately read back
-   *          the evaluated values to ensure cache contains numeric data
-   * 
-   * @param {number} rowNumber - Sheet row number (1-based)
-   * @param {Array} rowData - Invoice row data (may contain formulas)
-   */
-  addInvoiceToCache: function (rowNumber, rowData) {
-    // Only add if cache is currently active
-    if (!this.data || !this.indexMap || !this.supplierIndex) {
-      AuditLogger.logWarning('InvoiceCache.addInvoiceToCache',
-        'Cache not initialized, skipping write-through');
-      return;
-    }
-
-    const col = CONFIG.invoiceCols;
-    const supplier = StringUtils.normalize(rowData[col.supplier]);
-    const invoiceNo = StringUtils.normalize(rowData[col.invoiceNo]);
-
-    if (!supplier || !invoiceNo) {
-      AuditLogger.logWarning('InvoiceCache.addInvoiceToCache',
-        'Invalid supplier or invoice number, skipping');
-      return;
-    }
-
-    try {
-      // Calculate array index (row number is 1-based, array is 0-based)
-      const arrayIndex = rowNumber - 1;
-
-      // Ensure array is large enough
-      while (this.data.length <= arrayIndex) {
-        this.data.push([]);
-      }
-
-      // ✓ FIX: Read back EVALUATED values from sheet
-      // This ensures formulas are calculated and we store numbers, not strings
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const evaluatedData = invoiceSh.getRange(
-        rowNumber,
-        1,
-        1,
-        CONFIG.totalColumns.invoice
-      ).getValues()[0];
-
-      // ✓ VALIDATION: Detect any formula strings that slipped through
-      const hasFormulaStrings = evaluatedData.some((cell, idx) => {
-        // Check numeric columns for formula strings
-        const numericColumns = [
-          col.totalAmount,
-          col.totalPaid,
-          col.balanceDue,
-          col.daysOutstanding
-        ];
-
-        if (numericColumns.includes(idx)) {
-          return typeof cell === 'string' && cell.startsWith('=');
-        }
-        return false;
-      });
-
-      if (hasFormulaStrings) {
-        AuditLogger.logError('InvoiceCache.addInvoiceToCache',
-          `WARNING: Formula strings detected in evaluated data for row ${rowNumber}. ` +
-          `This indicates formulas haven't been calculated yet. Skipping cache write.`);
-
-        // Don't cache invalid data - better to reload from sheet later
-        return;
-      }
-
-      // Store evaluated data (contains numbers, not formula strings)
-      this.data[arrayIndex] = evaluatedData;
-
-      // Add to indexMap
-      const key = `${supplier}|${invoiceNo}`;
-      this.indexMap.set(key, arrayIndex);
-
-      // Add to supplierIndex
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(arrayIndex);
-
-      // Enhanced logging with data type verification
-      const totalAmount = evaluatedData[col.totalAmount];
-      const balanceDue = evaluatedData[col.balanceDue];
-      const status = evaluatedData[col.status];
-
-      // AuditLogger.logWarning('InvoiceCache.addInvoiceToCache',
-      //   `Added invoice ${invoiceNo} for ${supplier} at row ${rowNumber} to cache | ` +
-      //   `Amount: ${totalAmount} (${typeof totalAmount}) | ` +
-      //   `Due: ${balanceDue} (${typeof balanceDue}) | ` +
-      //   `Status: ${status}`);
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceCache.addInvoiceToCache',
-        `Failed to add invoice to cache: ${error.toString()}`);
-      // Don't throw - cache inconsistency is better than transaction failure
-    }
-  },
-
-  /**
-   * UPDATE INVOICE IN CACHE (After Payment Processing)
-   * ✓ NEW: Keeps cache synchronized after payments are recorded
-   * 
-   * This method ensures that after a payment is processed:
-   * 1. Total Paid is recalculated (formula evaluated)
-   * 2. Balance Due is updated
-   * 3. Status reflects current payment state
-   * 4. Days Outstanding is current
-   * 
-   * CRITICAL: Must be called AFTER payment is written to PaymentLog
-   * so that formulas can recalculate based on new SUMIFS results
-   * 
-   * @param {string} supplier - Supplier name
-   * @param {string} invoiceNo - Invoice number
-   * @returns {boolean} Success flag
-   */
-  updateInvoiceInCache: function (supplier, invoiceNo) {
-    if (!this.data || !this.indexMap || !this.supplierIndex) {
-      AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
-        'Cache not initialized, skipping update');
-      return false;
-    }
-
-    if (!supplier || !invoiceNo) {
-      AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
-        'Invalid supplier or invoice number');
-      return false;
-    }
-
-    try {
-      const normalizedSupplier = StringUtils.normalize(supplier);
-      const normalizedInvoice = StringUtils.normalize(invoiceNo);
-      const key = `${normalizedSupplier}|${normalizedInvoice}`;
-
-      // Find invoice in cache
-      const arrayIndex = this.indexMap.get(key);
-
-      if (arrayIndex === undefined) {
-        AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
-          `Invoice ${invoiceNo} not found in cache, skipping update`);
-        return false;
-      }
-
-      // Calculate sheet row number (array is 0-based, sheet is 1-based)
-      const rowNumber = arrayIndex + 1;
-
-      // ✓ KEY FIX: Read EVALUATED values from sheet after payment
-      // This captures the recalculated SUMIFS formulas
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
-      const updatedData = invoiceSh.getRange(
-        rowNumber,
-        1,
-        1,
-        CONFIG.totalColumns.invoice
-      ).getValues()[0];
-
-      // Update cache with fresh evaluated data
-      this.data[arrayIndex] = updatedData;
-
-      // const col = CONFIG.invoiceCols;
-      // const totalPaid = updatedData[col.totalPaid];
-      // const balanceDue = updatedData[col.balanceDue];
-      // const status = updatedData[col.status];
-
-      // AuditLogger.logWarning('InvoiceCache.updateInvoiceInCache',
-      //   `Updated invoice ${invoiceNo} for ${supplier} in cache | ` +
-      //   `Paid: ${totalPaid} | Balance: ${balanceDue} | Status: ${status}`);
-
-      return true;
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceCache.updateInvoiceInCache',
-        `Failed to update invoice in cache: ${error.toString()}`);
-      return false;
-    }
-  },
-
-  /**
-   * Invalidate based on operation type
-   * NOTE: 'create' no longer triggers invalidation (uses write-through instead)
-   * 
-   * @param {string} operation - Action type (updateAmount, updateStatus, etc.)
-   */
-  invalidate: function (operation) {
-    const invalidatingOps = ['updateAmount', 'updateStatus'];
-    if (invalidatingOps.includes(operation)) {
-      this.clear();
-    }
-  },
-
-  /**
-   * Invalidate all cache (manual or force reload)
-   */
-  invalidateGlobal: function () {
-    this.clear();
-  },
-
-  /**
-   * Invalidate only one supplier’s cache index
-   * (does NOT reload data, just removes supplier from supplierIndex)
-   * @param {string} supplier - Supplier name
-   */
-  invalidateSupplierCache: function (supplier) {
-    if (!supplier) return;
-    const normalized = StringUtils.normalize(supplier);
-
-    if (this.supplierIndex && this.supplierIndex.has(normalized)) {
-      this.supplierIndex.delete(normalized);
-      // AuditLogger.logWarning('InvoiceCache', `Supplier cache invalidated: ${supplier}`);
-    }
-  },
-
-  /**
-   * Clear entire cache memory
-   */
-  clear: function () {
-    this.data = null;
-    this.indexMap = null;
-    this.supplierIndex = null;
-    this.timestamp = null;
-  },
-
-  /**
-   * Lazy load invoice data and build indices
-   * @returns {{data:Array,indexMap:Map,supplierIndex:Map}}
-   */
-  getInvoiceData: function () {
-    const cached = this.get();
-    if (cached) return cached;
-
-    // Cache miss - load data
-    const invoiceSh = getSheet(CONFIG.invoiceSheet);
-    const lastRow = invoiceSh.getLastRow();
-
-    if (lastRow < 2) {
-      const emptyData = [[]]; // Header placeholder
-      this.set(emptyData);
-      return {
-        data: emptyData,
-        indexMap: new Map(),
-        supplierIndex: new Map()
-      };
-    }
-
-    // OPTIMIZED: Read only used range
-    const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
-    this.set(data);
-
-    return {
-      data: this.data,
-      indexMap: this.indexMap,
-      supplierIndex: this.supplierIndex
-    };
-  },
-
-  /**
-   * Get all invoice rows for a specific supplier
-   * @param {string} supplier
-   * @returns {Array<{invoiceNo:string,status:string,amount:number,rowIndex:number}>}
-   */
-  getSupplierData: function (supplier) {
-    if (!supplier) return [];
-    const normalized = StringUtils.normalize(supplier);
-    const { data, supplierIndex } = this.getInvoiceData();
-
-    const rows = supplierIndex.get(normalized) || [];
-    if (rows.length === 0) {
-      AuditLogger.logWarning('InvoiceCache', `No invoice data found for supplier: ${supplier}`);
-      return [];
-    }
-
-    return rows.map(i => {
-      const row = data[i];
-      return {
-        invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-        status: row[CONFIG.invoiceCols.paymentStatus],
-        amount: row[CONFIG.invoiceCols.totalAmount],
-        rowIndex: i
-      };
-    });
-  }
-};
-
 // ==================== INVOICE MANAGER MODULE ====================
 
 /**
@@ -496,7 +142,7 @@ const InvoiceManager = {
       invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
 
       // ═══ ADD TO CACHE (Write-Through) - KEY FIX ═══
-      InvoiceCache.addInvoiceToCache(newRow, newRowData);
+      CacheManager.addInvoiceToCache(newRow, newRowData);
 
       AuditLogger.log('INVOICE_CREATED', data, `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
 
@@ -556,7 +202,11 @@ const InvoiceManager = {
       }
 
       // Cache invalidation only if numeric data changed
-      if (amountChanged) InvoiceCache.invalidate('updateAmount');
+      // NEW: Use incremental update instead of full cache clear
+      if (amountChanged) {
+        const invoiceNo = existingInvoice.data[col.invoiceNo];
+        CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
+      }
 
       // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${data.receivedAmt }`);
 
@@ -604,9 +254,10 @@ const InvoiceManager = {
         const values = range.getValues()[0];
         updates.forEach(u => (values[u.col - 1] = u.val));
         range.setValues([values]);
-        
-        // Only invalidate supplier cache (not global)
-        InvoiceCache.invalidateSupplierCache(data.supplier);
+
+        // NEW: Use incremental update instead of supplier cache invalidation
+        const invoiceNo = existingInvoice.data[col.invoiceNo];
+        CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
       }
 
       // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
@@ -644,7 +295,7 @@ const InvoiceManager = {
         AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
           `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
 
-        InvoiceCache.clear();
+        CacheManager.clear();
       }
     } catch (error) {
       AuditLogger.logError('InvoiceManager.updatePaidDate',
@@ -727,7 +378,7 @@ const InvoiceManager = {
 
     try {
       // Get cached data with index
-      const { data, indexMap } = InvoiceCache.getInvoiceData();
+      const { data, indexMap } = CacheManager.getInvoiceData();
 
       const normalizedSupplier = StringUtils.normalize(supplier);
       const normalizedInvoice = StringUtils.normalize(invoiceNo);
@@ -752,7 +403,7 @@ const InvoiceManager = {
 
   /**
    * Return all unpaid invoices for a given supplier.
-   * Uses InvoiceCache for instant lookup.
+   * Uses CacheManager for instant lookup.
    * 
    * @param {string} supplier - Supplier name
    * @returns {Array} Array of unpaid invoice objects
@@ -762,7 +413,7 @@ const InvoiceManager = {
 
     try {
       // Use cached data
-      const { data, supplierIndex } = InvoiceCache.getInvoiceData();
+      const { data, supplierIndex } = CacheManager.getInvoiceData();
 
       const normalizedSupplier = StringUtils.normalize(supplier);
       const rows = supplierIndex.get(normalizedSupplier) || [];
@@ -781,7 +432,8 @@ const InvoiceManager = {
         const totalAmount = row[col.totalAmount];
         const totalPaid = row[col.totalPaid] || 0;
 
-        if (status === 'Unpaid' || status === 'Partial' || (totalAmount > totalPaid)) {
+        // Simplified: status already reflects payment state, no need for amount comparison
+        if (status === 'Unpaid' || status === 'Partial') {
           unpaidInvoices.push({
             invoiceNo,
             rowIndex: i,
@@ -812,7 +464,7 @@ const InvoiceManager = {
 
     try {
       // Use cached data
-      const { data } = InvoiceCache.getInvoiceData();
+      const { data } = CacheManager.getInvoiceData();
       const col = CONFIG.invoiceCols;
       const normalizedSupplier = StringUtils.normalize(supplier);
 
@@ -858,7 +510,7 @@ const InvoiceManager = {
   getStatistics: function () {
     try {
       // Use cached data
-      const { data } = InvoiceCache.getInvoiceData();
+      const { data } = CacheManager.getInvoiceData();
       const col = CONFIG.invoiceCols;
 
       if (data.length < 2) {
@@ -903,6 +555,12 @@ const InvoiceManager = {
   },
 
   /**
+   * OPTIMIZED: Reduced Spreadsheet API calls by 25-50%
+   * - Early exit: 2 calls (was 3) - removed clearNote()
+   * - Error path: 3 calls (was 4) - removed setValue('')
+   * - Success path: 2 calls (unchanged, already optimal)
+   * - No unpaid: 3 calls (unchanged, all necessary)
+   *
    * Build dropdown list of unpaid invoices for a supplier
    * Used for "Due" payment type dropdown in daily sheet.
    * 
@@ -918,9 +576,8 @@ const InvoiceManager = {
     // Clear dropdown if not "Due" or missing supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
-        targetCell.clearDataValidations()
-          .clearNote()
-          .setBackground(null);
+        // OPTIMIZED: Removed clearNote() - not needed (2 API calls instead of 3)
+        targetCell.clearDataValidations().setBackground(null);
       } catch (e) {
         AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
           `Failed to clear dropdown at row ${row}: ${e.toString()}`);
@@ -932,6 +589,7 @@ const InvoiceManager = {
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
       if (unpaidInvoices.length === 0) {
+        // 3 API calls needed (clear validation, set note, set background)
         targetCell.clearDataValidations()
           .setNote(`No unpaid invoices for ${supplier}`)
           .setBackground(CONFIG.colors.warning);
@@ -946,6 +604,7 @@ const InvoiceManager = {
         .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s)`)
         .build();
 
+      // Already optimal: 2 API calls (set validation, set background)
       targetCell.setDataValidation(rule).setBackground(CONFIG.colors.info);
 
       return true;
@@ -954,8 +613,8 @@ const InvoiceManager = {
       AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
         `Failed to build dropdown for ${supplier} at row ${row}: ${error.toString()}`);
 
+      // OPTIMIZED: Removed setValue('') - not necessary (3 API calls instead of 4)
       targetCell.clearDataValidations()
-        .setValue('')
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
 
@@ -1039,7 +698,7 @@ const InvoiceManager = {
 
       // Pre-check all duplicates in memory to avoid multiple `find` calls if possible
       // This is an optimization for larger datasets.
-      InvoiceCache.getInvoiceData(); // Ensures cache is populated
+      CacheManager.getInvoiceData(); // Ensures cache is populated
 
       for (let i = 0; i < invoiceDataArray.length; i++) {
         const data = invoiceDataArray[i];
@@ -1088,7 +747,7 @@ const InvoiceManager = {
       }
 
       // Clear cache after all operations are complete
-      InvoiceCache.invalidate('create');
+      CacheManager.invalidate('create');
 
       return {
         success: true,
@@ -1158,6 +817,6 @@ function repairAllInvoiceFormulas() {
   return InvoiceManager.repairAllFormulas();
 }
 
-function clearInvoiceCache() {
-  InvoiceCache.clear();
+function clearCacheManager() {
+  CacheManager.clear();
 }
