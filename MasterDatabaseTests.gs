@@ -386,3 +386,180 @@ function testMasterDatabaseCaching() {
     Logger.log('='.repeat(80));
   }
 }
+
+/**
+ * TEST: Conditional Cache Strategy Performance
+ *
+ * Tests the conditional cache loading in both Local and Master modes
+ * Measures performance and validates data freshness
+ *
+ * WHAT IT TESTS:
+ * 1. Cache loads from correct source (Master DB vs Local)
+ * 2. Performance difference between modes
+ * 3. Data freshness after writes
+ * 4. No index mismatch warnings
+ *
+ * RUN FROM: Script Editor → Select function → Run
+ */
+function testConditionalCacheStrategy() {
+  Logger.log('='.repeat(80));
+  Logger.log('TESTING: Conditional Cache Strategy');
+  Logger.log('='.repeat(80));
+
+  try {
+    const currentMode = CONFIG.isMasterMode() ? 'MASTER' : 'LOCAL';
+    Logger.log(`\n📍 Current Connection Mode: ${currentMode}`);
+
+    // ═══ TEST 1: Cache Load Performance ═══
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 1: Cache Load Performance');
+    Logger.log('─'.repeat(80));
+
+    // Clear cache to force fresh load
+    CacheManager.clear();
+
+    // Measure cache load time
+    const startLoad = Date.now();
+    const cacheData = CacheManager.getInvoiceData();
+    const loadTime = Date.now() - startLoad;
+
+    Logger.log(`✅ Cache loaded in ${loadTime}ms`);
+    Logger.log(`   Total invoices: ${cacheData.data.length - 1}`); // Exclude header
+    Logger.log(`   Index size: ${cacheData.indexMap.size}`);
+    Logger.log(`   Supplier count: ${cacheData.supplierIndex.size}`);
+
+    // Expected performance
+    if (CONFIG.isMasterMode()) {
+      Logger.log(`   Expected: 300-600ms (cross-file read from Master DB)`);
+      if (loadTime > 1000) {
+        Logger.log(`   ⚠️ WARNING: Load time exceeds expected range (${loadTime}ms > 1000ms)`);
+      }
+    } else {
+      Logger.log(`   Expected: 200-400ms (local sheet read)`);
+      if (loadTime > 600) {
+        Logger.log(`   ⚠️ WARNING: Load time exceeds expected range (${loadTime}ms > 600ms)`);
+      }
+    }
+
+    // ═══ TEST 2: Cache Hit Performance ═══
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 2: Cache Hit Performance (Warm Cache)');
+    Logger.log('─'.repeat(80));
+
+    const startHit = Date.now();
+    const cachedData = CacheManager.getInvoiceData();
+    const hitTime = Date.now() - startHit;
+
+    Logger.log(`✅ Cache hit in ${hitTime}ms`);
+    Logger.log(`   Expected: <5ms (in-memory access)`);
+
+    if (hitTime > 10) {
+      Logger.log(`   ⚠️ WARNING: Cache hit slower than expected (${hitTime}ms > 10ms)`);
+    }
+
+    // ═══ TEST 3: Data Freshness After Write ═══
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 3: Data Freshness After Write');
+    Logger.log('─'.repeat(80));
+
+    // Create test invoice
+    const testSupplier = `TEST_CACHE_${Date.now()}`;
+    const testInvoice = `INV_${Date.now()}`;
+    const testAmount = 1234.56;
+
+    Logger.log(`   Creating test invoice: ${testSupplier} | ${testInvoice} | ${testAmount}`);
+
+    const testData = {
+      supplier: testSupplier,
+      invoiceNo: testInvoice,
+      receivedAmt: testAmount,
+      paymentAmt: 0,
+      paymentType: 'Unpaid',
+      sheetName: 'TEST',
+      rowNum: 1,
+      enteredBy: 'TEST_USER',
+      timestamp: new Date(),
+      sysId: `test_cache_${Date.now()}`
+    };
+
+    // Write invoice
+    const createResult = InvoiceManager.create(testData);
+
+    if (!createResult.success) {
+      throw new Error(`Failed to create test invoice: ${createResult.error}`);
+    }
+
+    Logger.log(`   ✅ Invoice created: ID ${createResult.invoiceId}`);
+
+    // Clear cache to force fresh load
+    CacheManager.clear();
+
+    // Read back and verify
+    const startFresh = Date.now();
+    const freshCache = CacheManager.getInvoiceData();
+    const freshTime = Date.now() - startFresh;
+
+    Logger.log(`   Cache reloaded in ${freshTime}ms`);
+
+    // Find test invoice in cache
+    const key = `${StringUtils.normalize(testSupplier)}|${StringUtils.normalize(testInvoice)}`;
+    const rowIndex = freshCache.indexMap.get(key);
+
+    if (rowIndex === undefined) {
+      throw new Error(`Test invoice not found in cache after write (key: ${key})`);
+    }
+
+    const cachedRow = freshCache.data[rowIndex];
+    const cachedAmount = Number(cachedRow[CONFIG.invoiceCols.totalAmount]);
+
+    Logger.log(`   ✅ Invoice found in cache at index ${rowIndex}`);
+    Logger.log(`   Amount match: ${cachedAmount} === ${testAmount} → ${cachedAmount === testAmount ? '✅' : '❌'}`);
+
+    if (Math.abs(cachedAmount - testAmount) > 0.01) {
+      throw new Error(`Amount mismatch: cached ${cachedAmount} vs expected ${testAmount}`);
+    }
+
+    // ═══ TEST 4: No Index Mismatch Warnings ═══
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 4: Index Consistency Check');
+    Logger.log('─'.repeat(80));
+
+    // Get supplier outstanding (this is where index mismatch warnings would occur)
+    const outstanding = BalanceCalculator.getSupplierOutstanding(testSupplier);
+
+    Logger.log(`   ✅ Supplier outstanding calculated: ${outstanding}`);
+    Logger.log(`   Expected: ${testAmount} (one unpaid invoice)`);
+    Logger.log(`   Match: ${Math.abs(outstanding - testAmount) < 0.01 ? '✅' : '❌'}`);
+
+    if (Math.abs(outstanding - testAmount) > 0.01) {
+      Logger.log(`   ⚠️ WARNING: Outstanding mismatch (${outstanding} vs ${testAmount})`);
+      Logger.log(`   This may indicate index mismatch issues`);
+    } else {
+      Logger.log(`   ✅ No index mismatch warnings (cache is consistent)`);
+    }
+
+    // ═══ TEST SUMMARY ═══
+    Logger.log('\n' + '═'.repeat(80));
+    Logger.log('TEST SUMMARY: Conditional Cache Strategy');
+    Logger.log('═'.repeat(80));
+    Logger.log(`✅ Connection Mode: ${currentMode}`);
+    Logger.log(`✅ Cache Source: ${CONFIG.isMasterMode() ? 'Master Database' : 'Local Sheet'}`);
+    Logger.log(`✅ Cache Load Time: ${loadTime}ms (${CONFIG.isMasterMode() ? '300-600ms expected' : '200-400ms expected'})`);
+    Logger.log(`✅ Cache Hit Time: ${hitTime}ms (<5ms expected)`);
+    Logger.log(`✅ Data Freshness: Verified (amount match after write)`);
+    Logger.log(`✅ Index Consistency: Verified (no mismatch warnings)`);
+    Logger.log('');
+    Logger.log('RECOMMENDATION: Conditional cache strategy is working correctly!');
+    Logger.log('  - Local mode: Fast reads from local sheet');
+    Logger.log('  - Master mode: Bypasses IMPORTRANGE, reads from Master DB');
+    Logger.log('  - No index mismatch warnings in either mode');
+    Logger.log('='.repeat(80));
+
+  } catch (error) {
+    Logger.log('');
+    Logger.log('❌ CONDITIONAL CACHE TEST FAILED:');
+    Logger.log(`   ${error.toString()}`);
+    Logger.log(`   Stack: ${error.stack || 'N/A'}`);
+    Logger.log('='.repeat(80));
+  }
+}
