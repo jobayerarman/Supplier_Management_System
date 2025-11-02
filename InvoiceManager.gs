@@ -442,7 +442,8 @@ const InvoiceManager = {
         const totalPaid = row[col.totalPaid] || 0;
 
         // Simplified: status already reflects payment state, no need for amount comparison
-        if (status === 'Unpaid' || status === 'Partial') {
+        // NOTE: StringUtils.normalize converts to UPPERCASE, so compare to uppercase strings
+        if (status === 'UNPAID' || status === 'PARTIAL') {
           unpaidInvoices.push({
             invoiceNo,
             rowIndex: i,
