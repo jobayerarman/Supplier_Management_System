@@ -167,15 +167,28 @@ const CacheManager = {
   /**
    * ADD INVOICE TO CACHE (Write-Through with Evaluation)
    *
-   * CRITICAL FIX: After writing formulas to sheet, immediately reads back
-   * evaluated values to ensure cache contains numeric data, not formula strings
+   * IMPORTANT: Disabled in Master DB mode due to IMPORTRANGE timing issues
+   * In master mode, writes go to Master DB but reads come from local IMPORTRANGE.
+   * IMPORTRANGE doesn't refresh immediately, so we'd cache stale data.
+   * Cache invalidation after batch ensures fresh rebuild on next access.
    *
-   * This enables immediate findability of new invoices without cache reload
+   * LOCAL MODE ONLY: After writing formulas to sheet, reads back evaluated
+   * values to ensure cache contains numeric data, not formula strings.
    *
    * @param {number} rowNumber - Sheet row number (1-based)
    * @param {Array} rowData - Invoice row data (may contain formulas)
    */
   addInvoiceToCache: function (rowNumber, rowData) {
+    // CRITICAL: Skip write-through cache in Master DB mode
+    // In master mode, we write to Master DB but read from local IMPORTRANGE.
+    // IMPORTRANGE doesn't update immediately, causing stale data to be cached.
+    // Better to let cache rebuild on next access after IMPORTRANGE refreshes.
+    if (CONFIG.isMasterMode()) {
+      AuditLogger.logInfo('CacheManager.addInvoiceToCache',
+        'Skipping write-through cache in Master DB mode (IMPORTRANGE timing)');
+      return;
+    }
+
     // Only add if cache is currently active
     if (!this.data || !this.indexMap || !this.supplierIndex) {
       AuditLogger.logWarning('CacheManager.addInvoiceToCache',
