@@ -364,9 +364,10 @@ function testMasterDatabaseCaching() {
     Logger.log('-'.repeat(40));
     const stats = CacheManager.getPartitionStats();
 
-    Logger.log(`Active Partition: ${stats.activeCount} invoices (${stats.activePercentage.toFixed(1)}%)`);
-    Logger.log(`Inactive Partition: ${stats.inactiveCount} invoices (${stats.inactivePercentage.toFixed(1)}%)`);
-    Logger.log(`Total: ${stats.totalCount} invoices`);
+    Logger.log(`Active Partition: ${stats.active.count} invoices (${stats.active.percentage}%)`);
+    Logger.log(`Inactive Partition: ${stats.inactive.count} invoices (${stats.inactive.percentage}%)`);
+    Logger.log(`Total: ${stats.total} invoices`);
+    Logger.log(`Memory Reduction: ${stats.memoryReduction}`);
     Logger.log('');
 
     // Summary
