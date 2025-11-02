@@ -93,7 +93,8 @@ function onEdit(e) {
               false,
               CONFIG.colors.error
             );
-            auditAction("VALIDATION_FAILED", quickValidationData, quickValidation.error);
+            AuditLogger.log("VALIDATION_FAILED", quickValidationData, quickValidation.error);
+            AuditLogger.flush(); // Flush immediately for error visibility
             break; // Exit without processing
           }
 
@@ -290,7 +291,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
         .clearContent()
         .setNote(`⚠️ Validation failed - balance not calculated\n${validation.error}`)
         .setBackground(colors.error);
-      auditAction("VALIDATION_FAILED", data, validation.error);
+      AuditLogger.log("VALIDATION_FAILED", data, validation.error);
+      AuditLogger.flush(); // Flush immediately for error visibility
       return;
     }
 
