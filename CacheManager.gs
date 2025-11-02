@@ -204,7 +204,8 @@ const CacheManager = {
 
       // ✓ FIX: Read back EVALUATED values from sheet
       // This ensures formulas are calculated and we store numbers, not strings
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const evaluatedData = invoiceSh.getRange(
         rowNumber,
         1,
@@ -332,7 +333,8 @@ const CacheManager = {
 
       // ✓ KEY FIX: Read EVALUATED values from sheet after payment
       // This captures the recalculated SUMIFS formulas
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const updatedData = invoiceSh.getRange(
         rowNumber,
         1,
@@ -401,7 +403,8 @@ const CacheManager = {
       const rowNumber = arrayIndex + 1;
 
       // Read single row from sheet (evaluated formulas)
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const updatedData = invoiceSh.getRange(
         rowNumber,
         1,
@@ -788,7 +791,8 @@ const CacheManager = {
     if (cached) return cached;
 
     // Cache miss - load data from sheet
-    const invoiceSh = getSheet(CONFIG.invoiceSheet);
+    // Use Master Database if in master mode, otherwise use local sheet
+    const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
     const lastRow = invoiceSh.getLastRow();
 
     if (lastRow < 2) {

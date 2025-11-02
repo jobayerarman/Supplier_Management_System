@@ -109,7 +109,8 @@ const InvoiceManager = {
         return { success: false, error: msg, existingRow: existingInvoice.row };
       }
 
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const lastRow = invoiceSh.getLastRow();
       const newRow = lastRow + 1;
       const invoiceDate = getDailySheetDate(sheetName) || timestamp;
@@ -173,8 +174,9 @@ const InvoiceManager = {
     try {
       if (!existingInvoice) return { success: false, error: 'Invoice not found' };
       const col = CONFIG.invoiceCols;
-      
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const rowNum = existingInvoice.row;
 
       const oldTotal = Number(existingInvoice.data[col.totalAmount]) || 0;
@@ -240,9 +242,10 @@ const InvoiceManager = {
       if (newTotal === oldTotal && newOrigin === oldOrigin) {
         return { success: true, action: 'no_change', row: rowNum };
       }
-      
+
       // Batch write only changed columns
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const updates = [];
       
       if (newTotal !== oldTotal) {
@@ -286,7 +289,8 @@ const InvoiceManager = {
       const col = CONFIG.invoiceCols;
       if (!invoice) return;
 
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
       const currentPaidDate = invoice.data[col.paidDate];
 
@@ -321,7 +325,8 @@ const InvoiceManager = {
 
       // Only write if conditions met
       if (balanceDue === 0 && !currentPaidDate) {
-        const invoiceSh = getSheet(CONFIG.invoiceSheet);
+        // Use Master Database if in master mode, otherwise use local sheet
+        const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
         invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paymentDate);
 
         AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
@@ -635,7 +640,8 @@ const InvoiceManager = {
    */
   repairAllFormulas: function () {
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const lastRow = invoiceSh.getLastRow();
 
       if (lastRow < 2) {
@@ -694,7 +700,8 @@ const InvoiceManager = {
     }
 
     try {
-      const invoiceSh = getSheet(CONFIG.invoiceSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const lastRow = invoiceSh.getLastRow();
       const startRow = lastRow + 1;
 

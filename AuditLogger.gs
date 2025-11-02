@@ -16,7 +16,8 @@ const AuditLogger = {
    */
   log: function (action, data, message) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
 
       const auditRow = [
         DateUtils.now(),                          // Timestamp
@@ -44,7 +45,8 @@ const AuditLogger = {
    */
   logError: function (context, message) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       auditSh.appendRow([
         DateUtils.now(),
         'SYSTEM',
@@ -67,7 +69,8 @@ const AuditLogger = {
    */
   logWarning: function (context, message) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       auditSh.appendRow([
         DateUtils.now(),
         'SYSTEM',
@@ -89,7 +92,8 @@ const AuditLogger = {
    */
   logInfo: function (context, message) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       auditSh.appendRow([
         DateUtils.now(),
         'SYSTEM',
@@ -115,7 +119,8 @@ const AuditLogger = {
     }
 
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       const data = auditSh.getDataRange().getValues();
 
       return data
@@ -148,7 +153,8 @@ const AuditLogger = {
    */
   getRecentEntries: function (limit = 100) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       const lastRow = auditSh.getLastRow();
 
       if (lastRow <= 1) return [];
@@ -183,7 +189,8 @@ const AuditLogger = {
    */
   getEntriesByUser: function (userEmail, limit = 100) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       const data = auditSh.getDataRange().getValues();
 
       const normalizedEmail = StringUtils.normalize(userEmail);
@@ -219,7 +226,8 @@ const AuditLogger = {
    */
   getEntriesByAction: function (actionType, limit = 100) {
     try {
-      const auditSh = SheetUtils.getSheet(CONFIG.auditSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
       const data = auditSh.getDataRange().getValues();
 
       return data

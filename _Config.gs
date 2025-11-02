@@ -19,6 +19,32 @@ const CONFIG = {
   supplierList: 'SupplierList',
   idColHeader: 'SYS_ID',
 
+  // Master Database configuration
+  masterDatabase: {
+    // Connection mode: 'local' (current monthly file) or 'master' (central database)
+    connectionMode: 'local',  // Change to 'master' to enable Master Database writes
+
+    // Master database file identification (to be filled in during setup)
+    id: '',  // Spreadsheet ID from URL: https://docs.google.com/spreadsheets/d/{ID}/edit
+    url: '', // Full spreadsheet URL
+
+    // Master database sheet names (must match actual sheet names in Master file)
+    sheets: {
+      invoice: 'InvoiceDatabase',
+      payment: 'PaymentLog',
+      audit: 'AuditLog',
+      supplier: 'SupplierDatabase'
+    },
+
+    // Import ranges for monthly files (used when building IMPORTRANGE formulas)
+    importRanges: {
+      invoice: 'A:M',      // All invoice columns
+      payment: 'A:L',      // All payment columns
+      audit: 'A:G',        // All audit columns
+      supplier: 'A:D'      // All supplier columns
+    }
+  },
+
   // Daily sheet column mappings (0-based indices)
   cols: {
     supplier: 1,        // B
@@ -194,9 +220,41 @@ const CONFIG = {
       if (this.rules.MAX_TRANSACTION_AMOUNT <= 0) {
         errors.push('MAX_TRANSACTION_AMOUNT must be positive');
       }
-      
+
       if (this.rules.CACHE_TTL_MS <= 0) {
         errors.push('CACHE_TTL_MS must be positive');
+      }
+
+      // === 6. Validate Master Database configuration ===
+      if (this.masterDatabase.connectionMode === 'master') {
+        if (!this.masterDatabase.id || this.masterDatabase.id.trim() === '') {
+          errors.push('Master Database ID is required when connectionMode is "master"');
+        }
+        if (!this.masterDatabase.url || this.masterDatabase.url.trim() === '') {
+          errors.push('Master Database URL is required when connectionMode is "master"');
+        }
+
+        // Validate Master Database accessibility
+        if (this.masterDatabase.id && this.masterDatabase.id.trim() !== '') {
+          try {
+            const masterFile = SpreadsheetApp.openById(this.masterDatabase.id);
+            if (!masterFile) {
+              errors.push('Cannot access Master Database file with provided ID');
+            } else {
+              // Validate that required sheets exist in Master
+              const requiredMasterSheets = Object.values(this.masterDatabase.sheets);
+              const missingMasterSheets = requiredMasterSheets.filter(name => !masterFile.getSheetByName(name));
+              if (missingMasterSheets.length > 0) {
+                errors.push(`Missing sheets in Master Database: ${missingMasterSheets.join(', ')}`);
+              }
+            }
+          } catch (error) {
+            errors.push(`Cannot access Master Database: ${error.message}`);
+          }
+        }
+      } else if (this.masterDatabase.connectionMode !== 'local') {
+        warnings.push(`Invalid connectionMode "${this.masterDatabase.connectionMode}", must be "local" or "master". Defaulting to "local".`);
+        this.masterDatabase.connectionMode = 'local';
       }
       
       this._validationErrors = errors;
@@ -320,6 +378,13 @@ const CONFIG = {
     summary.push(`Errors: ${this._validationErrors.length}`);
     summary.push(`Warnings: ${this._validationWarnings.length}`);
     summary.push('');
+    summary.push('Database Mode:');
+    summary.push(`  - Connection Mode: ${this.masterDatabase.connectionMode.toUpperCase()}`);
+    if (this.masterDatabase.connectionMode === 'master') {
+      summary.push(`  - Master Database ID: ${this.masterDatabase.id || '(not configured)'}`);
+      summary.push(`  - Master Database URL: ${this.masterDatabase.url ? 'configured' : '(not configured)'}`);
+    }
+    summary.push('');
     summary.push('Required Sheets:');
     summary.push(`  - Invoice: ${this.invoiceSheet}`);
     summary.push(`  - Payment: ${this.paymentSheet}`);
@@ -334,6 +399,32 @@ const CONFIG = {
     summary.push(`  - Lock Timeout: ${this.rules.LOCK_TIMEOUT_MS}ms`);
     summary.push(`  - Max Invoice Length: ${this.rules.MAX_INVOICE_NO_LENGTH}`);
     return summary.join('\n');
+  },
+
+  /**
+   * Check if Master Database mode is enabled
+   * @returns {boolean} True if using Master Database
+   */
+  isMasterMode: function() {
+    return this.masterDatabase.connectionMode === 'master';
+  },
+
+  /**
+   * Get Master Database spreadsheet ID
+   * @returns {string|null} Master Database ID or null if not configured
+   */
+  getMasterDatabaseId: function() {
+    if (!this.isMasterMode()) return null;
+    return this.masterDatabase.id || null;
+  },
+
+  /**
+   * Get Master Database URL
+   * @returns {string|null} Master Database URL or null if not configured
+   */
+  getMasterDatabaseUrl: function() {
+    if (!this.isMasterMode()) return null;
+    return this.masterDatabase.url || null;
   }
 };
 

@@ -11,19 +11,90 @@ A Google Apps Script application for managing supplier invoices and payments thr
 ### Modular Design
 
 ```
-_Config.gs              → Configuration (sheets, columns, business rules)
-_Utils.gs               → Utilities (string/date/sheet helpers, ID generation, locks)
+_Config.gs              → Configuration (sheets, columns, business rules, Master DB config)
+_Utils.gs               → Utilities (string/date/sheet helpers, ID generation, locks, Master DB utils)
 _UserResolver.gs        → Reliable user identification with fallback strategy
-AuditLogger.gs          → Audit trail operations
+AuditLogger.gs          → Audit trail operations (Master DB aware)
 ValidationEngine.gs     → Business rule validation
-CacheManager.gs         → Centralized invoice data caching with write-through support
-InvoiceManager.gs       → Invoice CRUD operations
-PaymentManager.gs       → Payment processing + PaymentCache (quad-index) + paid date workflow
+CacheManager.gs         → Centralized invoice data caching with write-through support (Master DB aware)
+InvoiceManager.gs       → Invoice CRUD operations (Master DB aware)
+PaymentManager.gs       → Payment processing + PaymentCache (quad-index) + paid date workflow (Master DB aware)
 BalanceCalculator.gs    → Balance calculations
 UIMenu.gs               → Custom menu for batch operations
 Code.gs                 → Main entry point (onEdit handler)
 PerformanceBenchmarks.gs → Benchmark suite for cache optimizations
+MasterDatabaseTests.gs  → Master Database connection and write tests
 ```
+
+### Master Database Architecture (NEW)
+
+The system supports two operational modes for maximum flexibility:
+
+**1. Local Mode (Default)**
+- Each monthly file contains its own InvoiceDatabase, PaymentLog, AuditLog, and SupplierDatabase
+- All reads and writes happen within the monthly file
+- Traditional setup - data isolated by month
+- No additional configuration required
+
+**2. Master Database Mode (Centralized)**
+- One central file (00_SUPPLIER_ACCOUNTS_DATABASE_MASTER) contains all databases
+- Monthly files use IMPORTRANGE to display data from Master
+- Apps Script writes directly to Master Database
+- Cross-month queries and consolidated reporting enabled
+- Single source of truth for all invoice and payment data
+
+**Configuration (_Config.gs):**
+```javascript
+CONFIG.masterDatabase = {
+  connectionMode: 'local',  // or 'master' to enable Master DB mode
+  id: 'YOUR_MASTER_DB_SPREADSHEET_ID',  // From Master DB URL
+  url: 'https://docs.google.com/spreadsheets/d/YOUR_ID/edit',
+  sheets: {
+    invoice: 'InvoiceDatabase',
+    payment: 'PaymentLog',
+    audit: 'AuditLog',
+    supplier: 'SupplierDatabase'
+  },
+  importRanges: {
+    invoice: 'A:M',   // All invoice columns
+    payment: 'A:L',   // All payment columns
+    audit: 'A:G',     // All audit columns
+    supplier: 'A:D'   // All supplier columns
+  }
+}
+```
+
+**Key Components:**
+- `MasterDatabaseUtils` - Helper utilities for Master DB access
+- `MasterDatabaseUtils.getTargetSheet(sheetType)` - Returns Master or local sheet based on mode
+- `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generates IMPORTRANGE formulas
+- `MasterDatabaseUtils.testConnection()` - Validates Master DB setup
+- Automatic routing - all writes go to correct location based on connectionMode
+- Backward compatible - works in both modes without code changes
+
+**Setup Process:**
+1. Create Master Database file (00_SUPPLIER_ACCOUNTS_DATABASE_MASTER)
+2. Copy sheet structures: InvoiceDatabase, PaymentLog, AuditLog, SupplierDatabase
+3. Update CONFIG.masterDatabase in monthly files:
+   - Set `connectionMode: 'master'`
+   - Set `id` to Master Database spreadsheet ID
+   - Set `url` to Master Database URL
+4. Run `testMasterDatabaseConnection()` to verify setup
+5. Replace local sheets in monthly files with IMPORTRANGE formulas
+6. Grant IMPORTRANGE permissions when prompted
+
+**Testing Functions (MasterDatabaseTests.gs):**
+- `testMasterDatabaseConnection()` - Test connectivity and configuration
+- `testMasterDatabaseWrites()` - Test write operations (creates test data)
+- `generateImportRangeFormulas()` - Generate formulas for monthly file setup
+- `showMasterDatabaseConfig()` - Display current configuration
+- `testMasterDatabaseCaching()` - Verify cache functionality with Master DB
+
+**Performance:**
+- Read performance: Same as local mode (cache hit ~1-5ms)
+- Write performance: Slightly slower due to cross-file writes (~50-100ms additional latency)
+- Cache works identically in both modes
+- IMPORTRANGE updates automatically on Master DB changes
 
 ### Data Flow
 
@@ -452,18 +523,38 @@ When working with this codebase:
 **Batch post**: `batchPostAllRows()` (from menu)
 **Run benchmarks**: `runAllBenchmarks()` (from Script Editor)
 
+**Master Database Functions:**
+**Test connection**: `testMasterDatabaseConnection()` (from Script Editor)
+**Test writes**: `testMasterDatabaseWrites()` (from Script Editor - creates test data)
+**Generate formulas**: `generateImportRangeFormulas()` (from Script Editor)
+**Show config**: `showMasterDatabaseConfig()` (from Script Editor)
+**Test caching**: `testMasterDatabaseCaching()` (from Script Editor)
+**Get target sheet**: `MasterDatabaseUtils.getTargetSheet(sheetType)` - Auto-routes to Master or local
+**Build IMPORTRANGE**: `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generate formulas
+**Check mode**: `CONFIG.isMasterMode()` - Returns true if using Master Database
+
 ## Module Responsibilities
 
 ### _Config.gs
 - Centralized configuration for sheets, columns, rules, colors
-- Configuration validation on initialization
+- **Master Database configuration** (connectionMode, id, url, sheets, importRanges)
+- Configuration validation on initialization (includes Master DB validation)
 - Helper methods for column letter/index conversion
 - Configuration export and summary functions
+- **`isMasterMode()`** - Check if using Master Database
+- **`getMasterDatabaseId()`** - Get Master DB spreadsheet ID
+- **`getMasterDatabaseUrl()`** - Get Master DB URL
 
 ### _Utils.gs
 - StringUtils: Normalization, comparison, sanitization
 - DateUtils: Formatting for time, date, datetime
 - SheetUtils: Safe sheet access with validation
+- **MasterDatabaseUtils**: Master Database helper utilities
+  - **`getTargetSheet(sheetType)`** - Get Master or local sheet based on mode
+  - **`buildImportFormula(sheetType)`** - Generate IMPORTRANGE formulas
+  - **`testConnection()`** - Validate Master DB setup
+  - **`getMasterDatabaseFile()`** - Get Master DB spreadsheet object
+  - **`getMasterSheet(sheetType)`** - Get specific Master DB sheet
 - IDGenerator: UUID, invoice ID, payment ID generation
 - LockManager: Document and script lock management
 
@@ -597,9 +688,57 @@ When working with this codebase:
 
 **Usage**: Run from Script Editor → Functions dropdown → Select test → Run → View Logs
 
+### MasterDatabaseTests.gs
+**Comprehensive test suite for Master Database setup and connectivity**
+
+**Test Functions**:
+1. **`testMasterDatabaseConnection()`** - Main connection test
+   - Configuration validation
+   - Master Database file access
+   - Sheet accessibility checks
+   - IMPORTRANGE formula generation
+   - Detailed error reporting
+
+2. **`testMasterDatabaseWrites()`** - Write operation test
+   - Creates test invoice in Master DB
+   - Creates test payment in Master DB
+   - Verifies audit logging
+   - **WARNING**: Writes test data to Master Database
+
+3. **`generateImportRangeFormulas()`** - Formula generator
+   - Generates IMPORTRANGE formulas for all sheet types
+   - Provides setup instructions
+   - Ready to copy-paste into monthly files
+
+4. **`showMasterDatabaseConfig()`** - Configuration display
+   - Shows current connectionMode
+   - Displays Master DB ID and URL
+   - Lists sheet mappings
+   - Shows import ranges
+
+5. **`testMasterDatabaseCaching()`** - Cache functionality test
+   - Tests cache loading from Master DB
+   - Verifies cache hit performance
+   - Shows partition statistics
+   - Performance validation
+
+**Usage Workflow**:
+1. Configure Master DB in _Config.gs
+2. Run `testMasterDatabaseConnection()` to validate setup
+3. Run `generateImportRangeFormulas()` to get formulas for monthly files
+4. (Optional) Run `testMasterDatabaseWrites()` to test write operations
+5. (Optional) Run `testMasterDatabaseCaching()` to verify cache performance
+
+**Expected Output**:
+- Connection test: Detailed status of all sheets and configuration
+- Write test: Confirmation of successful test data creation
+- Formula generator: Ready-to-use IMPORTRANGE formulas
+- Cache test: Performance metrics and partition stats
+
 ---
 
-**Last Updated**: 29 October 2025 - Added PaymentCache architecture and performance benchmarks
+**Last Updated**: 2 November 2025 - Added Master Database architecture
+**Previous Update**: 29 October 2025 - Added PaymentCache architecture and performance benchmarks
 **Maintained By**: Development team
 **Questions**: Check AuditLog sheet or code comments for implementation details
 

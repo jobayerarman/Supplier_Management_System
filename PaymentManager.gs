@@ -195,7 +195,8 @@ const PaymentCache = {
 
     // Cache miss - load data
     try {
-      const paymentSh = SheetUtils.getSheet(CONFIG.paymentSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const paymentSh = MasterDatabaseUtils.getTargetSheet('payment');
       const lastRow = paymentSh.getLastRow();
 
       if (lastRow < 2) {
@@ -369,7 +370,8 @@ const PaymentManager = {
     }
 
     try {
-      const paymentSh = getSheet(CONFIG.paymentSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const paymentSh = MasterDatabaseUtils.getTargetSheet('payment');
       const lastRow = paymentSh.getLastRow();
       const newRow = lastRow + 1;
 

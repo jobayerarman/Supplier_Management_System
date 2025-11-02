@@ -305,6 +305,216 @@ const LockManager = {
   }
 };
 
+// ==================== MASTER DATABASE UTILITIES ====================
+
+/**
+ * Master Database utilities for centralized data access
+ */
+const MasterDatabaseUtils = {
+  /**
+   * Get Master Database spreadsheet ID
+   * @returns {string|null} Master Database ID or null if not in master mode
+   */
+  getMasterDatabaseId: function() {
+    return CONFIG.getMasterDatabaseId();
+  },
+
+  /**
+   * Get Master Database URL
+   * @returns {string|null} Master Database URL or null if not in master mode
+   */
+  getMasterDatabaseUrl: function() {
+    return CONFIG.getMasterDatabaseUrl();
+  },
+
+  /**
+   * Get Master Database spreadsheet object
+   * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null} Master Database file or null
+   * @throws {Error} If Master Database cannot be accessed
+   */
+  getMasterDatabaseFile: function() {
+    if (!CONFIG.isMasterMode()) {
+      return null;
+    }
+
+    const masterId = this.getMasterDatabaseId();
+    if (!masterId) {
+      throw new Error('Master Database ID not configured');
+    }
+
+    try {
+      const masterFile = SpreadsheetApp.openById(masterId);
+      if (!masterFile) {
+        throw new Error(`Cannot open Master Database with ID: ${masterId}`);
+      }
+      return masterFile;
+    } catch (error) {
+      AuditLogger.logError('MasterDatabaseUtils.getMasterDatabaseFile',
+        `Failed to access Master Database: ${error.toString()}`);
+      throw error;
+    }
+  },
+
+  /**
+   * Get a specific sheet from Master Database
+   * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
+   * @returns {GoogleAppsScript.Spreadsheet.Sheet} Sheet object
+   * @throws {Error} If sheet cannot be accessed
+   */
+  getMasterSheet: function(sheetType) {
+    const masterFile = this.getMasterDatabaseFile();
+    if (!masterFile) {
+      throw new Error('Not in Master Database mode');
+    }
+
+    const sheetName = CONFIG.masterDatabase.sheets[sheetType];
+    if (!sheetName) {
+      throw new Error(`Invalid sheet type: ${sheetType}`);
+    }
+
+    const sheet = masterFile.getSheetByName(sheetName);
+    if (!sheet) {
+      throw new Error(`Sheet "${sheetName}" not found in Master Database`);
+    }
+
+    return sheet;
+  },
+
+  /**
+   * Build IMPORTRANGE formula for monthly file
+   * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
+   * @param {string} customRange - Optional custom range (defaults to configured import range)
+   * @returns {string} IMPORTRANGE formula
+   */
+  buildImportFormula: function(sheetType, customRange = null) {
+    const masterUrl = this.getMasterDatabaseUrl();
+    if (!masterUrl) {
+      throw new Error('Master Database URL not configured');
+    }
+
+    const sheetName = CONFIG.masterDatabase.sheets[sheetType];
+    if (!sheetName) {
+      throw new Error(`Invalid sheet type: ${sheetType}`);
+    }
+
+    const range = customRange || CONFIG.masterDatabase.importRanges[sheetType];
+    if (!range) {
+      throw new Error(`No import range configured for sheet type: ${sheetType}`);
+    }
+
+    return `=IMPORTRANGE("${masterUrl}", "${sheetName}!${range}")`;
+  },
+
+  /**
+   * Test Master Database connection
+   * @returns {Object} Connection test result
+   */
+  testConnection: function() {
+    const result = {
+      success: false,
+      mode: CONFIG.masterDatabase.connectionMode,
+      errors: [],
+      warnings: [],
+      sheets: {}
+    };
+
+    try {
+      // Check if in master mode
+      if (!CONFIG.isMasterMode()) {
+        result.warnings.push('Not in Master Database mode (connectionMode: local)');
+        result.success = true; // Not an error, just local mode
+        return result;
+      }
+
+      // Check configuration
+      const masterId = this.getMasterDatabaseId();
+      const masterUrl = this.getMasterDatabaseUrl();
+
+      if (!masterId) {
+        result.errors.push('Master Database ID not configured');
+      }
+      if (!masterUrl) {
+        result.errors.push('Master Database URL not configured');
+      }
+
+      if (result.errors.length > 0) {
+        return result;
+      }
+
+      // Test file access
+      const masterFile = this.getMasterDatabaseFile();
+      if (!masterFile) {
+        result.errors.push('Cannot access Master Database file');
+        return result;
+      }
+
+      result.fileName = masterFile.getName();
+      result.fileId = masterFile.getId();
+
+      // Test each sheet
+      const sheetTypes = Object.keys(CONFIG.masterDatabase.sheets);
+      for (const type of sheetTypes) {
+        try {
+          const sheet = this.getMasterSheet(type);
+          result.sheets[type] = {
+            name: sheet.getName(),
+            rows: sheet.getLastRow(),
+            columns: sheet.getLastColumn(),
+            accessible: true
+          };
+        } catch (error) {
+          result.sheets[type] = {
+            accessible: false,
+            error: error.message
+          };
+          result.errors.push(`Cannot access ${type} sheet: ${error.message}`);
+        }
+      }
+
+      // Test IMPORTRANGE formula generation
+      try {
+        result.sampleFormula = this.buildImportFormula('invoice');
+      } catch (error) {
+        result.errors.push(`Formula generation failed: ${error.message}`);
+      }
+
+      result.success = result.errors.length === 0;
+      return result;
+
+    } catch (error) {
+      result.errors.push(`Connection test failed: ${error.toString()}`);
+      return result;
+    }
+  },
+
+  /**
+   * Get the appropriate sheet for write operations
+   * Returns Master sheet if in master mode, local sheet otherwise
+   * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
+   * @returns {GoogleAppsScript.Spreadsheet.Sheet} Sheet object
+   */
+  getTargetSheet: function(sheetType) {
+    if (CONFIG.isMasterMode()) {
+      return this.getMasterSheet(sheetType);
+    }
+
+    // Local mode - use local sheets
+    const sheetNameMap = {
+      'invoice': CONFIG.invoiceSheet,
+      'payment': CONFIG.paymentSheet,
+      'audit': CONFIG.auditSheet,
+      'supplier': 'SupplierDatabase'
+    };
+
+    const sheetName = sheetNameMap[sheetType];
+    if (!sheetName) {
+      throw new Error(`Invalid sheet type: ${sheetType}`);
+    }
+
+    return SheetUtils.getSheet(sheetName);
+  }
+};
+
 // ==================== PAYMENT HELPERS ====================
 
 /**
@@ -315,7 +525,7 @@ const LockManager = {
 function getPaymentMethod(paymentType) {
   const methods = {
     'Regular': 'Cash',
-    'Partial': 'Cash', 
+    'Partial': 'Cash',
     'Due': 'Cash',
     'Unpaid': 'None'
   };
@@ -497,4 +707,38 @@ function normalizeString(str) {
  */
 function getCurrentUserEmail() {
   return UserResolver.getCurrentUser();
+}
+
+/**
+ * Get Master Database URL
+ * @returns {string|null} Master Database URL or null
+ */
+function getMasterDatabaseUrl() {
+  return MasterDatabaseUtils.getMasterDatabaseUrl();
+}
+
+/**
+ * Get Master Database ID
+ * @returns {string|null} Master Database ID or null
+ */
+function getMasterDatabaseId() {
+  return MasterDatabaseUtils.getMasterDatabaseId();
+}
+
+/**
+ * Build IMPORTRANGE formula for Master Database
+ * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
+ * @param {string} customRange - Optional custom range
+ * @returns {string} IMPORTRANGE formula
+ */
+function buildMasterImportFormula(sheetType, customRange = null) {
+  return MasterDatabaseUtils.buildImportFormula(sheetType, customRange);
+}
+
+/**
+ * Test Master Database connection
+ * @returns {Object} Connection test result
+ */
+function testMasterConnection() {
+  return MasterDatabaseUtils.testConnection();
 }
