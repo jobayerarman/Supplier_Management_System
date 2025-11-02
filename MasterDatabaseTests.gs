@@ -157,6 +157,7 @@ function testMasterDatabaseWrites() {
       sheetName: 'TEST',
       rowNum: 1,
       enteredBy: 'TEST_USER',
+      timestamp: new Date(),
       sysId: `test_${Date.now()}`
     };
 
