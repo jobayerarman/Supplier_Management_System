@@ -45,6 +45,9 @@ const CONFIG = {
     }
   },
 
+  // Sheet structure
+  dataStartRow: 7,        // First row of data in daily sheets (0-based would be 6)
+
   // Daily sheet column mappings (0-based indices)
   cols: {
     supplier: 1,        // B

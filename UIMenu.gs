@@ -30,13 +30,9 @@ function onOpen() {
 function batchValidateAllRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet (01-31)
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch validation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -62,13 +58,9 @@ function batchValidateAllRows() {
 function batchPostAllRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet (01-31)
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch posting can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -94,13 +86,9 @@ function batchPostAllRows() {
 function batchValidateSelectedRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch validation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -108,9 +96,9 @@ function batchValidateSelectedRows() {
   const startRow = selection.getRow();
   const numRows = selection.getNumRows();
 
-  if (startRow < 6) {
+  if (startRow < CONFIG.dataStartRow) {
     ui.alert('Invalid Selection',
-             'Please select data rows (row 6 and below).',
+             `Please select data rows (row ${CONFIG.dataStartRow} and below).`,
              ui.ButtonSet.OK);
     return;
   }
@@ -125,13 +113,9 @@ function batchValidateSelectedRows() {
 function batchPostSelectedRows() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'Batch posting can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -139,9 +123,9 @@ function batchPostSelectedRows() {
   const startRow = selection.getRow();
   const numRows = selection.getNumRows();
 
-  if (startRow < 6) {
+  if (startRow < CONFIG.dataStartRow) {
     ui.alert('Invalid Selection',
-             'Please select data rows (row 6 and below).',
+             `Please select data rows (row ${CONFIG.dataStartRow} and below).`,
              ui.ButtonSet.OK);
     return;
   }
@@ -169,13 +153,9 @@ function batchPostSelectedRows() {
 function clearAllPostCheckboxes() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-  const sheetName = sheet.getName();
 
   // Check if current sheet is a daily sheet
-  if (!CONFIG.dailySheets.includes(sheetName)) {
-    ui.alert('Invalid Sheet',
-             'This operation can only be performed on daily sheets (01-31).',
-             ui.ButtonSet.OK);
+  if (!validateDailySheet(sheet)) {
     return;
   }
 
@@ -191,14 +171,14 @@ function clearAllPostCheckboxes() {
   }
 
   const lastRow = sheet.getLastRow();
-  if (lastRow < 6) {
+  if (lastRow < CONFIG.dataStartRow) {
     ui.alert('No Data', 'No data rows found in this sheet.', ui.ButtonSet.OK);
     return;
   }
 
   // Clear all checkboxes in column J
   const postCol = CONFIG.cols.post + 1; // Convert to 1-based
-  const range = sheet.getRange(6, postCol, lastRow - 6 + 1, 1);
+  const range = sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1);
   range.uncheck();
 
   SpreadsheetApp.getActiveSpreadsheet().toast(
@@ -206,6 +186,27 @@ function clearAllPostCheckboxes() {
     'Success',
     5
   );
+}
+
+/**
+ * Validates that the current sheet is a daily sheet (01-31)
+ * Helper function to eliminate code duplication across menu functions
+ *
+ * @param {Sheet} sheet - The sheet to validate
+ * @return {boolean} True if valid daily sheet, false otherwise (alert shown to user)
+ */
+function validateDailySheet(sheet) {
+  const ui = SpreadsheetApp.getUi();
+  const sheetName = sheet.getName();
+
+  if (!CONFIG.dailySheets.includes(sheetName)) {
+    ui.alert('Invalid Sheet',
+             'This operation can only be performed on daily sheets (01-31).',
+             ui.ButtonSet.OK);
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -218,7 +219,7 @@ function clearAllPostCheckboxes() {
  */
 function validateRowsInSheet(sheet, startRow = null, endRow = null) {
   const sheetName = sheet.getName();
-  const dataStartRow = 6;
+  const dataStartRow = CONFIG.dataStartRow;
   const lastRow = sheet.getLastRow();
 
   // Set default row range
@@ -250,10 +251,6 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
-  // Read all data at once for performance
-  const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
-  const allData = dataRange.getValues();
-
   const results = {
     total: numRows,
     valid: 0,
@@ -262,34 +259,60 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     errors: []
   };
 
-  // Validate each row
-  for (let i = 0; i < allData.length; i++) {
-    const rowNum = startRow + i;
-    const rowData = allData[i];
+  try {
+    // Read all data at once for performance
+    const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
+    const allData = dataRange.getValues();
 
-    // Skip empty rows (no supplier)
-    if (!rowData[CONFIG.cols.supplier]) {
-      results.skipped++;
-      continue;
+    // Validate each row
+    for (let i = 0; i < allData.length; i++) {
+      const rowNum = startRow + i;
+      const rowData = allData[i];
+
+      // Skip empty rows (no supplier)
+      if (!rowData[CONFIG.cols.supplier]) {
+        results.skipped++;
+        continue;
+      }
+
+      try {
+        // Build validation data object
+        const data = buildDataObject(rowData, rowNum, sheetName);
+
+        // Validate
+        const validation = validatePostData(data);
+
+        if (validation.valid) {
+          results.valid++;
+        } else {
+          results.invalid++;
+          results.errors.push({
+            row: rowNum,
+            supplier: data.supplier,
+            invoiceNo: data.invoiceNo || 'N/A',
+            error: validation.error || validation.errors.join(', ')
+          });
+        }
+      } catch (rowError) {
+        // Handle individual row validation errors
+        results.invalid++;
+        results.errors.push({
+          row: rowNum,
+          supplier: rowData[CONFIG.cols.supplier] || 'Unknown',
+          invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A',
+          error: `Validation error: ${rowError.message}`
+        });
+      }
     }
-
-    // Build validation data object
-    const data = buildDataObject(rowData, rowNum, sheetName);
-
-    // Validate
-    const validation = validatePostData(data);
-
-    if (validation.valid) {
-      results.valid++;
-    } else {
-      results.invalid++;
-      results.errors.push({
-        row: rowNum,
-        supplier: data.supplier,
-        invoiceNo: data.invoiceNo || 'N/A',
-        error: validation.error || validation.errors.join(', ')
-      });
-    }
+  } catch (error) {
+    // Handle critical errors (sheet access, config issues, etc.)
+    Logger.log(`Critical error in validateRowsInSheet: ${error.message}`);
+    results.errors.push({
+      row: 'N/A',
+      supplier: 'SYSTEM',
+      invoiceNo: 'N/A',
+      error: `System error: ${error.message}`
+    });
   }
 
   // ═══ FLUSH AUDIT QUEUE ═══
@@ -310,7 +333,7 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
  */
 function postRowsInSheet(sheet, startRow = null, endRow = null) {
   const sheetName = sheet.getName();
-  const dataStartRow = 6;
+  const dataStartRow = CONFIG.dataStartRow;
   const lastRow = sheet.getLastRow();
 
   // Set default row range
@@ -342,6 +365,13 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
+  // ═══ UX FEEDBACK: Show initial toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Starting batch post of ${numRows} rows...`,
+    'Processing',
+    3
+  );
+
   // Read all data at once for performance
   const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
   const allData = dataRange.getValues();
@@ -361,6 +391,15 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   for (let i = 0; i < allData.length; i++) {
     const rowNum = startRow + i;
     const rowData = allData[i];
+
+    // ═══ UX FEEDBACK: Progress toast every 25 rows ═══
+    if ((i + 1) % 25 === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `Processed ${i + 1} of ${numRows} rows...`,
+        'Progress',
+        2
+      );
+    }
 
     // Skip empty rows (no supplier)
     if (!rowData[CONFIG.cols.supplier]) {
@@ -392,7 +431,10 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         });
 
         // Update status to show error
-        const errorMsg = validation.error || validation.errors[0];
+        const errorMsg = validation.error ||
+                         (validation.errors && validation.errors.length > 0
+                           ? validation.errors[0]
+                           : 'Validation failed');
         setBatchPostStatus(
           sheet,
           rowNum,
@@ -427,6 +469,18 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       }
 
+      // ═══ CRITICAL FIX: Invalidate cache BEFORE balance calculation ═══
+      // Invoice/payment processing updated formulas in InvoiceDatabase
+      // Cache must be cleared so balance calculation reads updated values
+      // This ensures we always get fresh data for accurate balance
+      CacheManager.invalidateSupplierCache(data.supplier);
+
+      // ═══ PRE-CALCULATE BALANCE: Instead of calling updateBalanceCell ═══
+      // Get fresh balance after cache cleared by invoice/payment processing
+      const finalBalance = BalanceCalculator.getSupplierOutstanding(data.supplier);
+      const now = new Date();
+      const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
+
       // Update status to POSTED
       setBatchPostStatus(
         sheet,
@@ -438,14 +492,16 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         CONFIG.colors.success
       );
 
-      // Update balance cell
-      BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+      // Write balance value and note
+      const balanceCell = sheet.getRange(rowNum, CONFIG.cols.balance + 1);
+      balanceCell.setValue(finalBalance).setNote(balanceNote);
 
       // Collect supplier for batch cache invalidation
       suppliersToInvalidate.add(data.supplier);
 
-      // Log success
-      // AuditLogger.log('BATCH_POST', data, 'Posted via batch operation');
+      // Note: Success audit logging disabled to avoid redundancy
+      // InvoiceManager and PaymentManager already log INVOICE_CREATED and PAYMENT_CREATED
+      // This batch-level log would create duplicate entries in AuditLog
 
       results.posted++;
 
@@ -463,7 +519,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        getCurrentUserEmail().split("@")[0],
+        UserResolver.getCurrentUser().split("@")[0],
         new Date(),
         false,
         CONFIG.colors.error
@@ -484,6 +540,13 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   // ═══ FLUSH AUDIT QUEUE ═══
   // Write all queued audit entries in single batch operation
   AuditLogger.flush();
+
+  // ═══ UX FEEDBACK: Final completion toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Completed: ${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
+    'Success',
+    5
+  );
 
   return results;
 }
@@ -506,9 +569,9 @@ function buildDataObject(rowData, rowNum, sheetName) {
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
-    enteredBy: getCurrentUserEmail().split("@")[0],
+    enteredBy: UserResolver.getCurrentUser().split("@")[0],
     timestamp: new Date(),
-    row: rowNum,
+    rowNum: rowNum,
     sheetName: sheetName
   };
 }
@@ -521,7 +584,6 @@ function buildDataObject(rowData, rowNum, sheetName) {
  */
 function showValidationResults(results, isPosting) {
   const ui = SpreadsheetApp.getUi();
-  const operation = isPosting ? 'Posting' : 'Validation';
 
   let message = `Total Rows Processed: ${results.total}\n`;
 
