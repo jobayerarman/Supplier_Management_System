@@ -485,19 +485,21 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
     const invoiceNo = rowData[CONFIG.cols.invoiceNo];
     const receivedAmt = rowData[CONFIG.cols.receivedAmt];
 
-    // Set payment amount (column G) = received amount
-    // For Regular: This will be full amount (validation enforces equality)
-    // For Partial: This is just a starting point (user should adjust down)
-    if (receivedAmt && receivedAmt !== '') {
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
-    }
+    // ═══ BATCH OPTIMIZATION: Set both prevInvoice and paymentAmt in single call ═══
+    // Instead of 2 separate setValue() calls, batch them together
+    const hasInvoice = invoiceNo && invoiceNo !== '';
+    const hasAmount = receivedAmt && receivedAmt !== '';
 
-    // Set previous invoice (column F) = invoice number
-    // Note: For Regular/Partial, this field is informational (not used in logic)
-    // But it helps user see which invoice is being paid
-    if (invoiceNo && invoiceNo !== '') {
-      sheet.getRange(row, CONFIG.cols.prevInvoice + 1)
-        .setValue(invoiceNo);
+    if (hasInvoice && hasAmount) {
+      // Both fields have values - batch write (F:G)
+      const startCol = CONFIG.cols.prevInvoice + 1;
+      sheet.getRange(row, startCol, 1, 2).setValues([[invoiceNo, receivedAmt]]);
+    } else if (hasInvoice) {
+      // Only invoice number
+      sheet.getRange(row, CONFIG.cols.prevInvoice + 1).setValue(invoiceNo);
+    } else if (hasAmount) {
+      // Only payment amount
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
     }
 
     // Add visual cue for Partial payments
