@@ -117,25 +117,28 @@ const InvoiceManager = {
       const invoiceId = IDGenerator.generateInvoiceId(sysId);
 
       // Cached formula templates (avoids repetitive string concatenations)
-      const F = `=IF(C${newRow}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${newRow}, PaymentLog!B:B,B${newRow}),0))`;
-      const G = `=IF(E${newRow}="","",E${newRow}-F${newRow})`;
-      const H = `=IFS(G${newRow}=0,"Paid",G${newRow}=E${newRow},"Unpaid",G${newRow}<E${newRow},"Partial")`;
-      const K = `=IF(G${newRow}=0,0,TODAY()-D${newRow})`;
+      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid, F=balanceDue, G=status, H=paidDate, I=daysOutstanding
+      const E = `=IF(C${newRow}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${newRow}, PaymentLog!B:B,B${newRow}),0))`;  // Total Paid
+      const F = `=IF(D${newRow}="","",D${newRow}-E${newRow})`;  // Balance Due
+      const G = `=IFS(F${newRow}=0,"Paid",F${newRow}=D${newRow},"Unpaid",F${newRow}<D${newRow},"Partial")`;  // Status
+      const I = `=IF(F${newRow}=0,0,TODAY()-A${newRow})`;  // Days Outstanding
 
       // Build new invoice row WITH formulas included
+      // NEW ORDER: invoiceDate, supplier, invoiceNo, totalAmount, totalPaid, balanceDue, status, paidDate, daysOutstanding, originDay, enteredBy, timestamp, sysId
       const newRowData = [
-        timestamp,
-        supplier,
-        invoiceNo,
-        invoiceDate,
-        receivedAmt,
-        F,
-        G,
-        H,
-        '',
-        sheetName,
-        K,
-        invoiceId
+        invoiceDate,      // A - invoiceDate
+        supplier,         // B - supplier
+        invoiceNo,        // C - invoiceNo
+        receivedAmt,      // D - totalAmount
+        E,                // E - totalPaid (formula)
+        F,                // F - balanceDue (formula)
+        G,                // G - status (formula)
+        '',               // H - paidDate
+        I,                // I - daysOutstanding (formula)
+        sheetName,        // J - originDay
+        data.enteredBy || UserResolver.getCurrentUser(),  // K - enteredBy (NEW)
+        timestamp,        // L - timestamp
+        invoiceId         // M - sysId
       ];
 
       // ═══ WRITE TO SHEET ═══
@@ -341,21 +344,22 @@ const InvoiceManager = {
     try {
       const col = CONFIG.invoiceCols;
 
-      // TARGETED UPDATE: Set formula for 'Total Paid' (Column F)
+      // TARGETED UPDATE: Set formula for 'Total Paid' (Column E)
+      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid
       sheet.getRange(row, col.totalPaid + 1)
         .setFormula(`=IF(C${row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${row}, PaymentLog!B:B,B${row}),0))`);
 
-      // TARGETED UPDATE: Set formula for 'Balance Due' (Column G)
+      // TARGETED UPDATE: Set formula for 'Balance Due' (Column F)
       sheet.getRange(row, col.balanceDue + 1)
-        .setFormula(`=IF(E${row}="","", E${row} - F${row})`);
+        .setFormula(`=IF(D${row}="","", D${row} - E${row})`);
 
-      // TARGETED UPDATE: Set formula for 'Status' (Column H)
+      // TARGETED UPDATE: Set formula for 'Status' (Column G)
       sheet.getRange(row, col.status + 1)
-        .setFormula(`=IFS(G${row}=0,"Paid", G${row}=E${row},"Unpaid", G${row}<E${row},"Partial")`);
+        .setFormula(`=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`);
 
-      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column K)
+      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column I)
       sheet.getRange(row, col.daysOutstanding + 1)
-        .setFormula(`=IF(G${row}=0, 0, TODAY() - D${row})`);
+        .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
 
     } catch (error) {
       logSystemError('InvoiceManager.setFormulas',
@@ -478,14 +482,16 @@ const InvoiceManager = {
           if (includePaid || balanceDue > 0) {
             invoices.push({
               invoiceNo: row[col.invoiceNo],
-              date: row[col.date],
               invoiceDate: row[col.invoiceDate],
               totalAmount: row[col.totalAmount],
               totalPaid: row[col.totalPaid],
               balanceDue: balanceDue,
               status: row[col.status],
-              originDay: row[col.originDay],
+              paidDate: row[col.paidDate],
               daysOutstanding: row[col.daysOutstanding],
+              originDay: row[col.originDay],
+              enteredBy: row[col.enteredBy],
+              timestamp: row[col.timestamp],
               sysId: row[col.sysId]
             });
           }
@@ -647,7 +653,8 @@ const InvoiceManager = {
       for (let i = 0; i < formulas.length; i++) {
         const rowFormulas = formulas[i];
         // Check if key formula columns are missing
-        if (!rowFormulas[5] || !rowFormulas[6] || !rowFormulas[7] || !rowFormulas[10]) {
+        // NEW STRUCTURE: E=totalPaid(4), F=balanceDue(5), G=status(6), I=daysOutstanding(8)
+        if (!rowFormulas[4] || !rowFormulas[5] || !rowFormulas[6] || !rowFormulas[8]) {
           rowsToRepair.push(i + 2); // +2 for header and 0-based index
         }
       }
@@ -716,19 +723,21 @@ const InvoiceManager = {
           const invoiceDate = data.invoiceDate || data.timestamp;
 
           // Build the full row with data and formulas
+          // NEW ORDER: invoiceDate, supplier, invoiceNo, totalAmount, totalPaid, balanceDue, status, paidDate, daysOutstanding, originDay, enteredBy, timestamp, sysId
           const newInvoiceRow = [
-            data.timestamp,
-            data.supplier,
-            data.invoiceNo,
-            invoiceDate,
-            data.receivedAmt,
-            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,
-            `=IF(E${currentRowNum}="","", E${currentRowNum} - F${currentRowNum})`,
-            `=IFS(G${currentRowNum}=0,"Paid", G${currentRowNum}=E${currentRowNum},"Unpaid", G${currentRowNum}<E${currentRowNum},"Partial")`,
-            '', // Paid Date
-            data.sheetName || 'IMPORT',
-            `=IF(G${currentRowNum}=0, 0, TODAY() - D${currentRowNum})`,
-            IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID())
+            invoiceDate,                                                                                                                                    // A - invoiceDate
+            data.supplier,                                                                                                                                  // B - supplier
+            data.invoiceNo,                                                                                                                                 // C - invoiceNo
+            data.receivedAmt,                                                                                                                               // D - totalAmount
+            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,         // E - totalPaid (formula)
+            `=IF(D${currentRowNum}="","", D${currentRowNum} - E${currentRowNum})`,                                                                         // F - balanceDue (formula)
+            `=IFS(F${currentRowNum}=0,"Paid", F${currentRowNum}=D${currentRowNum},"Unpaid", F${currentRowNum}<D${currentRowNum},"Partial")`,              // G - status (formula)
+            '',                                                                                                                                             // H - paidDate
+            `=IF(F${currentRowNum}=0, 0, TODAY() - A${currentRowNum})`,                                                                                    // I - daysOutstanding (formula)
+            data.sheetName || 'IMPORT',                                                                                                                     // J - originDay
+            data.enteredBy || UserResolver.getCurrentUser(),                                                                                                // K - enteredBy (NEW)
+            data.timestamp,                                                                                                                                 // L - timestamp
+            IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID())                                                                         // M - sysId
           ];
 
           newRowsData.push(newInvoiceRow);

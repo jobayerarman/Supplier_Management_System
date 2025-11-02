@@ -836,7 +836,7 @@ const CacheManager = {
       const row = data[i];
       return {
         invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-        status: row[CONFIG.invoiceCols.paymentStatus],
+        status: row[CONFIG.invoiceCols.status],
         amount: row[CONFIG.invoiceCols.totalAmount],
         rowIndex: i
       };
