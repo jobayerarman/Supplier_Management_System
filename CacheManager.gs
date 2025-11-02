@@ -742,20 +742,23 @@ const CacheManager = {
    */
   invalidateSupplierCache: function (supplier) {
     if (!supplier) return;
-    const normalized = StringUtils.normalize(supplier);
 
-    // Clear from unified supplier index
-    if (this.supplierIndex && this.supplierIndex.has(normalized)) {
-      this.supplierIndex.delete(normalized);
-    }
+    // CRITICAL FIX: Clear entire cache instead of just removing supplier from index
+    //
+    // PREVIOUS BUG: Removing supplier from index while keeping cache data created
+    // a corrupted state where:
+    // 1. this.data still exists (cache appears valid)
+    // 2. supplierIndex no longer has the supplier entry
+    // 3. getSupplierOutstanding returns 0 because supplier not found in index
+    //
+    // FIX: Clear entire cache to force fresh reload from sheet
+    // This ensures data and indices stay in sync
+    // Performance impact: ~200-400ms cache reload (acceptable for correctness)
 
-    // Clear from partitioned supplier indices
-    if (this.activeSupplierIndex && this.activeSupplierIndex.has(normalized)) {
-      this.activeSupplierIndex.delete(normalized);
-    }
-    if (this.inactiveSupplierIndex && this.inactiveSupplierIndex.has(normalized)) {
-      this.inactiveSupplierIndex.delete(normalized);
-    }
+    this.clear();
+
+    AuditLogger.logInfo('CacheManager.invalidateSupplierCache',
+      `Cache cleared for supplier "${supplier}" - will reload on next access`);
   },
 
   /**
