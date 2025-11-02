@@ -529,7 +529,8 @@ const PaymentManager = {
       }
 
       try {
-        const invoiceSh = getSheet(CONFIG.invoiceSheet);
+        // Use Master Database target sheet for writes
+        const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
         invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
 
         result.success = true;

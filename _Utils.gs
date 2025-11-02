@@ -734,7 +734,8 @@ function setRowBackground(sheet, rowNum, color) {
  */
 function auditAction(action, data, message) {
   try {
-    const auditSh = getSheet(CONFIG.auditSheet);
+    // Use Master Database target sheet for writes
+    const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
     const auditRow = [
       DateUtils.now(),
       data.enteredBy || 'SYSTEM',
@@ -752,7 +753,7 @@ function auditAction(action, data, message) {
       }),
       message
     ];
-    
+
     auditSh.appendRow(auditRow);
   } catch (error) {
     console.error(`[AUDIT ERROR] ${action}: ${message}`, error);
@@ -766,7 +767,8 @@ function auditAction(action, data, message) {
  */
 function logSystemError(context, message) {
   try {
-    const auditSh = getSheet(CONFIG.auditSheet);
+    // Use Master Database target sheet for writes
+    const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
     auditSh.appendRow([
       DateUtils.now(),
       'SYSTEM',
