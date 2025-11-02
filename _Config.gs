@@ -37,19 +37,28 @@ const CONFIG = {
   },
   
   // Invoice sheet column mappings (0-based indices)
+  // Structure matches paymentCols pattern: identifiers → business data → metadata → system
   invoiceCols: {
-    date: 0,              // A
+    // Core identifiers
+    invoiceDate: 0,       // A - actual invoice receive date
     supplier: 1,          // B
     invoiceNo: 2,         // C
-    invoiceDate: 3,       // D (NEW - actual receive date)
-    totalAmount: 4,       // E
-    totalPaid: 5,         // F (formula)
-    balanceDue: 6,        // G (formula)
-    status: 7,            // H (formula)
-    paidDate: 8,          // I (NEW - formula)
+
+    // Invoice-specific data
+    totalAmount: 3,       // D
+    totalPaid: 4,         // E (formula)
+    balanceDue: 5,        // F (formula)
+    status: 6,            // G (formula)
+    paidDate: 7,          // H (formula)
+    daysOutstanding: 8,   // I (formula)
+
+    // Metadata
     originDay: 9,         // J
-    daysOutstanding: 10,  // K (formula)
-    sysId: 11             // L
+    enteredBy: 10,        // K
+    timestamp: 11,        // L
+
+    // System fields
+    sysId: 12             // M
   },
   
   // Payment sheet column mappings (0-based indices)
@@ -111,7 +120,7 @@ const CONFIG = {
   // Total columns in each sheet
   totalColumns: {
     daily: 14,          // A through N
-    invoice: 12,        // A through L
+    invoice: 13,        // A through M (added enteredBy column)
     payment: 12,        // A through L
     ledger: 4,          // A through D
     audit: 7            // A through G
@@ -171,8 +180,8 @@ const CONFIG = {
         const invoiceSh = ss.getSheetByName(this.invoiceSheet);
         if (invoiceSh.getLastRow() > 0) {
           const headers = invoiceSh.getRange(1, 1, 1, this.totalColumns.invoice).getValues()[0];
-          const requiredHeaders = ['Date', 'Supplier', 'Invoice No', 'Total Amount', 'Total Paid', 'Balance Due', 'Status', 'Origin Day', 'Days Outstanding', 'SYS_ID'];
-          
+          const requiredHeaders = ['Invoice Date', 'Supplier', 'Invoice No', 'Total Amount', 'Total Paid', 'Balance Due', 'Status', 'Paid Date', 'Days Outstanding', 'Origin Day', 'Entered By', 'Timestamp', 'SYS_ID'];
+
           requiredHeaders.forEach((header, i) => {
             if (!headers[i] || !StringUtils.equals(headers[i], header)) {
               warnings.push(`Invoice sheet header mismatch at column ${i + 1}: expected "${header}", found "${headers[i] || '(empty)'}"`);
