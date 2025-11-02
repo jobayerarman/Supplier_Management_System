@@ -456,9 +456,6 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
       }
 
-      // Get pre-posting balance
-      data.preBalance = BalanceCalculator.getSupplierOutstanding(data.supplier);
-
       // Process invoice
       const invoiceResult = InvoiceManager.processOptimized(data);
       data.invoiceId = invoiceResult.invoiceId;
@@ -469,28 +466,10 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       }
 
-      // ═══ PERFORMANCE OPTIMIZATION: Calculate balance in memory ═══
-      // Instead of invalidating cache and re-reading from sheet, calculate the
-      // balance change from the transaction data (instant, no sheet reads)
-      //
-      // Balance change by payment type:
-      // - Unpaid:  +receivedAmt              (new invoice, no payment)
-      // - Regular: +receivedAmt -paymentAmt  (new invoice fully paid = 0 change)
-      // - Partial: +receivedAmt -paymentAmt  (new invoice partially paid)
-      // - Due:     -paymentAmt               (payment only, no new invoice)
-
-      let balanceChange = 0;
-      if (data.paymentType === 'Unpaid') {
-        balanceChange = data.receivedAmt;  // Add invoice amount
-      } else if (data.paymentType === 'Regular') {
-        balanceChange = data.receivedAmt - data.paymentAmt;  // Usually 0
-      } else if (data.paymentType === 'Partial') {
-        balanceChange = data.receivedAmt - data.paymentAmt;  // Positive remainder
-      } else if (data.paymentType === 'Due') {
-        balanceChange = -data.paymentAmt;  // Reduce balance
-      }
-
-      const finalBalance = data.preBalance + balanceChange;
+      // ═══ CALCULATE FINAL BALANCE ═══
+      // Use BalanceCalculator.calculate() which handles all payment types
+      // and calculates balance change automatically
+      const finalBalance = BalanceCalculator.calculate(data);
       const now = new Date();
       const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
 

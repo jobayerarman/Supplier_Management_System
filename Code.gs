@@ -281,9 +281,6 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       sysId
     };
 
-    // Get supplier's current balance before processing (for in-memory calculation)
-    const preBalance = BalanceCalculator.getSupplierOutstanding(supplier);
-
     // ═══ 2. EARLY VALIDATION (Fail Fast) ═══
     const validation = validatePostData(data);
     if (!validation.valid) {
@@ -324,28 +321,10 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
-    // ═══ 4. CALCULATE BALANCE IN MEMORY (Performance Optimization) ═══
-    // Instead of invalidating cache and re-reading from sheet, calculate the
-    // balance change from the transaction data (instant, no sheet reads)
-    //
-    // Balance change by payment type:
-    // - Unpaid:  +receivedAmt              (new invoice, no payment)
-    // - Regular: +receivedAmt -paymentAmt  (new invoice fully paid = 0 change)
-    // - Partial: +receivedAmt -paymentAmt  (new invoice partially paid)
-    // - Due:     -paymentAmt               (payment only, no new invoice)
-
-    let balanceChange = 0;
-    if (paymentType === 'Unpaid') {
-      balanceChange = receivedAmt;  // Add invoice amount
-    } else if (paymentType === 'Regular') {
-      balanceChange = receivedAmt - paymentAmt;  // Usually 0
-    } else if (paymentType === 'Partial') {
-      balanceChange = receivedAmt - paymentAmt;  // Positive remainder
-    } else if (paymentType === 'Due') {
-      balanceChange = -paymentAmt;  // Reduce balance
-    }
-
-    const finalBalance = preBalance + balanceChange;
+    // ═══ 4. CALCULATE FINAL BALANCE ═══
+    // Use BalanceCalculator.calculate() which handles all payment types
+    // and calculates balance change automatically
+    const finalBalance = BalanceCalculator.calculate(data);
 
     // ═══ 5. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
     const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
