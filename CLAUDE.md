@@ -194,8 +194,21 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
 - Inactive → Active: When paid invoice is reopened (rare edge case)
 - Transitions tracked in statistics for monitoring
 
+**Conditional Cache Strategy** (Master Database Support):
+- **Local Mode**: Cache reads from local InvoiceDatabase sheet
+  - Performance: 200-400ms per cache load
+  - Always fresh (same file, immediate updates)
+  - No timing issues
+- **Master Mode**: Cache reads from Master Database directly
+  - Performance: 300-600ms per cache load (+100-200ms cross-file latency)
+  - Always fresh (bypasses IMPORTRANGE timing issues)
+  - Eliminates index mismatch warnings
+- **Tradeoff**: Slight latency in Master mode for guaranteed data freshness
+- Cache loads happen once per TTL (60 seconds), not per transaction
+
 **Critical Implementation Details**:
 - Cache reads EVALUATED values from sheet after formula writes to prevent storing formula strings
+- **Conditional reads**: Master mode uses `getTargetSheet()` (Master DB), Local mode uses `getSourceSheet()` (local)
 - Incremental updates handle edge cases (supplier changes, missing invoices, corruption detection, partition transitions)
 - Automatic fallback to full cache clear if incremental update fails
 - Performance statistics logged every 100 updates for monitoring
@@ -206,6 +219,7 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
 - Memory overhead: ~450KB for 1,000 invoices (negligible)
 - Active cache reduction: 70-90% smaller (partition benefit)
 - Partition transition: <2ms (move invoice between partitions)
+- Cache load: 200-400ms (local), 300-600ms (master)
 
 ---
 
@@ -800,8 +814,8 @@ When working with this codebase:
 
 ---
 
-**Last Updated**: 2 November 2025 - Added Master Database architecture
-**Previous Update**: 29 October 2025 - Added PaymentCache architecture and performance benchmarks
+**Last Updated**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
+**Previous Update**: 2 November 2025 - Added Master Database architecture
 **Maintained By**: Development team
 **Questions**: Check AuditLog sheet or code comments for implementation details
 
