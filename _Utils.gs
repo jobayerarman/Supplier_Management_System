@@ -488,17 +488,18 @@ const MasterDatabaseUtils = {
   },
 
   /**
-   * Get the appropriate sheet for write operations
-   * Returns Master sheet if in master mode, local sheet otherwise
+   * Get the appropriate sheet for read operations
+   * ALWAYS returns local sheet for best performance
+   * In master mode, local sheets use IMPORTRANGE to display Master data
+   * In local mode, local sheets contain the actual data
+   *
    * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
    * @returns {GoogleAppsScript.Spreadsheet.Sheet} Sheet object
    */
-  getTargetSheet: function(sheetType) {
-    if (CONFIG.isMasterMode()) {
-      return this.getMasterSheet(sheetType);
-    }
-
-    // Local mode - use local sheets
+  getSourceSheet: function(sheetType) {
+    // Always read from local sheets for performance
+    // In master mode, these are IMPORTRANGE formulas showing Master data
+    // In local mode, these are the actual data sheets
     const sheetNameMap = {
       'invoice': CONFIG.invoiceSheet,
       'payment': CONFIG.paymentSheet,
@@ -512,6 +513,21 @@ const MasterDatabaseUtils = {
     }
 
     return SheetUtils.getSheet(sheetName);
+  },
+
+  /**
+   * Get the appropriate sheet for write operations
+   * Returns Master sheet if in master mode, local sheet otherwise
+   * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
+   * @returns {GoogleAppsScript.Spreadsheet.Sheet} Sheet object
+   */
+  getTargetSheet: function(sheetType) {
+    if (CONFIG.isMasterMode()) {
+      return this.getMasterSheet(sheetType);
+    }
+
+    // Local mode - use local sheets (same as getSourceSheet)
+    return this.getSourceSheet(sheetType);
   }
 };
 

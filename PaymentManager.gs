@@ -195,8 +195,8 @@ const PaymentCache = {
 
     // Cache miss - load data
     try {
-      // Use Master Database if in master mode, otherwise use local sheet
-      const paymentSh = MasterDatabaseUtils.getTargetSheet('payment');
+      // Always read from local sheet (IMPORTRANGE in master mode)
+      const paymentSh = MasterDatabaseUtils.getSourceSheet('payment');
       const lastRow = paymentSh.getLastRow();
 
       if (lastRow < 2) {

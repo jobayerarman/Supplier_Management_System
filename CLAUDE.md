@@ -66,10 +66,12 @@ CONFIG.masterDatabase = {
 
 **Key Components:**
 - `MasterDatabaseUtils` - Helper utilities for Master DB access
-- `MasterDatabaseUtils.getTargetSheet(sheetType)` - Returns Master or local sheet based on mode
+- `MasterDatabaseUtils.getSourceSheet(sheetType)` - **For reads**: Always returns local sheet (IMPORTRANGE in master mode)
+- `MasterDatabaseUtils.getTargetSheet(sheetType)` - **For writes**: Returns Master (master mode) or local (local mode)
 - `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generates IMPORTRANGE formulas
 - `MasterDatabaseUtils.testConnection()` - Validates Master DB setup
-- Automatic routing - all writes go to correct location based on connectionMode
+- **Read/Write Pattern**: Reads from local sheets (fast), writes to Master DB (master mode only)
+- Automatic routing - all operations go to correct location based on connectionMode
 - Backward compatible - works in both modes without code changes
 
 **Setup Process:**
@@ -91,10 +93,15 @@ CONFIG.masterDatabase = {
 - `testMasterDatabaseCaching()` - Verify cache functionality with Master DB
 
 **Performance:**
-- Read performance: Same as local mode (cache hit ~1-5ms)
-- Write performance: Slightly slower due to cross-file writes (~50-100ms additional latency)
+- **Read performance**: Identical to local mode - reads from local IMPORTRANGE sheets
+  - Cache hit: ~1-5ms
+  - Cache miss: ~200-400ms (local sheet read)
+  - No cross-file latency on reads
+- **Write performance**: Additional latency in master mode due to cross-file writes
+  - Local mode: ~20-50ms
+  - Master mode: ~70-150ms (+50-100ms cross-file latency)
 - Cache works identically in both modes
-- IMPORTRANGE updates automatically on Master DB changes
+- IMPORTRANGE updates automatically when Master DB changes
 
 ### Data Flow
 
@@ -529,7 +536,8 @@ When working with this codebase:
 **Generate formulas**: `generateImportRangeFormulas()` (from Script Editor)
 **Show config**: `showMasterDatabaseConfig()` (from Script Editor)
 **Test caching**: `testMasterDatabaseCaching()` (from Script Editor)
-**Get target sheet**: `MasterDatabaseUtils.getTargetSheet(sheetType)` - Auto-routes to Master or local
+**Get source sheet** (reads): `MasterDatabaseUtils.getSourceSheet(sheetType)` - Always local (IMPORTRANGE in master mode)
+**Get target sheet** (writes): `MasterDatabaseUtils.getTargetSheet(sheetType)` - Master or local based on mode
 **Build IMPORTRANGE**: `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generate formulas
 **Check mode**: `CONFIG.isMasterMode()` - Returns true if using Master Database
 
@@ -550,7 +558,8 @@ When working with this codebase:
 - DateUtils: Formatting for time, date, datetime
 - SheetUtils: Safe sheet access with validation
 - **MasterDatabaseUtils**: Master Database helper utilities
-  - **`getTargetSheet(sheetType)`** - Get Master or local sheet based on mode
+  - **`getSourceSheet(sheetType)`** - **For reads**: Always returns local sheet (IMPORTRANGE in master mode)
+  - **`getTargetSheet(sheetType)`** - **For writes**: Returns Master (master mode) or local (local mode)
   - **`buildImportFormula(sheetType)`** - Generate IMPORTRANGE formulas
   - **`testConnection()`** - Validate Master DB setup
   - **`getMasterDatabaseFile()`** - Get Master DB spreadsheet object
