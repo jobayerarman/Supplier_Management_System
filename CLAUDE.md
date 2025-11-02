@@ -84,6 +84,12 @@ CONFIG.masterDatabase = {
 4. Run `testMasterDatabaseConnection()` to verify setup
 5. Replace local sheets in monthly files with IMPORTRANGE formulas
 6. Grant IMPORTRANGE permissions when prompted
+7. **CRITICAL**: Set up installable Edit trigger:
+   - Open Script Editor in monthly file
+   - Run `setupInstallableEditTrigger()` function
+   - Authorize when prompted
+   - This is required because simple triggers cannot access other spreadsheets
+   - Only needs to be done once per monthly file
 
 **Testing Functions (MasterDatabaseTests.gs):**
 - `testMasterDatabaseConnection()` - Test connectivity and configuration
@@ -478,6 +484,7 @@ Enforced in `ValidationEngine.gs`:
 7. **Trigger context**: `Session.getActiveUser()` may not work in triggers, use UserResolver instead
 8. **Settings sheet**: Required for UserResolver sheet-based detection fallback
 9. **Menu initialization**: `onOpen()` trigger must be enabled for custom menu to appear
+10. **Master Database access**: Simple triggers (onEdit, onOpen) cannot access other spreadsheets via `SpreadsheetApp.openById()`. Must use installable triggers when in Master mode. Run `setupInstallableEditTrigger()` to convert. See "Simple Trigger Limitations" below.
 
 ## Dependencies
 
@@ -486,6 +493,51 @@ Enforced in `ValidationEngine.gs`:
 - LockService (concurrency)
 - Utilities (UUID, date formatting)
 - Session (timezone, user info - with UserResolver fallback)
+
+## Simple Trigger Limitations and Master Database
+
+**IMPORTANT**: When using Master Database mode, you MUST use an installable Edit trigger.
+
+### The Problem
+
+Google Apps Script has two types of triggers:
+
+**Simple Triggers** (default `onEdit`, `onOpen`):
+- ❌ Cannot call `SpreadsheetApp.openById()` to access other files
+- ❌ Cannot access services requiring authorization
+- ✅ Can only access the current spreadsheet
+- ✅ Easy to set up (just name function `onEdit`)
+
+**Installable Triggers** (manual setup required):
+- ✅ Full authorization and permissions
+- ✅ Can access any spreadsheet via `SpreadsheetApp.openById()`
+- ✅ Can use all Google Apps Script services
+- ⚠️ Requires one-time setup per spreadsheet
+
+### The Solution
+
+When using Master Database mode (`connectionMode: 'master'`), the system needs to write to a different spreadsheet file. This requires an installable trigger.
+
+**Setup Steps:**
+1. Open Script Editor in your monthly spreadsheet
+2. From the function dropdown, select `setupInstallableEditTrigger`
+3. Click Run ▶️
+4. Authorize when prompted (you'll see OAuth consent screen)
+5. Done! A success dialog will appear
+
+**To verify:** Check the installable trigger was created:
+- Script Editor → Triggers (⏰ icon on left sidebar)
+- You should see one Edit trigger for the onEdit function
+
+**To remove:** Run `removeInstallableEditTrigger()` function if you need to troubleshoot
+
+### Why testMasterDatabaseWrites() Works But Posting Doesn't
+
+- `testMasterDatabaseWrites()` runs manually from Script Editor → Full permissions ✅
+- `onEdit` runs as simple trigger → Restricted permissions ❌
+- **Solution:** Convert to installable trigger as described above
+
+**Note:** This is only required for **Master Database mode**. Local mode works fine with simple triggers since all operations stay within the current spreadsheet.
 
 ## Backward Compatibility
 
@@ -531,6 +583,8 @@ When working with this codebase:
 **Run benchmarks**: `runAllBenchmarks()` (from Script Editor)
 
 **Master Database Functions:**
+**Setup trigger**: `setupInstallableEditTrigger()` - **REQUIRED** for Master mode (run once per file)
+**Remove trigger**: `removeInstallableEditTrigger()` - Remove installable trigger if needed
 **Test connection**: `testMasterDatabaseConnection()` (from Script Editor)
 **Test writes**: `testMasterDatabaseWrites()` (from Script Editor - creates test data)
 **Generate formulas**: `generateImportRangeFormulas()` (from Script Editor)

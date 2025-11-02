@@ -546,3 +546,89 @@ function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
 
   return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
 }
+
+/**
+ * ==================== TRIGGER SETUP FOR MASTER DATABASE ====================
+ *
+ * IMPORTANT: When using Master Database mode, the onEdit function needs to be
+ * an INSTALLABLE trigger (not a simple trigger) to access other spreadsheets.
+ *
+ * Simple triggers have restricted permissions and cannot use SpreadsheetApp.openById()
+ *
+ * Run this function ONCE from the Script Editor to set up the installable trigger.
+ */
+
+/**
+ * Set up installable Edit trigger for Master Database access
+ * This replaces the simple onEdit trigger with an installable one
+ *
+ * HOW TO USE:
+ * 1. Open Script Editor
+ * 2. Run: setupInstallableEditTrigger
+ * 3. Authorize when prompted
+ * 4. Done! The trigger is now installed
+ *
+ * @returns {void}
+ */
+function setupInstallableEditTrigger() {
+  const ss = SpreadsheetApp.getActive();
+
+  // Remove any existing Edit triggers to avoid duplicates
+  const triggers = ScriptApp.getUserTriggers(ss);
+  triggers.forEach(trigger => {
+    if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
+      ScriptApp.deleteTrigger(trigger);
+      Logger.log(`Removed existing Edit trigger: ${trigger.getUniqueId()}`);
+    }
+  });
+
+  // Create new installable Edit trigger
+  const newTrigger = ScriptApp.newTrigger('onEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  Logger.log('✅ Installable Edit trigger created successfully!');
+  Logger.log(`   Trigger ID: ${newTrigger.getUniqueId()}`);
+  Logger.log('');
+  Logger.log('The onEdit function now has full permissions to access Master Database.');
+  Logger.log('You can now post transactions that will write to the Master Database.');
+
+  // Show success message to user
+  SpreadsheetApp.getUi().alert(
+    'Trigger Setup Complete',
+    '✅ Installable Edit trigger has been set up successfully!\n\n' +
+    'The system can now access the Master Database when posting transactions.\n\n' +
+    'You only need to run this setup once per spreadsheet.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Remove installable Edit trigger (for troubleshooting)
+ * Use this if you need to remove the trigger
+ *
+ * @returns {void}
+ */
+function removeInstallableEditTrigger() {
+  const ss = SpreadsheetApp.getActive();
+  const triggers = ScriptApp.getUserTriggers(ss);
+  let removed = 0;
+
+  triggers.forEach(trigger => {
+    if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
+      ScriptApp.deleteTrigger(trigger);
+      Logger.log(`Removed Edit trigger: ${trigger.getUniqueId()}`);
+      removed++;
+    }
+  });
+
+  Logger.log(`✅ Removed ${removed} Edit trigger(s)`);
+
+  SpreadsheetApp.getUi().alert(
+    'Trigger Removed',
+    `Removed ${removed} installable Edit trigger(s).\n\n` +
+    'The system will now use the simple onEdit trigger again (limited permissions).',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
