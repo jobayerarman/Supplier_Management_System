@@ -149,7 +149,7 @@ function validateDuePayment(data) {
       if (!prevInvoice) {
         errors.push(`Previous invoice "${data.prevInvoice}" not found for supplier "${data.supplier}"`);
       } else {
-        const currentBalance = Number(prevInvoice.data[6]) || 0; // Balance Due column
+        const currentBalance = Number(prevInvoice.data[CONFIG.invoiceCols.balanceDue]) || 0; // Balance Due column
         if (currentBalance <= 0) {
           errors.push(`Invoice "${data.prevInvoice}" has no outstanding balance`);
         } else if (data.paymentAmt > currentBalance) {
@@ -299,14 +299,16 @@ function validateDataIntegrity(data) {
     
     if (lastRow >= 2) {
       const sampleRow = 2;
-      const formulaE = invoiceSh.getRange(sampleRow, 5).getFormula();
-      if (!formulaE || !formulaE.includes('SUMIF')) {
-        issues.push('InvoiceDatabase formulas may be corrupted - column E (Total Paid)');
+      // Check Total Paid formula (uses CONFIG for correct column position)
+      const formulaTotalPaid = invoiceSh.getRange(sampleRow, CONFIG.invoiceCols.totalPaid + 1).getFormula();
+      if (!formulaTotalPaid || !formulaTotalPaid.includes('SUMIF')) {
+        issues.push('InvoiceDatabase formulas may be corrupted - Total Paid column');
       }
-      
-      const formulaF = invoiceSh.getRange(sampleRow, 6).getFormula();
-      if (!formulaF) {
-        issues.push('InvoiceDatabase formulas may be corrupted - column F (Balance Due)');
+
+      // Check Balance Due formula (uses CONFIG for correct column position)
+      const formulaBalanceDue = invoiceSh.getRange(sampleRow, CONFIG.invoiceCols.balanceDue + 1).getFormula();
+      if (!formulaBalanceDue) {
+        issues.push('InvoiceDatabase formulas may be corrupted - Balance Due column');
       }
     }
     
