@@ -732,29 +732,28 @@ const CacheManager = {
   },
 
   /**
-   * Invalidate only one supplier's cache index
+   * Invalidate cache for a specific supplier
    *
-   * Surgical invalidation - removes supplier from supplierIndex without
-   * invalidating entire cache. Used for supplier-specific operations.
-   * NEW: Also clears supplier from partitioned indices
+   * USAGE: Called AFTER batch operations complete to ensure next read gets fresh data
+   *
+   * PERFORMANCE OPTIMIZATION: This is no longer in the hot path since balance
+   * calculations now use in-memory computation instead of re-reading from cache.
+   * Called once per unique supplier at end of batch, not per-row.
+   *
+   * IMPLEMENTATION: Clears entire cache for simplicity and correctness.
+   * Cache will be rebuilt on next access (~200-400ms one-time cost).
+   *
+   * ALTERNATIVE CONSIDERED: Surgical update of only supplier's rows, but this
+   * requires complex maintenance of 6 data structures (data, indexMap, supplierIndex,
+   * activeData, activeIndexMap, activeSupplierIndex, inactiveData, inactiveIndexMap,
+   * inactiveSupplierIndex). Not worth complexity since this is not in hot path.
    *
    * @param {string} supplier - Supplier name
    */
   invalidateSupplierCache: function (supplier) {
     if (!supplier) return;
 
-    // CRITICAL FIX: Clear entire cache instead of just removing supplier from index
-    //
-    // PREVIOUS BUG: Removing supplier from index while keeping cache data created
-    // a corrupted state where:
-    // 1. this.data still exists (cache appears valid)
-    // 2. supplierIndex no longer has the supplier entry
-    // 3. getSupplierOutstanding returns 0 because supplier not found in index
-    //
-    // FIX: Clear entire cache to force fresh reload from sheet
-    // This ensures data and indices stay in sync
-    // Performance impact: ~200-400ms cache reload (acceptable for correctness)
-
+    // Clear entire cache - acceptable since called after batch completes
     this.clear();
 
     AuditLogger.logInfo('CacheManager.invalidateSupplierCache',

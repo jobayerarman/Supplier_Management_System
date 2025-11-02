@@ -469,15 +469,28 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       }
 
-      // ═══ CRITICAL FIX: Invalidate cache BEFORE balance calculation ═══
-      // Invoice/payment processing updated formulas in InvoiceDatabase
-      // Cache must be cleared so balance calculation reads updated values
-      // This ensures we always get fresh data for accurate balance
-      CacheManager.invalidateSupplierCache(data.supplier);
+      // ═══ PERFORMANCE OPTIMIZATION: Calculate balance in memory ═══
+      // Instead of invalidating cache and re-reading from sheet, calculate the
+      // balance change from the transaction data (instant, no sheet reads)
+      //
+      // Balance change by payment type:
+      // - Unpaid:  +receivedAmt              (new invoice, no payment)
+      // - Regular: +receivedAmt -paymentAmt  (new invoice fully paid = 0 change)
+      // - Partial: +receivedAmt -paymentAmt  (new invoice partially paid)
+      // - Due:     -paymentAmt               (payment only, no new invoice)
 
-      // ═══ PRE-CALCULATE BALANCE: Instead of calling updateBalanceCell ═══
-      // Get fresh balance after cache cleared by invoice/payment processing
-      const finalBalance = BalanceCalculator.getSupplierOutstanding(data.supplier);
+      let balanceChange = 0;
+      if (data.paymentType === 'Unpaid') {
+        balanceChange = data.receivedAmt;  // Add invoice amount
+      } else if (data.paymentType === 'Regular') {
+        balanceChange = data.receivedAmt - data.paymentAmt;  // Usually 0
+      } else if (data.paymentType === 'Partial') {
+        balanceChange = data.receivedAmt - data.paymentAmt;  // Positive remainder
+      } else if (data.paymentType === 'Due') {
+        balanceChange = -data.paymentAmt;  // Reduce balance
+      }
+
+      const finalBalance = data.preBalance + balanceChange;
       const now = new Date();
       const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
 
@@ -496,7 +509,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       const balanceCell = sheet.getRange(rowNum, CONFIG.cols.balance + 1);
       balanceCell.setValue(finalBalance).setNote(balanceNote);
 
-      // Collect supplier for batch cache invalidation
+      // Collect supplier for batch cache invalidation (done after loop)
       suppliersToInvalidate.add(data.supplier);
 
       // Note: Success audit logging disabled to avoid redundancy
