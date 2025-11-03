@@ -293,6 +293,13 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 
 **Purpose**: Streamline end-of-day processing with bulk validation and posting
 
+**Master Database Compatibility**:
+- ✅ Fully compatible with both Local and Master modes
+- Automatic connection mode detection and tracking
+- Performance metrics for both modes
+- Audit logging includes connection mode context
+- Results dialog shows mode and performance stats
+
 **Menu Structure** (created by `onOpen()`):
 - **Batch Validate All Rows**: Validate all rows without posting
 - **Batch Post All Valid Rows**: Validate and post all valid rows
@@ -311,7 +318,20 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 **Performance Optimization**:
 - Single batch read for all rows in range
 - In-memory processing before writes
-- Surgical cache invalidation per supplier
+- Surgical cache invalidation per supplier (once per unique supplier)
+- Performance tracking: duration, avg time per row
+- Expected: 50-300ms/row (Local), 100-500ms/row (Master)
+
+**Master Database Awareness**:
+- Connection mode logged at batch start (BATCH_POST_START)
+- Performance metrics logged at completion (BATCH_POST_COMPLETE)
+- Toast notifications show connection mode during processing
+- Results dialog includes:
+  - Connection Mode (LOCAL/MASTER)
+  - Total Duration (seconds)
+  - Average Time per Row (milliseconds)
+  - Performance expectations for current mode
+- Audit trail includes supplier cache invalidation count
 
 ### Sheet Structure
 
