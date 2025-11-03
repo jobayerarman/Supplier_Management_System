@@ -588,8 +588,7 @@ const InvoiceManager = {
     // Clear dropdown if not "Due" or missing supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
-        // OPTIMIZED: Removed clearNote() - not needed (2 API calls instead of 3)
-        targetCell.clearDataValidations().setBackground(null);
+        targetCell.clearDataValidations().clearNote().setBackground(null);
       } catch (e) {
         AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
           `Failed to clear dropdown at row ${row}: ${e.toString()}`);
@@ -598,13 +597,25 @@ const InvoiceManager = {
     }
 
     try {
+      // Log supplier for debugging
+      const normalizedSupplier = StringUtils.normalize(supplier);
+
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
+      // Log result for debugging
+      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
+        `Found ${unpaidInvoices.length} unpaid invoice(s) for supplier "${supplier}" (normalized: "${normalizedSupplier}")`);
+
       if (unpaidInvoices.length === 0) {
-        // 3 API calls needed (clear validation, set note, set background)
+        // No unpaid invoices found - show informative message
         targetCell.clearDataValidations()
-          .setNote(`No unpaid invoices for ${supplier}`)
+          .clearContent()
+          .setNote(`No unpaid invoices found for ${supplier}.\n\nThis supplier either has no invoices or all invoices are fully paid.`)
           .setBackground(CONFIG.colors.warning);
+
+        AuditLogger.logWarning('InvoiceManager.buildUnpaidDropdown',
+          `No unpaid invoices for supplier "${supplier}" at row ${row}`);
+
         return false;
       }
 
@@ -613,11 +624,18 @@ const InvoiceManager = {
       const rule = SpreadsheetApp.newDataValidation()
         .requireValueInList(invoiceNumbers, true)
         .setAllowInvalid(false)
-        .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s)`)
+        .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s): ${invoiceNumbers.join(', ')}`)
         .build();
 
-      // Already optimal: 2 API calls (set validation, set background)
-      targetCell.setDataValidation(rule).setBackground(CONFIG.colors.info);
+      // Set dropdown and clear any previous content/notes
+      targetCell
+        .clearContent()
+        .clearNote()
+        .setDataValidation(rule)
+        .setBackground(CONFIG.colors.info);
+
+      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
+        `Dropdown created successfully for "${supplier}" at row ${row} with ${invoiceNumbers.length} option(s)`);
 
       return true;
 
@@ -625,8 +643,8 @@ const InvoiceManager = {
       AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
         `Failed to build dropdown for ${supplier} at row ${row}: ${error.toString()}`);
 
-      // OPTIMIZED: Removed setValue('') - not necessary (3 API calls instead of 4)
       targetCell.clearDataValidations()
+        .clearContent()
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
 

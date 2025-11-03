@@ -141,7 +141,10 @@ function onEdit(e) {
       case configCols.supplier + 1:
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
-          InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+          // Use editedValue (the new supplier value just entered)
+          if (editedValue && String(editedValue).trim()) {
+            InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
+          }
         }
         updateBalance = true;
         break;
@@ -173,11 +176,20 @@ function onEdit(e) {
           rowValues[configCols.paymentAmt] = populatedValues.paymentAmt;
           rowValues[configCols.prevInvoice] = populatedValues.prevInvoice;
         } else if (paymentType === 'Due') {
-          // Due: Build dropdown for previous invoices, calculate balance
-          InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+          // Due: Build dropdown for previous invoices
+          // IMPORTANT: Re-read supplier from sheet to ensure we have the latest value
+          const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
+          if (currentSupplier && String(currentSupplier).trim()) {
+            InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
+          }
+          // Don't update balance immediately for Due - wait for invoice selection
+          updateBalance = false;
         }
 
-        updateBalance = true;
+        // Only update balance for non-Due payment types
+        if (paymentType !== 'Due') {
+          updateBalance = true;
+        }
         break;
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
@@ -437,22 +449,46 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
  */
 function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
   try {
+    // Validate inputs
+    if (!prevInvoice || !String(prevInvoice).trim()) {
+      AuditLogger.logWarning('autoPopulateDuePaymentAmount',
+        `No invoice selected at row ${row}`);
+      return '';
+    }
+
+    // Log the attempt
+    AuditLogger.logInfo('autoPopulateDuePaymentAmount',
+      `Fetching balance for invoice "${prevInvoice}" of supplier "${supplier}" at row ${row}`);
+
     // Get the balance due for the selected invoice
     const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
     const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
+
+    // Log the result
+    AuditLogger.logInfo('autoPopulateDuePaymentAmount',
+      `Invoice "${prevInvoice}" balance: ${invoiceBalance}`);
 
     if (invoiceBalance > 0) {
       // Set payment amount to invoice balance
       targetCell
         .setValue(invoiceBalance)
-        .setNote(`Outstanding balance of ${prevInvoice}`)
+        .setNote(`Outstanding balance of ${prevInvoice}: ${invoiceBalance}/-`)
+        .setBackground(null);  // Clear any warning background
+
+      AuditLogger.logInfo('autoPopulateDuePaymentAmount',
+        `Successfully populated payment amount ${invoiceBalance} for invoice "${prevInvoice}" at row ${row}`);
+
       return invoiceBalance;  // Return value for caller to update local array
     } else {
       // Invoice has no balance or not found
       targetCell
         .clearContent()
-        .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance`)
+        .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance.\n\nPossible reasons:\n- Invoice is fully paid\n- Invoice not found\n- Invoice belongs to different supplier`)
         .setBackground(CONFIG.colors.warning);
+
+      AuditLogger.logWarning('autoPopulateDuePaymentAmount',
+        `Invoice "${prevInvoice}" has no outstanding balance (returned: ${invoiceBalance}) at row ${row}`);
+
       return '';  // Return empty for caller to update local array
     }
 
