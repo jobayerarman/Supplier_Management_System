@@ -139,14 +139,27 @@ function onEdit(e) {
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
+        // Log supplier edit for debugging dropdown issues
+        AuditLogger.logInfo('onEdit.supplierEdit',
+          `[TS:${Date.now()}] Row ${row}: Supplier edited to "${editedValue}", PaymentType="${paymentType}"`);
+
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
           // Use editedValue (the new supplier value just entered)
           if (editedValue && String(editedValue).trim()) {
+            AuditLogger.logInfo('onEdit.supplierEdit',
+              `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${editedValue}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
+          } else {
+            AuditLogger.logWarning('onEdit.supplierEdit',
+              `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
+          // Don't update balance for Due - wait for invoice selection
+          updateBalance = false;
+        } else {
+          // For other payment types, update balance normally
+          updateBalance = true;
         }
-        updateBalance = true;
         break;
 
       // ═══ 3. HANDLE INVOICE NO EDIT ═══
@@ -168,6 +181,9 @@ function onEdit(e) {
 
       // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
+        AuditLogger.logInfo('onEdit.paymentTypeEdit',
+          `[TS:${Date.now()}] Row ${row}: PaymentType changed to "${paymentType}", Supplier="${supplier}"`);
+
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
 
         if (['Regular', 'Partial'].includes(paymentType)) {
@@ -179,8 +195,16 @@ function onEdit(e) {
           // Due: Build dropdown for previous invoices
           // IMPORTANT: Re-read supplier from sheet to ensure we have the latest value
           const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
+          AuditLogger.logInfo('onEdit.paymentTypeEdit',
+            `[TS:${Date.now()}] Row ${row}: Re-read supplier="${currentSupplier}" (original="${supplier}")`);
+
           if (currentSupplier && String(currentSupplier).trim()) {
+            AuditLogger.logInfo('onEdit.paymentTypeEdit',
+              `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${currentSupplier}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
+          } else {
+            AuditLogger.logWarning('onEdit.paymentTypeEdit',
+              `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
           // Don't update balance immediately for Due - wait for invoice selection
           updateBalance = false;
@@ -194,10 +218,18 @@ function onEdit(e) {
 
       // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
+        AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+          `[TS:${Date.now()}] Row ${row}: PrevInvoice edited to "${editedValue}", PaymentType="${paymentType}", Supplier="${supplier}"`);
+
         if ((paymentType === 'Due') && supplier && editedValue) {
+          AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+            `[TS:${Date.now()}] Row ${row}: Calling autoPopulateDuePaymentAmount for invoice "${editedValue}"`);
           // Update local array with returned value (eliminates redundant recalculation)
           const populatedAmount = autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
           rowValues[configCols.paymentAmt] = populatedAmount;
+        } else {
+          AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+            `[TS:${Date.now()}] Row ${row}: Skipping autoPopulate (PaymentType="${paymentType}", Supplier="${supplier}", editedValue="${editedValue}")`);
         }
         updateBalance = true;
         break;
@@ -401,9 +433,14 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
     const paymentAmtCol = cols.paymentAmt + 1;
     const prevInvoiceCol = cols.prevInvoice + 1;
 
+    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+      `[TS:${Date.now()}] Row ${row}: Clearing fields for "${newPaymentType}"`);
+
     switch (newPaymentType) {
       case 'Unpaid':
         // ✓ BATCH CLEAR: Both fields at once (2 cells)
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${Date.now()}] Row ${row}: Clearing prevInvoice AND paymentAmt for Unpaid`);
         const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2); // F:G
         unpaidRange.clearContent().clearNote().clearDataValidations();
         unpaidRange.setBackground(null);
@@ -412,18 +449,24 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
       case 'Regular':
       case 'Partial':
         // ✓ SINGLE CELL: Only clear prevInvoice (Regular/Partial auto-populate paymentAmt)
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${Date.now()}] Row ${row}: Clearing prevInvoice only for ${newPaymentType}`);
         const invoiceRange = sheet.getRange(row, prevInvoiceCol);
         invoiceRange.clearContent().clearNote().clearDataValidations().setBackground(null);
         break;
 
       case 'Due':
         // ✓ SINGLE CELL: Only clear paymentAmt (user selects from dropdown, amount auto-populates)
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${Date.now()}] Row ${row}: Clearing paymentAmt only for Due`);
         const amountRange = sheet.getRange(row, paymentAmtCol);
         amountRange.clearContent().setBackground(null);
         break;
 
       default:
         // Unknown type - clear both for safety
+        AuditLogger.logWarning('clearPaymentFieldsForTypeChange',
+          `[TS:${Date.now()}] Row ${row}: Unknown type "${newPaymentType}", clearing both fields`);
         const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
         defaultRange.clearContent().clearNote().clearDataValidations();
         defaultRange.setBackground(null);
