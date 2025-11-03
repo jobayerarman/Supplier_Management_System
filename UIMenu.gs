@@ -3,6 +3,13 @@
  *
  * Provides UI menu for batch validation and posting operations
  * to streamline end-of-day workflow processing.
+ *
+ * MASTER DATABASE COMPATIBILITY:
+ * - All operations are Master DB aware
+ * - Reads from daily sheets (always local)
+ * - Writes via InvoiceManager/PaymentManager (Master DB aware)
+ * - Performance tracking for both Local and Master modes
+ * - Audit logging via AuditLogger (Master DB aware)
  */
 
 /**
@@ -326,15 +333,29 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
  * Posts rows in the specified sheet
  * Only posts rows that pass validation
  *
+ * MASTER DATABASE AWARENESS:
+ * - Tracks performance in both Local and Master modes
+ * - Logs connection mode for audit trail
+ * - Optimized cache invalidation (once per supplier)
+ * - Batch audit logging for efficiency
+ *
  * @param {Sheet} sheet - The sheet to process
  * @param {number} startRow - Optional start row (defaults to dataStartRow)
  * @param {number} endRow - Optional end row (defaults to last row)
- * @return {Object} Posting results
+ * @return {Object} Posting results with performance metrics
  */
 function postRowsInSheet(sheet, startRow = null, endRow = null) {
+  // ═══ PERFORMANCE TRACKING: Start timer ═══
+  const batchStartTime = Date.now();
+
   const sheetName = sheet.getName();
   const dataStartRow = CONFIG.dataStartRow;
   const lastRow = sheet.getLastRow();
+
+  // ═══ MASTER DB AWARENESS: Log connection mode ═══
+  const connectionMode = CONFIG.isMasterMode() ? 'MASTER' : 'LOCAL';
+  AuditLogger.logInfo('BATCH_POST_START',
+    `Starting batch post in ${connectionMode} mode (${sheetName})`);
 
   // Set default row range
   if (startRow === null) startRow = dataStartRow;
@@ -347,7 +368,9 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       posted: 0,
       failed: 0,
       skipped: 0,
-      errors: []
+      errors: [],
+      connectionMode: connectionMode,
+      duration: 0
     };
   }
 
@@ -359,15 +382,17 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       posted: 0,
       failed: 0,
       skipped: 0,
-      errors: []
+      errors: [],
+      connectionMode: connectionMode,
+      duration: 0
     };
   }
 
   const numRows = endRow - startRow + 1;
 
-  // ═══ UX FEEDBACK: Show initial toast ═══
+  // ═══ UX FEEDBACK: Show initial toast with connection mode ═══
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    `Starting batch post of ${numRows} rows...`,
+    `Starting batch post of ${numRows} rows (${connectionMode} mode)...`,
     'Processing',
     3
   );
@@ -381,7 +406,10 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
     posted: 0,
     failed: 0,
     skipped: 0,
-    errors: []
+    errors: [],
+    connectionMode: connectionMode,
+    duration: 0,
+    avgTimePerRow: 0
   };
 
   // ═══ BATCH OPTIMIZATION: Collect suppliers for cache invalidation ═══
@@ -529,13 +557,28 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
     CacheManager.invalidateSupplierCache(supplier);
   }
 
+  // ═══ PERFORMANCE TRACKING: Calculate metrics ═══
+  const batchEndTime = Date.now();
+  results.duration = batchEndTime - batchStartTime;
+  results.avgTimePerRow = results.posted > 0
+    ? Math.round(results.duration / results.posted)
+    : 0;
+
+  // ═══ MASTER DB AWARENESS: Log completion with performance metrics ═══
+  AuditLogger.logInfo('BATCH_POST_COMPLETE',
+    `Batch post completed in ${connectionMode} mode: ` +
+    `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped | ` +
+    `Duration: ${results.duration}ms, Avg: ${results.avgTimePerRow}ms/row | ` +
+    `Suppliers invalidated: ${suppliersToInvalidate.size}`);
+
   // ═══ FLUSH AUDIT QUEUE ═══
   // Write all queued audit entries in single batch operation
   AuditLogger.flush();
 
-  // ═══ UX FEEDBACK: Final completion toast ═══
+  // ═══ UX FEEDBACK: Final completion toast with performance ═══
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    `Completed: ${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
+    `Completed in ${(results.duration / 1000).toFixed(1)}s (${connectionMode} mode): ` +
+    `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
     'Success',
     5
   );
@@ -571,7 +614,12 @@ function buildDataObject(rowData, rowNum, sheetName) {
 /**
  * Shows validation/posting results in a user-friendly dialog
  *
- * @param {Object} results - Results object
+ * MASTER DATABASE AWARENESS:
+ * - Displays connection mode (Local or Master)
+ * - Shows performance metrics for posting operations
+ * - Helps identify performance differences between modes
+ *
+ * @param {Object} results - Results object with performance metrics
  * @param {boolean} isPosting - True if posting operation, false if validation only
  */
 function showValidationResults(results, isPosting) {
@@ -587,7 +635,23 @@ function showValidationResults(results, isPosting) {
     message += `Invalid: ${results.invalid}\n`;
   }
 
-  message += `Skipped (empty or already posted): ${results.skipped}\n\n`;
+  message += `Skipped (empty or already posted): ${results.skipped}\n`;
+
+  // ═══ MASTER DB AWARENESS: Show connection mode and performance ═══
+  if (isPosting && results.connectionMode) {
+    message += `\n--- Performance ---\n`;
+    message += `Connection Mode: ${results.connectionMode}\n`;
+    message += `Total Duration: ${(results.duration / 1000).toFixed(1)}s\n`;
+    if (results.posted > 0) {
+      message += `Avg Time/Row: ${results.avgTimePerRow}ms\n`;
+    }
+    if (results.connectionMode === 'MASTER') {
+      message += `\nNote: Master mode may be slightly slower due to\n`;
+      message += `cross-file writes (+50-100ms per row expected).\n`;
+    }
+  }
+
+  message += '\n';
 
   // Show errors if any
   if (results.errors && results.errors.length > 0) {
