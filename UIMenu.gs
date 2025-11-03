@@ -589,12 +589,20 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
 /**
  * Builds data object from row data array
  *
+ * IMPORTANT: Extracts invoice date from daily sheet
+ * - Reads date from cell A3 of the daily sheet
+ * - Falls back to constructing date from sheet name (e.g., "01" → day 1)
+ * - Used by both InvoiceManager and PaymentManager for date fields
+ *
  * @param {Array} rowData - Array of cell values
  * @param {number} rowNum - Row number
  * @param {string} sheetName - Sheet name
- * @return {Object} Data object
+ * @return {Object} Data object with invoiceDate field
  */
 function buildDataObject(rowData, rowNum, sheetName) {
+  // Get invoice date from daily sheet (cell A3) or construct from sheet name
+  const invoiceDate = getDailySheetDate(sheetName) || new Date();
+
   return {
     supplier: rowData[CONFIG.cols.supplier],
     invoiceNo: rowData[CONFIG.cols.invoiceNo],
@@ -604,8 +612,9 @@ function buildDataObject(rowData, rowNum, sheetName) {
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
+    invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
     enteredBy: UserResolver.getCurrentUser().split("@")[0],
-    timestamp: new Date(),
+    timestamp: new Date(),     // Current processing time (for audit trail)
     rowNum: rowNum,
     sheetName: sheetName
   };

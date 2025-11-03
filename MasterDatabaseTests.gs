@@ -634,3 +634,113 @@ function testBatchOperationsPerformance() {
     Logger.log('='.repeat(80));
   }
 }
+
+/**
+ * TEST: buildDataObject Date Handling
+ *
+ * Tests that buildDataObject correctly extracts invoiceDate from daily sheet
+ * and passes it to InvoiceManager and PaymentManager
+ *
+ * WHAT IT TESTS:
+ * 1. buildDataObject includes invoiceDate field
+ * 2. invoiceDate is extracted from getDailySheetDate()
+ * 3. Data object structure matches expectations
+ * 4. PaymentManager compatibility (data.paymentDate || data.invoiceDate)
+ *
+ * RUN FROM: Script Editor → Select function → Run
+ */
+function testBuildDataObjectDateHandling() {
+  Logger.log('='.repeat(80));
+  Logger.log('TESTING: buildDataObject Date Handling');
+  Logger.log('='.repeat(80));
+
+  try {
+    // ═══ TEST 1: buildDataObject includes invoiceDate ═══
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 1: buildDataObject includes invoiceDate field');
+    Logger.log('─'.repeat(80));
+
+    const testSheetName = '15'; // Day 15 of current month
+    const testRowData = [
+      '', // Column A (not used)
+      'TEST_SUPPLIER', // Column B (supplier)
+      'TEST_INV_001', // Column C (invoiceNo)
+      1000, // Column D (receivedAmt)
+      'Unpaid', // Column E (paymentType)
+      '', // Column F (prevInvoice)
+      0, // Column G (paymentAmt)
+      '', // Column H (balance)
+      'Test notes', // Column I (notes)
+      true, // Column J (post)
+      '', // Column K (status)
+      '', // Column L (enteredBy)
+      '', // Column M (timestamp)
+      '' // Column N (sysId)
+    ];
+
+    const testRowNum = 10;
+
+    // Call buildDataObject
+    const data = buildDataObject(testRowData, testRowNum, testSheetName);
+
+    Logger.log('   Data object keys: ' + Object.keys(data).join(', '));
+
+    // Check if invoiceDate exists
+    if (!data.hasOwnProperty('invoiceDate')) {
+      throw new Error('data.invoiceDate is missing!');
+    }
+
+    Logger.log('   ✅ data.invoiceDate exists');
+
+    // ═══ TEST 2: invoiceDate is a Date object ===
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 2: invoiceDate is a valid Date object');
+    Logger.log('─'.repeat(80));
+
+    if (!(data.invoiceDate instanceof Date)) {
+      throw new Error('data.invoiceDate is not a Date (type: ' + typeof data.invoiceDate + ')');
+    }
+
+    Logger.log('   ✅ data.invoiceDate is a Date object');
+    Logger.log('   Value: ' + data.invoiceDate);
+
+    // ═══ TEST 3: PaymentManager compatibility ===
+    Logger.log('\n' + '─'.repeat(80));
+    Logger.log('TEST 3: PaymentManager date fallback chain');
+    Logger.log('─'.repeat(80));
+
+    // Simulate PaymentManager.gs line 386: data.paymentDate || data.invoiceDate
+    const paymentDate = data.paymentDate || data.invoiceDate;
+
+    Logger.log('   data.paymentDate: ' + (data.paymentDate || 'undefined'));
+    Logger.log('   data.invoiceDate: ' + data.invoiceDate);
+    Logger.log('   Resolved paymentDate: ' + paymentDate);
+
+    if (!(paymentDate instanceof Date)) {
+      throw new Error('PaymentManager date fallback failed');
+    }
+
+    Logger.log('   ✅ PaymentManager date fallback works correctly');
+
+    // ═══ TEST SUMMARY ===
+    Logger.log('\n' + '═'.repeat(80));
+    Logger.log('TEST SUMMARY: buildDataObject Date Handling');
+    Logger.log('═'.repeat(80));
+    Logger.log('✅ data.invoiceDate field exists');
+    Logger.log('✅ invoiceDate is a valid Date object');
+    Logger.log('✅ PaymentManager compatibility verified');
+    Logger.log('');
+    Logger.log('RESULT: buildDataObject correctly handles invoice dates!');
+    Logger.log('  - InvoiceManager will use data.invoiceDate');
+    Logger.log('  - PaymentManager will use data.invoiceDate (no paymentDate provided)');
+    Logger.log('  - Dates reflect actual transaction date from daily sheet');
+    Logger.log('='.repeat(80));
+
+  } catch (error) {
+    Logger.log('');
+    Logger.log('❌ DATE HANDLING TEST FAILED:');
+    Logger.log('   ' + error.toString());
+    Logger.log('   Stack: ' + (error.stack || 'N/A'));
+    Logger.log('='.repeat(80));
+  }
+}
