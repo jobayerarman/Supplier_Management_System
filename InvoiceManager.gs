@@ -380,28 +380,44 @@ const InvoiceManager = {
    * @param {string} invoiceNo - Invoice number
    * @returns {Object|null} Invoice record or null if not found
    */
+  /**
+   * Find an invoice by supplier and invoice number
+   *
+   * Uses globalIndexMap for O(1) cross-partition lookup.
+   *
+   * @param {string} supplier - Supplier name
+   * @param {string} invoiceNo - Invoice number
+   * @returns {{row:number,data:Array,partition:string}|null}
+   */
   find: function (supplier, invoiceNo) {
     if (StringUtils.isEmpty(supplier) || StringUtils.isEmpty(invoiceNo)) {
       return null;
     }
 
     try {
-      // Get cached data with index
-      const { data, indexMap } = CacheManager.getInvoiceData();
+      // Get cached partition data with globalIndexMap
+      const cacheData = CacheManager.getInvoiceData();
 
       const normalizedSupplier = StringUtils.normalize(supplier);
       const normalizedInvoice = StringUtils.normalize(invoiceNo);
       const key = `${normalizedSupplier}|${normalizedInvoice}`;
-      
-      const rowIndex = indexMap.get(key);
 
-      if (rowIndex === undefined || rowIndex === null) {
+      // Use globalIndexMap for cross-partition lookup
+      const location = cacheData.globalIndexMap?.get(key);
+
+      if (!location) {
         return null;
       }
-      
+
+      // Get data from appropriate partition
+      const partitionData = location.partition === 'active'
+        ? cacheData.activeData
+        : cacheData.inactiveData;
+
       return {
-        row: rowIndex + 1, // convert to 1-based sheet index
-        data: data[rowIndex],
+        row: location.sheetRow, // Use tracked sheet row (1-based)
+        data: partitionData[location.index],
+        partition: location.partition
       };
 
     } catch (error) {
@@ -502,40 +518,78 @@ const InvoiceManager = {
    * @param {boolean} includePaid - Whether to include paid invoices
    * @returns {Array} Array of invoice objects
    */
+  /**
+   * Get all invoices for a supplier (paid and/or unpaid)
+   *
+   * Uses partition-aware supplier indices for O(m) performance where m = supplier's invoice count.
+   *
+   * @param {string} supplier - Supplier name
+   * @param {boolean} includePaid - Include paid invoices (default true)
+   * @returns {Array<Object>} Array of invoice objects
+   */
   getAllForSupplier: function (supplier, includePaid = true) {
     if (StringUtils.isEmpty(supplier)) {
       return [];
     }
 
     try {
-      // Use cached data
-      const { data } = CacheManager.getInvoiceData();
+      // Use partition-aware supplier indices
+      const cacheData = CacheManager.getInvoiceData();
       const col = CONFIG.invoiceCols;
       const normalizedSupplier = StringUtils.normalize(supplier);
 
-      // Single-pass filter and map
+      const activeRows = cacheData.activeSupplierIndex?.get(normalizedSupplier) || [];
+      const inactiveRows = cacheData.inactiveSupplierIndex?.get(normalizedSupplier) || [];
+
       const invoices = [];
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        if (StringUtils.equals(row[col.supplier], normalizedSupplier)) {
+
+      // Process active partition (unpaid/partial invoices)
+      for (const i of activeRows) {
+        const row = cacheData.activeData[i];
+        if (!row) continue;
+
+        const balanceDue = Number(row[col.balanceDue]) || 0;
+
+        invoices.push({
+          invoiceNo: row[col.invoiceNo],
+          invoiceDate: row[col.invoiceDate],
+          totalAmount: row[col.totalAmount],
+          totalPaid: row[col.totalPaid],
+          balanceDue: balanceDue,
+          status: row[col.status],
+          paidDate: row[col.paidDate],
+          daysOutstanding: row[col.daysOutstanding],
+          originDay: row[col.originDay],
+          enteredBy: row[col.enteredBy],
+          timestamp: row[col.timestamp],
+          sysId: row[col.sysId],
+          partition: 'active'
+        });
+      }
+
+      // Process inactive partition (paid invoices) if requested
+      if (includePaid) {
+        for (const i of inactiveRows) {
+          const row = cacheData.inactiveData[i];
+          if (!row) continue;
+
           const balanceDue = Number(row[col.balanceDue]) || 0;
 
-          if (includePaid || balanceDue > 0) {
-            invoices.push({
-              invoiceNo: row[col.invoiceNo],
-              invoiceDate: row[col.invoiceDate],
-              totalAmount: row[col.totalAmount],
-              totalPaid: row[col.totalPaid],
-              balanceDue: balanceDue,
-              status: row[col.status],
-              paidDate: row[col.paidDate],
-              daysOutstanding: row[col.daysOutstanding],
-              originDay: row[col.originDay],
-              enteredBy: row[col.enteredBy],
-              timestamp: row[col.timestamp],
-              sysId: row[col.sysId]
-            });
-          }
+          invoices.push({
+            invoiceNo: row[col.invoiceNo],
+            invoiceDate: row[col.invoiceDate],
+            totalAmount: row[col.totalAmount],
+            totalPaid: row[col.totalPaid],
+            balanceDue: balanceDue,
+            status: row[col.status],
+            paidDate: row[col.paidDate],
+            daysOutstanding: row[col.daysOutstanding],
+            originDay: row[col.originDay],
+            enteredBy: row[col.enteredBy],
+            timestamp: row[col.timestamp],
+            sysId: row[col.sysId],
+            partition: 'inactive'
+          });
         }
       }
 
@@ -556,42 +610,51 @@ const InvoiceManager = {
    */
   getStatistics: function () {
     try {
-      // Use cached data
-      const { data } = CacheManager.getInvoiceData();
+      // Use partition-aware data
+      const cacheData = CacheManager.getInvoiceData();
       const col = CONFIG.invoiceCols;
 
-      if (data.length < 2) {
+      const activeCount = cacheData.activeData ? cacheData.activeData.length - 1 : 0; // Exclude header
+      const inactiveCount = cacheData.inactiveData ? cacheData.inactiveData.length - 1 : 0; // Exclude header
+
+      if (activeCount === 0 && inactiveCount === 0) {
         return {
           total: 0,
           unpaid: 0,
           partial: 0,
           paid: 0,
-          totalOutstanding: 0
+          totalOutstanding: 0,
+          activePartitionSize: 0,
+          inactivePartitionSize: 0
         };
       }
 
-      // Single-pass aggregation
-      let unpaid = 0, partial = 0, paid = 0;
+      // Aggregate active partition (Unpaid + Partial)
+      let unpaid = 0, partial = 0;
       let totalOutstanding = 0;
 
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
+      for (let i = 1; i < cacheData.activeData.length; i++) {
+        const row = cacheData.activeData[i];
         const status = row[col.status];
         const balanceDue = Number(row[col.balanceDue]) || 0;
 
         if (StringUtils.equals(status, 'Unpaid')) unpaid++;
         else if (StringUtils.equals(status, 'Partial')) partial++;
-        else if (StringUtils.equals(status, 'Paid')) paid++;
 
         totalOutstanding += balanceDue;
       }
 
+      // Inactive partition = Paid invoices (balance should be ~$0)
+      const paid = inactiveCount;
+
       return {
-        total: data.length - 1, // Exclude header
+        total: activeCount + inactiveCount,
         unpaid: unpaid,
         partial: partial,
         paid: paid,
-        totalOutstanding: totalOutstanding
+        totalOutstanding: totalOutstanding,
+        activePartitionSize: activeCount,
+        inactivePartitionSize: inactiveCount
       };
 
     } catch (error) {
