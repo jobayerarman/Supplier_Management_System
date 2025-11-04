@@ -24,54 +24,116 @@
  * - 60-70% reduction in lock contention vs previous implementation
  */
 
+/**
+ * ═══════════════════════════════════════════════════════════════════
+ * SIMPLE TRIGGER - Lightweight UI Operations Only
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * This function is AUTOMATICALLY triggered by Google Sheets when a user edits a cell.
+ *
+ * RESTRICTIONS:
+ * - Cannot access other spreadsheets (no Master Database access)
+ * - Cannot call SpreadsheetApp.openById()
+ * - Limited permissions (AuthMode.LIMITED)
+ * - 30-second execution limit
+ *
+ * ALLOWED OPERATIONS:
+ * - Basic field copying (Invoice No → Prev Invoice)
+ * - Simple value propagation (Received Amt → Payment Amt for Regular)
+ * - Lightweight validations
+ * - UI feedback
+ *
+ * PROHIBITED OPERATIONS (Handled by onEditInstallable):
+ * - Database writes (InvoiceDatabase, PaymentLog, AuditLog)
+ * - Cache operations (CacheManager.getInvoiceData, etc.)
+ * - Dropdown building (requires cache lookup)
+ * - Balance calculations (requires cache lookup)
+ * - Auto-population (requires database lookup)
+ *
+ * For Master Database mode, install onEditInstallable as installable trigger.
+ */
 function onEdit(e) {
   // Validate event object
   if (!e || !e.range) return;
 
-  // ═══ CRITICAL FIX: Detect and exit simple trigger in Master Database mode ═══
-  // Simple triggers cannot access Master Database (SpreadsheetApp.openById permission denied)
-  // If we're in Master mode and this is a simple trigger, exit immediately to avoid:
-  // 1. 32-second timeout attempting Master DB access
-  // 2. Continuing with empty data after timeout
-  // 3. Clearing dropdowns/amounts that installable trigger populated correctly
+  const sheet = e.range.getSheet();
+  const sheetName = sheet.getName();
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+
+  // Skip non-daily sheets or header rows immediately
+  if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
+
   try {
-    const authMode = ScriptApp.getAuthMode();
-    const isSimpleTrigger = (authMode === ScriptApp.AuthMode.LIMITED);
-    const isMasterMode = CONFIG.isMasterMode();
+    const configCols = CONFIG.cols;
 
-    if (isSimpleTrigger && isMasterMode) {
-      // We're in simple trigger AND Master Database mode
-      // Exit immediately - installable trigger will handle everything
-      Logger.log('⚠️  SIMPLE TRIGGER DETECTED in Master Database mode');
-      Logger.log('Exiting immediately to avoid permission errors and timeout.');
-      Logger.log('Installable trigger will handle this edit event.');
+    // ═══ SINGLE BATCH READ - ONE API CALL ═══
+    const activeRow = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily);
+    let rowValues = activeRow.getValues()[0];
 
-      // Log to AuditLogger for visibility
-      AuditLogger.logInfo('onEdit.simpleTriggerExit',
-        `Simple trigger detected in Master mode - exiting to defer to installable trigger (Row ${e.range.getRow()})`);
+    // Pre-extract commonly used values
+    const editedValue = rowValues[col - 1];
+    const paymentType = rowValues[configCols.paymentType];
+    const invoiceNo = rowValues[configCols.invoiceNo];
+    const receivedAmt = parseFloat(rowValues[configCols.receivedAmt]) || 0;
 
-      return; // ← EXIT IMMEDIATELY
+    // ═══ LIGHTWEIGHT OPERATIONS ONLY ═══
+    switch (col) {
+      // ═══ INVOICE NO EDIT - Simple Copy ═══
+      case configCols.invoiceNo + 1:
+        if (['Regular', 'Partial'].includes(paymentType)) {
+          if (invoiceNo) {
+            sheet.getRange(row, configCols.prevInvoice + 1).setValue(invoiceNo);
+          }
+        }
+        break;
+
+      // ═══ RECEIVED AMOUNT EDIT - Simple Copy for Regular ═══
+      case configCols.receivedAmt + 1:
+        if (paymentType === 'Regular') {
+          sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
+        }
+        break;
+
+      // ═══ ALL OTHER EDITS - Deferred to Installable Trigger ═══
+      default:
+        // Simple trigger does NOTHING for:
+        // - Post checkbox (needs database)
+        // - Supplier edit (needs cache for dropdown)
+        // - Payment type (needs cache for dropdown/balance)
+        // - Previous invoice (needs cache for balance lookup)
+        // - Payment amount (needs cache for balance preview)
+        return;
     }
 
-    // If we get here, either:
-    // - We're in installable trigger (full permissions) OR
-    // - We're in local mode (no Master DB access needed)
-    // Continue with normal execution...
-
-    if (isSimpleTrigger) {
-      Logger.log('ℹ️  Simple trigger detected in LOCAL mode - continuing normally');
-    } else {
-      Logger.log('✅ Installable trigger detected - full permissions available');
-    }
-
-  } catch (authError) {
-    // If we can't detect auth mode, assume worst case (simple trigger in Master mode)
-    // Better to exit early than risk clearing data
-    Logger.log('⚠️  Cannot detect trigger type - assuming simple trigger, exiting for safety');
-    AuditLogger.logWarning('onEdit.authDetectionFailed',
-      `Failed to detect trigger type: ${authError.toString()} - exiting as safety measure`);
-    return; // ← EXIT FOR SAFETY
+  } catch (error) {
+    console.error("onEdit (simple trigger) error:", error);
+    Logger.log("Simple trigger error (non-critical):", error.toString());
   }
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════
+ * INSTALLABLE TRIGGER - Full Database and Cache Operations
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * This function must be set up as an INSTALLABLE trigger (not automatic).
+ * Run setupInstallableEditTrigger() to create it.
+ *
+ * CAPABILITIES:
+ * - Full permissions (AuthMode.FULL)
+ * - Can access Master Database (SpreadsheetApp.openById)
+ * - Can read/write InvoiceDatabase, PaymentLog, AuditLog
+ * - Can access CacheManager for lookups
+ * - Can build dropdowns with database data
+ * - Can calculate balances using cache
+ * - No 30-second limit
+ *
+ * This is the MAIN handler for all database-dependent operations.
+ */
+function onEditInstallable(e) {
+  // Validate event object
+  if (!e || !e.range) return;
 
   const sheet = e.range.getSheet();
   const sheetName = sheet.getName();
@@ -99,7 +161,7 @@ function onEdit(e) {
     // Track if balance update is needed (consolidated at end)
     let updateBalance = false;
 
-    // ═══ CENTRALIZED BRANCHING - MINIMAL WRITES ═══
+    // ═══ FULL OPERATIONS INCLUDING DATABASE/CACHE ═══
     switch (col) {
       // ═══ 1. HANDLE POSTING ═══
       case configCols.post + 1:
@@ -144,8 +206,6 @@ function onEdit(e) {
           }
 
           // ═══ IMMEDIATE UX FEEDBACK (Before lock acquisition) ═══
-          // Show "PROCESSING..." status immediately so user knows system is working
-          // This provides instant feedback during the 200-500ms processing delay
           const processingTimeStr = DateUtils.formatTime(now);
           setBatchPostStatus(
             sheet,
@@ -185,18 +245,18 @@ function onEdit(e) {
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
         // Log supplier edit for debugging dropdown issues
-        AuditLogger.logInfo('onEdit.supplierEdit',
+        AuditLogger.logInfo('onEditInstallable.supplierEdit',
           `[TS:${Date.now()}] Row ${row}: Supplier edited to "${editedValue}", PaymentType="${paymentType}"`);
 
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
           // Use editedValue (the new supplier value just entered)
           if (editedValue && String(editedValue).trim()) {
-            AuditLogger.logInfo('onEdit.supplierEdit',
+            AuditLogger.logInfo('onEditInstallable.supplierEdit',
               `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${editedValue}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
           } else {
-            AuditLogger.logWarning('onEdit.supplierEdit',
+            AuditLogger.logWarning('onEditInstallable.supplierEdit',
               `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
           // Don't update balance for Due - wait for invoice selection
@@ -207,26 +267,9 @@ function onEdit(e) {
         }
         break;
 
-      // ═══ 3. HANDLE INVOICE NO EDIT ═══
-      case configCols.invoiceNo + 1:
-        if (['Regular', 'Partial'].includes(paymentType)) {
-          if (invoiceNo) sheet.getRange(row, configCols.prevInvoice + 1).setValue(invoiceNo);
-        }
-        break;
-
-      // ═══ 4. HANDLE RECEIVED AMOUNT EDIT ═══
-      case configCols.receivedAmt + 1:
-        if (paymentType === 'Regular') {
-          sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
-          // Update local array instead of re-reading from sheet
-          rowValues[configCols.paymentAmt] = receivedAmt;
-        }
-        updateBalance = true;
-        break;
-
-      // ═══ 5. HANDLE PAYMENT TYPE EDIT ═══
+      // ═══ 3. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
-        AuditLogger.logInfo('onEdit.paymentTypeEdit',
+        AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
           `[TS:${Date.now()}] Row ${row}: PaymentType changed to "${paymentType}", Supplier="${supplier}"`);
 
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
@@ -240,15 +283,15 @@ function onEdit(e) {
           // Due: Build dropdown for previous invoices
           // IMPORTANT: Re-read supplier from sheet to ensure we have the latest value
           const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
-          AuditLogger.logInfo('onEdit.paymentTypeEdit',
+          AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
             `[TS:${Date.now()}] Row ${row}: Re-read supplier="${currentSupplier}" (original="${supplier}")`);
 
           if (currentSupplier && String(currentSupplier).trim()) {
-            AuditLogger.logInfo('onEdit.paymentTypeEdit',
+            AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
               `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${currentSupplier}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
           } else {
-            AuditLogger.logWarning('onEdit.paymentTypeEdit',
+            AuditLogger.logWarning('onEditInstallable.paymentTypeEdit',
               `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
           // Don't update balance immediately for Due - wait for invoice selection
@@ -261,29 +304,37 @@ function onEdit(e) {
         }
         break;
 
-      // ═══ 6. HANDLE PREVIOUS INVOICE SELECTION ═══
+      // ═══ 4. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
-        AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+        AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
           `[TS:${Date.now()}] Row ${row}: PrevInvoice edited to "${editedValue}", PaymentType="${paymentType}", Supplier="${supplier}"`);
 
         if ((paymentType === 'Due') && supplier && editedValue) {
-          AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+          AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
             `[TS:${Date.now()}] Row ${row}: Calling autoPopulateDuePaymentAmount for invoice "${editedValue}"`);
           // Update local array with returned value (eliminates redundant recalculation)
           const populatedAmount = autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
           rowValues[configCols.paymentAmt] = populatedAmount;
         } else {
-          AuditLogger.logInfo('onEdit.prevInvoiceEdit',
+          AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
             `[TS:${Date.now()}] Row ${row}: Skipping autoPopulate (PaymentType="${paymentType}", Supplier="${supplier}", editedValue="${editedValue}")`);
         }
         updateBalance = true;
         break;
 
-      // ═══ 7. HANDLE PAYMENT AMOUNT EDIT ═══
+      // ═══ 5. HANDLE PAYMENT AMOUNT EDIT ═══
       case configCols.paymentAmt + 1:
         if (paymentType !== 'Unpaid') {
           updateBalance = true;
         }
+        break;
+
+      // ═══ 6. HANDLE OTHER EDITS (Supplier, Amounts, etc.) ═══
+      case configCols.supplier + 1:
+      case configCols.receivedAmt + 1:
+      case configCols.invoiceNo + 1:
+        // Balance updates for these handled by simple trigger + balance update here
+        updateBalance = true;
         break;
 
       default:
@@ -297,8 +348,8 @@ function onEdit(e) {
     }
 
   } catch (error) {
-    console.error("onEdit error:", error);
-    logSystemError("onEdit", error.toString());
+    console.error("onEditInstallable error:", error);
+    logSystemError("onEditInstallable", error.toString());
   }
 }
 
@@ -790,23 +841,29 @@ function setupInstallableEditTrigger() {
     }
   });
 
-  // Create new installable Edit trigger
-  const newTrigger = ScriptApp.newTrigger('onEdit')
+  // Create new installable Edit trigger → Calls onEditInstallable (NOT onEdit)
+  const newTrigger = ScriptApp.newTrigger('onEditInstallable')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
   Logger.log('✅ Installable Edit trigger created successfully!');
   Logger.log(`   Trigger ID: ${newTrigger.getUniqueId()}`);
+  Logger.log(`   Handler Function: onEditInstallable`);
   Logger.log('');
-  Logger.log('The onEdit function now has full permissions to access Master Database.');
+  Logger.log('The onEditInstallable function now has full permissions to access Master Database.');
+  Logger.log('Simple trigger (onEdit) will handle lightweight UI operations only.');
   Logger.log('You can now post transactions that will write to the Master Database.');
 
   // Show success message to user
   SpreadsheetApp.getUi().alert(
     'Trigger Setup Complete',
     '✅ Installable Edit trigger has been set up successfully!\n\n' +
-    'The system can now access the Master Database when posting transactions.\n\n' +
+    'Handler Function: onEditInstallable\n' +
+    'Permissions: Full access to Master Database\n\n' +
+    'Two triggers will now handle edits:\n' +
+    '• Simple trigger (onEdit) → Lightweight UI only\n' +
+    '• Installable trigger (onEditInstallable) → Database operations\n\n' +
     'You only need to run this setup once per spreadsheet.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
