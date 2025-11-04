@@ -106,13 +106,14 @@ const CacheManager = {
 
     const col = CONFIG.invoiceCols;
 
-    // Build partitions - iterate once
+    // Build partitions - iterate once, track original sheet row numbers
     for (let i = 1; i < data.length; i++) {
       const supplier = StringUtils.normalize(data[i][col.supplier]);
       const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
       if (!supplier || !invoiceNo) continue;
 
       const key = `${supplier}|${invoiceNo}`;
+      const sheetRow = i + 1; // Convert array index to sheet row (1-based)
       const isActive = this._isActiveInvoice(data[i]);
 
       if (isActive) {
@@ -126,8 +127,8 @@ const CacheManager = {
         }
         this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
 
-        // Global index for cross-partition lookups
-        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex });
+        // Global index for cross-partition lookups + sheet row tracking
+        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex, sheetRow: sheetRow });
       } else {
         // Add to inactive partition
         const inactiveArrayIndex = this.inactiveData.length;
@@ -139,8 +140,8 @@ const CacheManager = {
         }
         this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
 
-        // Global index for cross-partition lookups
-        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex });
+        // Global index for cross-partition lookups + sheet row tracking
+        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex, sheetRow: sheetRow });
       }
     }
 
@@ -211,8 +212,8 @@ const CacheManager = {
         }
         this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
 
-        // Update global index
-        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex });
+        // Update global index with sheet row tracking
+        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex, sheetRow: rowNumber });
         this.stats.activePartitionHits++;
       } else {
         // Add to inactive partition
@@ -225,8 +226,8 @@ const CacheManager = {
         }
         this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
 
-        // Update global index
-        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex });
+        // Update global index with sheet row tracking
+        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex, sheetRow: rowNumber });
         this.stats.inactivePartitionHits++;
       }
 
@@ -257,148 +258,101 @@ const CacheManager = {
   },
 
   /**
-   * UPDATE SINGLE INVOICE (Incremental Cache Update)
+   * UPDATE SINGLE INVOICE (Partition-Only Incremental Update)
    *
-   * PERFORMANCE FIX #1: Smart refresh with lazy evaluation support
+   * SIMPLIFIED: Uses globalIndexMap for partition-aware updates
    *
    * Updates only one invoice row without invalidating entire cache.
-   * Major performance optimization that eliminates full cache reloads.
+   * Handles partition transitions automatically.
    *
-   * NEW STRATEGY:
+   * STRATEGY:
    * - Defers sheet read when invoice was recently written (100ms window)
-   * - Marks invoice for lazy refresh instead of immediate read
-   * - Reduces cross-file latency in Master mode
-   * - Falls back to immediate read for explicitly requested updates
-   *
-   * PERFORMANCE: 1-2ms (deferred) vs 50-200ms (immediate read)
-   * USE CASE: Invoice amount or status changes
+   * - Uses globalIndexMap to locate invoice in correct partition
+   * - Updates in-place or transitions between partitions as needed
+   * - Tracks sheet row number for re-reading from source
    *
    * @param {string} supplier - Supplier name
    * @param {string} invoiceNo - Invoice number
-   * @param {boolean} forceRead - Force immediate read (default: false, use smart defer)
+   * @param {boolean} forceRead - Force immediate read (default: false)
    * @returns {boolean} Success flag
    */
   updateSingleInvoice: function (supplier, invoiceNo, forceRead = false) {
     const startTime = Date.now();
 
     // Validate cache is active
-    if (!this.data || !this.indexMap || !this.supplierIndex) {
+    if (!this.activeData || !this.globalIndexMap) {
       AuditLogger.logWarning('CacheManager.updateSingleInvoice',
         'Cache not initialized, cannot perform incremental update');
       return false;
     }
 
     if (!supplier || !invoiceNo) {
-      AuditLogger.logWarning('CacheManager.updateSingleInvoice',
-        'Invalid supplier or invoice number');
       return false;
     }
 
     try {
-      // Normalize identifiers
       const normalizedSupplier = StringUtils.normalize(supplier);
       const normalizedInvoice = StringUtils.normalize(invoiceNo);
       const key = `${normalizedSupplier}|${normalizedInvoice}`;
 
-      // Find invoice in cache
-      const arrayIndex = this.indexMap.get(key);
+      // Find invoice in globalIndexMap
+      const location = this.globalIndexMap.get(key);
 
-      if (arrayIndex === undefined) {
-        // Not an error - invoice might be new or cache cold
-        AuditLogger.logInfo('CacheManager.updateSingleInvoice',
-          `Invoice ${invoiceNo} not in cache, skipping incremental update`);
-        return true; // Return true because this is not a failure condition
+      if (!location) {
+        // Not in cache - skip update (will be loaded on next cache refresh)
+        return true;
       }
 
-      // ✅ PERFORMANCE FIX: Defer read if invoice was recently written
-      // This avoids reading before SUMIFS formulas evaluate (50-200ms async delay)
+      // Defer read if recently written (avoid reading before SUMIFS evaluates)
       const now = Date.now();
       this._recentWrites = this._recentWrites || new Map();
       const writeTime = this._recentWrites.get(key);
-      const recentlyWritten = writeTime && (now - writeTime) < 100; // Within 100ms window
 
-      if (recentlyWritten && !forceRead) {
-        // Defer the read - mark for lazy refresh on next access
-        AuditLogger.logInfo('CacheManager.updateSingleInvoice',
-          `Invoice ${invoiceNo} recently written, deferring refresh (lazy evaluation)`);
-
-        // Mark invoice for lazy refresh
-        this._pendingRefresh = this._pendingRefresh || new Set();
-        this._pendingRefresh.add(key);
-
-        return true; // Success - will refresh lazily
+      if (writeTime && (now - writeTime) < 100 && !forceRead) {
+        // Defer - will refresh on next TTL expiration
+        return true;
       }
 
-      // Calculate sheet row number (array is 0-based, sheet is 1-based)
-      const rowNumber = arrayIndex + 1;
-
-      // Read single row from sheet (evaluated formulas)
-      // CONDITIONAL: Master mode reads from Master DB, Local mode from local sheet
+      // Read from sheet using tracked row number
       const invoiceSh = CONFIG.isMasterMode()
-        ? MasterDatabaseUtils.getTargetSheet('invoice')  // Master: Read from Master DB
-        : MasterDatabaseUtils.getSourceSheet('invoice'); // Local: Read from local sheet
+        ? MasterDatabaseUtils.getTargetSheet('invoice')
+        : MasterDatabaseUtils.getSourceSheet('invoice');
 
       const updatedData = invoiceSh.getRange(
-        rowNumber,
+        location.sheetRow,
         1,
         1,
         CONFIG.totalColumns.invoice
       ).getValues()[0];
 
-      // Check if supplier changed (edge case - requires index update)
-      const col = CONFIG.invoiceCols;
-      const oldSupplier = StringUtils.normalize(this.data[arrayIndex][col.supplier]);
-      const newSupplier = StringUtils.normalize(updatedData[col.supplier]);
-
-      if (oldSupplier !== newSupplier) {
-        // Supplier changed - update indices
-        this._updateSupplierIndices(arrayIndex, oldSupplier, newSupplier, normalizedInvoice);
-      }
-
-      // Update unified cache data
-      this.data[arrayIndex] = updatedData;
-
-      // ═══ PARTITION TRANSITION LOGIC ═══
-      // Check if invoice should move between partitions (active ↔ inactive)
-      const wasActive = this.activeIndexMap.has(key);
+      // Check partition transition
+      const wasActive = (location.partition === 'active');
       const isActive = this._isActiveInvoice(updatedData);
 
       if (wasActive && !isActive) {
-        // TRANSITION: Active → Inactive (invoice became fully paid)
+        // Active → Inactive transition
         this._moveToInactivePartition(key, normalizedSupplier, updatedData);
+        this.globalIndexMap.get(key).partition = 'inactive';
         this.stats.partitionTransitions++;
       } else if (!wasActive && isActive) {
-        // TRANSITION: Inactive → Active (rare: paid invoice reopened)
+        // Inactive → Active transition
         this._moveToActivePartition(key, normalizedSupplier, updatedData);
-      } else if (wasActive) {
-        // UPDATE: Still in active partition, update in place
-        const activeIndex = this.activeIndexMap.get(key);
-        if (activeIndex !== undefined) {
-          this.activeData[activeIndex] = updatedData;
-        }
+        this.globalIndexMap.get(key).partition = 'active';
+        this.stats.partitionTransitions++;
       } else {
-        // UPDATE: Still in inactive partition, update in place
-        const inactiveIndex = this.inactiveIndexMap.get(key);
-        if (inactiveIndex !== undefined) {
-          this.inactiveData[inactiveIndex] = updatedData;
+        // Update in same partition
+        if (wasActive) {
+          this.activeData[location.index] = updatedData;
+        } else {
+          this.inactiveData[location.index] = updatedData;
         }
-      }
-
-      // Validate consistency
-      if (!this._validateRowConsistency(arrayIndex)) {
-        AuditLogger.logError('CacheManager.updateSingleInvoice',
-          'Row consistency check failed after update, clearing cache');
-        this.clear();
-        return false;
       }
 
       // Update statistics
-      const endTime = Date.now();
-      const updateTime = endTime - startTime;
+      const updateTime = Date.now() - startTime;
       this.stats.incrementalUpdates++;
       this.stats.updateTimes.push(updateTime);
 
-      // Log periodic statistics (every 100 updates)
       if (this.stats.incrementalUpdates % 100 === 0) {
         this._logStatistics();
       }
@@ -408,97 +362,11 @@ const CacheManager = {
     } catch (error) {
       AuditLogger.logError('CacheManager.updateSingleInvoice',
         `Failed to update invoice ${invoiceNo}: ${error.toString()}`);
-
-      // Fallback: Clear cache for safety
       this.clear();
       return false;
     }
   },
 
-  /**
-   * Update supplier indices when supplier changes
-   * INTERNAL helper for updateSingleInvoice()
-   *
-   * @private
-   * @param {number} arrayIndex - Array index of invoice
-   * @param {string} oldSupplier - Previous supplier (normalized)
-   * @param {string} newSupplier - New supplier (normalized)
-   * @param {string} invoiceNo - Invoice number (normalized)
-   */
-  _updateSupplierIndices: function (arrayIndex, oldSupplier, newSupplier, invoiceNo) {
-    // Remove from old supplier's index
-    if (this.supplierIndex.has(oldSupplier)) {
-      const rows = this.supplierIndex.get(oldSupplier);
-      const filtered = rows.filter(i => i !== arrayIndex);
-      if (filtered.length > 0) {
-        this.supplierIndex.set(oldSupplier, filtered);
-      } else {
-        this.supplierIndex.delete(oldSupplier);
-      }
-    }
-
-    // Add to new supplier's index
-    if (!this.supplierIndex.has(newSupplier)) {
-      this.supplierIndex.set(newSupplier, []);
-    }
-    this.supplierIndex.get(newSupplier).push(arrayIndex);
-
-    // Update primary index key
-    const oldKey = `${oldSupplier}|${invoiceNo}`;
-    const newKey = `${newSupplier}|${invoiceNo}`;
-    this.indexMap.delete(oldKey);
-    this.indexMap.set(newKey, arrayIndex);
-
-    AuditLogger.logInfo('CacheManager._updateSupplierIndices',
-      `Supplier changed for invoice ${invoiceNo}: ${oldSupplier} → ${newSupplier}`);
-  },
-
-  /**
-   * Validate row consistency after update
-   * INTERNAL helper to detect cache corruption
-   *
-   * @private
-   * @param {number} arrayIndex - Array index to validate
-   * @returns {boolean} True if consistent
-   */
-  _validateRowConsistency: function (arrayIndex) {
-    try {
-      // Check data exists
-      if (!this.data[arrayIndex]) {
-        return false;
-      }
-
-      const col = CONFIG.invoiceCols;
-      const row = this.data[arrayIndex];
-      const supplier = StringUtils.normalize(row[col.supplier]);
-      const invoiceNo = StringUtils.normalize(row[col.invoiceNo]);
-
-      // Check both identifiers are present
-      if (!supplier || !invoiceNo) {
-        return false;
-      }
-
-      const key = `${supplier}|${invoiceNo}`;
-
-      // Primary index should point to this row
-      if (this.indexMap.get(key) !== arrayIndex) {
-        return false;
-      }
-
-      // Supplier index should contain this row
-      const supplierRows = this.supplierIndex.get(supplier);
-      if (!supplierRows || !supplierRows.includes(arrayIndex)) {
-        return false;
-      }
-
-      return true;
-
-    } catch (error) {
-      AuditLogger.logError('CacheManager._validateRowConsistency',
-        `Validation error: ${error.toString()}`);
-      return false;
-    }
-  },
 
   /**
    * Move invoice from active to inactive partition
@@ -688,17 +556,28 @@ const CacheManager = {
    *
    * @param {string} supplier - Supplier name
    */
+  /**
+   * ✅ PERFORMANCE FIX #3: Surgical supplier-specific invalidation
+   *
+   * Updates only the specified supplier's invoices in cache.
+   * Uses partition-aware architecture with globalIndexMap for efficient lookups.
+   *
+   * @param {string} supplier - Supplier name to invalidate
+   */
   invalidateSupplierCache: function (supplier) {
-    if (!supplier || !this.data || !this.supplierIndex) {
+    if (!supplier || !this.globalIndexMap) {
       // Cache not initialized or no supplier - nothing to do
       return;
     }
 
     try {
       const normalizedSupplier = StringUtils.normalize(supplier);
-      const rowIndices = this.supplierIndex.get(normalizedSupplier);
 
-      if (!rowIndices || rowIndices.length === 0) {
+      // Get invoices from both partitions
+      const activeRows = this.activeSupplierIndex?.get(normalizedSupplier) || [];
+      const inactiveRows = this.inactiveSupplierIndex?.get(normalizedSupplier) || [];
+
+      if (activeRows.length === 0 && inactiveRows.length === 0) {
         AuditLogger.logInfo('CacheManager.invalidateSupplierCache',
           `Supplier "${supplier}" not found in cache, no update needed`);
         return;
@@ -713,47 +592,56 @@ const CacheManager = {
       let updatedCount = 0;
       let partitionTransitions = 0;
 
-      for (const arrayIndex of rowIndices) {
+      // Process all invoices for this supplier (both partitions)
+      const allInvoices = [
+        ...activeRows.map(idx => ({ partition: 'active', index: idx })),
+        ...inactiveRows.map(idx => ({ partition: 'inactive', index: idx }))
+      ];
+
+      for (const { partition, index } of allInvoices) {
         try {
-          const rowNumber = arrayIndex + 1;
+          // Get invoice data to find the key
+          const currentData = partition === 'active'
+            ? this.activeData[index]
+            : this.inactiveData[index];
+
+          if (!currentData) continue;
+
+          const invoiceNo = StringUtils.normalize(currentData[col.invoiceNo]);
+          const key = `${normalizedSupplier}|${invoiceNo}`;
+
+          // Get sheet row from globalIndexMap
+          const location = this.globalIndexMap.get(key);
+          if (!location) continue;
 
           // Read single row from sheet
           const updatedData = invoiceSh.getRange(
-            rowNumber,
+            location.sheetRow,
             1,
             1,
             CONFIG.totalColumns.invoice
           ).getValues()[0];
 
-          // Update unified cache
-          this.data[arrayIndex] = updatedData;
-
-          // Update partitions if needed
-          const invoiceNo = StringUtils.normalize(updatedData[col.invoiceNo]);
-          const key = `${normalizedSupplier}|${invoiceNo}`;
-
-          const wasActive = this.activeIndexMap.has(key);
+          // Check partition transition
+          const wasActive = (partition === 'active');
           const isActive = this._isActiveInvoice(updatedData);
 
           if (wasActive && !isActive) {
             // Transition: Active → Inactive (became fully paid)
             this._moveToInactivePartition(key, normalizedSupplier, updatedData);
+            this.globalIndexMap.get(key).partition = 'inactive';
             partitionTransitions++;
           } else if (!wasActive && isActive) {
             // Transition: Inactive → Active (reopened)
             this._moveToActivePartition(key, normalizedSupplier, updatedData);
+            this.globalIndexMap.get(key).partition = 'active';
             partitionTransitions++;
-          } else if (wasActive) {
-            // Update in active partition
-            const activeIndex = this.activeIndexMap.get(key);
-            if (activeIndex !== undefined) {
-              this.activeData[activeIndex] = updatedData;
-            }
           } else {
-            // Update in inactive partition
-            const inactiveIndex = this.inactiveIndexMap.get(key);
-            if (inactiveIndex !== undefined) {
-              this.inactiveData[inactiveIndex] = updatedData;
+            // Update in same partition
+            if (wasActive) {
+              this.activeData[index] = updatedData;
+            } else {
+              this.inactiveData[index] = updatedData;
             }
           }
 
@@ -761,7 +649,7 @@ const CacheManager = {
 
         } catch (rowError) {
           AuditLogger.logError('CacheManager.invalidateSupplierCache',
-            `Failed to update row ${arrayIndex + 1} for supplier "${supplier}": ${rowError.toString()}`);
+            `Failed to update invoice for supplier "${supplier}": ${rowError.toString()}`);
         }
       }
 
@@ -778,28 +666,27 @@ const CacheManager = {
 
   /**
    * Clear entire cache memory
-   * Resets all cache data structures including partitions
+   * Resets all partition data structures and global index
    */
   clear: function () {
-    // Unified cache structures
-    this.data = null;
-    this.indexMap = null;
-    this.supplierIndex = null;
     this.timestamp = null;
 
-    // Partitioned cache structures
+    // Partition cache structures
     this.activeData = null;
     this.activeIndexMap = null;
     this.activeSupplierIndex = null;
     this.inactiveData = null;
     this.inactiveIndexMap = null;
     this.inactiveSupplierIndex = null;
+
+    // Global cross-partition index
+    this.globalIndexMap = null;
   },
 
   /**
    * Lazy load invoice data and build indices
    *
-   * Returns cached data if valid, otherwise loads from sheet.
+   * Returns cached partition data if valid, otherwise loads from sheet.
    * This is the primary method for accessing invoice data throughout the system.
    *
    * CONDITIONAL CACHE STRATEGY:
@@ -812,7 +699,7 @@ const CacheManager = {
    * - Cache loads happen once per TTL (60 seconds), not per transaction
    * - Tradeoff: Slight latency for guaranteed data freshness
    *
-   * @returns {{data:Array,indexMap:Map,supplierIndex:Map}}
+   * @returns {{activeData:Array,activeIndexMap:Map,activeSupplierIndex:Map,inactiveData:Array,inactiveIndexMap:Map,inactiveSupplierIndex:Map,globalIndexMap:Map}}
    */
   getInvoiceData: function () {
     const cached = this.get();
@@ -830,18 +717,14 @@ const CacheManager = {
       const emptyData = [[]]; // Header placeholder
       this.set(emptyData);
       return {
-        // Unified cache (backward compatibility)
-        data: emptyData,
-        indexMap: new Map(),
-        supplierIndex: new Map(),
-
         // Empty partition data
         activeData: [[]],
         activeIndexMap: new Map(),
         activeSupplierIndex: new Map(),
         inactiveData: [[]],
         inactiveIndexMap: new Map(),
-        inactiveSupplierIndex: new Map()
+        inactiveSupplierIndex: new Map(),
+        globalIndexMap: new Map()
       };
     }
 
@@ -853,52 +736,73 @@ const CacheManager = {
     AuditLogger.logInfo('CacheManager.getInvoiceData',
       `Cache loaded from ${CONFIG.isMasterMode() ? 'Master Database' : 'Local sheet'} (${lastRow - 1} invoices)`);
 
-    // ✅ PERFORMANCE FIX #2: Return partition data for partition-aware consumers
+    // ✅ Return partition-only data (backward compatibility removed)
     return {
-      // Unified cache (backward compatibility)
-      data: this.data,
-      indexMap: this.indexMap,
-      supplierIndex: this.supplierIndex,
-
-      // Partition data for optimized queries
       activeData: this.activeData,
       activeIndexMap: this.activeIndexMap,
       activeSupplierIndex: this.activeSupplierIndex,
       inactiveData: this.inactiveData,
       inactiveIndexMap: this.inactiveIndexMap,
-      inactiveSupplierIndex: this.inactiveSupplierIndex
+      inactiveSupplierIndex: this.inactiveSupplierIndex,
+      globalIndexMap: this.globalIndexMap
     };
   },
 
   /**
    * Get all invoice rows for a specific supplier
    *
-   * Uses supplier index for O(m) performance where m = supplier's invoice count
+   * Uses supplier index for O(m) performance where m = supplier's invoice count.
+   * Returns invoices from both active and inactive partitions.
    *
    * @param {string} supplier - Supplier name
-   * @returns {Array<{invoiceNo:string,status:string,amount:number,rowIndex:number}>}
+   * @returns {Array<{invoiceNo:string,status:string,amount:number,partition:string,rowIndex:number}>}
    */
   getSupplierData: function (supplier) {
     if (!supplier) return [];
     const normalized = StringUtils.normalize(supplier);
-    const { data, supplierIndex } = this.getInvoiceData();
+    const cacheData = this.getInvoiceData();
 
-    const rows = supplierIndex.get(normalized) || [];
-    if (rows.length === 0) {
+    const activeRows = cacheData.activeSupplierIndex?.get(normalized) || [];
+    const inactiveRows = cacheData.inactiveSupplierIndex?.get(normalized) || [];
+
+    if (activeRows.length === 0 && inactiveRows.length === 0) {
       AuditLogger.logWarning('CacheManager.getSupplierData',
         `No invoice data found for supplier: ${supplier}`);
       return [];
     }
 
-    return rows.map(i => {
-      const row = data[i];
-      return {
-        invoiceNo: row[CONFIG.invoiceCols.invoiceNo],
-        status: row[CONFIG.invoiceCols.status],
-        amount: row[CONFIG.invoiceCols.totalAmount],
-        rowIndex: i
-      };
-    });
+    const col = CONFIG.invoiceCols;
+    const results = [];
+
+    // Add active invoices
+    for (const i of activeRows) {
+      const row = cacheData.activeData[i];
+      if (row) {
+        results.push({
+          invoiceNo: row[col.invoiceNo],
+          status: row[col.status],
+          amount: row[col.totalAmount],
+          partition: 'active',
+          rowIndex: i
+        });
+      }
+    }
+
+    // Add inactive invoices
+    for (const i of inactiveRows) {
+      const row = cacheData.inactiveData[i];
+      if (row) {
+        results.push({
+          invoiceNo: row[col.invoiceNo],
+          status: row[col.status],
+          amount: row[col.totalAmount],
+          partition: 'inactive',
+          rowIndex: i
+        });
+      }
+    }
+
+    return results;
   },
 
   /**

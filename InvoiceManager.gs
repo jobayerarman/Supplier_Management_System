@@ -483,38 +483,10 @@ const InvoiceManager = {
         return unpaidInvoices;
       }
 
-      // Fallback: Use unified cache if partitions not available (backward compatibility)
+      // No active partition available - return empty
       AuditLogger.logWarning('InvoiceManager.getUnpaidForSupplier',
-        `Active partition not available, falling back to unified cache (SLOW PATH)`);
-
-      const { data, supplierIndex } = cacheData;
-      const rows = supplierIndex.get(normalizedSupplier) || [];
-
-      if (!rows || rows.length === 0) {
-        return [];
-      }
-
-      const col = CONFIG.invoiceCols;
-      const unpaidInvoices = [];
-
-      for (let i of rows) {
-        const row = data[i];
-        const status = StringUtils.normalize(row[col.status]);
-        const invoiceNo = row[col.invoiceNo];
-        const totalAmount = row[col.totalAmount];
-        const totalPaid = row[col.totalPaid] || 0;
-
-        // Filter by status (slower - requires status check for every invoice)
-        if (status === 'UNPAID' || status === 'PARTIAL') {
-          unpaidInvoices.push({
-            invoiceNo,
-            rowIndex: i,
-            amount: totalAmount - totalPaid
-          });
-        }
-      }
-
-      return unpaidInvoices;
+        `Active partition not available for supplier "${supplier}"`);
+      return [];
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.getUnpaidForSupplier',

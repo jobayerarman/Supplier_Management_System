@@ -313,61 +313,10 @@ const BalanceCalculator = {
         return total;
       }
 
-      // Fallback: Use unified cache if partitions not available (backward compatibility)
+      // No active partition available - return 0
       AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-        `Active partition not available for "${supplier}", falling back to unified cache (SLOW PATH)`);
-
-      const { data, supplierIndex } = cacheData;
-      const rowIndices = supplierIndex.get(normalizedSupplier);
-
-      // Supplier not found in index
-      if (!rowIndices || rowIndices.length === 0) {
-        return 0;
-      }
-
-      let total = 0;
-      let skippedRows = 0;
-
-      // Iterate all supplier-specific rows (O(m) where m = supplier's invoice count)
-      for (const rowIndex of rowIndices) {
-        try {
-          const row = data[rowIndex];
-
-          // Double-check supplier match (defensive programming)
-          if (!StringUtils.equals(row[CONFIG.invoiceCols.supplier], normalizedSupplier)) {
-            AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-              `Index mismatch: Row ${rowIndex + 1} indexed for "${supplier}" but contains "${row[CONFIG.invoiceCols.supplier]}"`);
-            skippedRows++;
-            continue;
-          }
-
-          const balanceDue = Number(row[CONFIG.invoiceCols.balanceDue]);
-
-          // Validate balance is a valid number
-          if (isNaN(balanceDue)) {
-            AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-              `Invalid balance at row ${rowIndex + 1} for supplier "${supplier}": "${row[CONFIG.invoiceCols.balanceDue]}"`);
-            skippedRows++;
-            continue;
-          }
-
-          total += balanceDue;
-
-        } catch (rowError) {
-          // Log specific row errors instead of silently skipping
-          AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-            `Error processing row ${rowIndex + 1} for supplier "${supplier}": ${rowError.toString()}`);
-          skippedRows++;
-        }
-      }
-
-      // Log summary if rows were skipped
-      if (skippedRows > 0) {
-        AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-          `Calculated outstanding for "${supplier}": ${total} (${skippedRows} rows skipped due to errors)`);
-      }
-
-      return total;
+        `Active partition not available for supplier "${supplier}"`);
+      return 0;
     } catch (error) {
       logSystemError('BalanceCalculator.getSupplierOutstanding',
         `Failed to get outstanding for supplier "${supplier}": ${error.toString()}`);
