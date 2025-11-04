@@ -28,21 +28,23 @@
  */
 
 const CacheManager = {
-  // ═══ CACHE DATA STRUCTURES ═══
-  data: null,           // Full invoice sheet data array (for backward compatibility)
-  indexMap: null,       // "SUPPLIER|INVOICE NO" -> row index (O(1) lookup)
-  supplierIndex: null,  // "SUPPLIER" -> [row indices] (O(m) supplier queries)
+  // ═══ PARTITION-ONLY CACHE (SIMPLIFIED) ═══
+  // Removed unified cache for reduced complexity and better scalability
   timestamp: null,      // Cache creation timestamp for TTL
   TTL: CONFIG.rules.CACHE_TTL_MS,  // Time-to-live in milliseconds
 
-  // ═══ PARTITIONED CACHE (NEW) ═══
-  activeData: null,         // Active invoices (Unpaid, Partial) - hot data
-  activeIndexMap: null,     // Active partition: "SUPPLIER|INVOICE NO" -> row index
-  activeSupplierIndex: null,// Active partition: "SUPPLIER" -> [row indices]
+  // Active partition: Unpaid and Partial invoices (hot data - 10-30% of total)
+  activeData: null,         // Active invoices array
+  activeIndexMap: null,     // "SUPPLIER|INVOICE NO" -> activeData index
+  activeSupplierIndex: null,// "SUPPLIER" -> [activeData indices]
 
-  inactiveData: null,       // Inactive invoices (Paid) - cold data
-  inactiveIndexMap: null,   // Inactive partition: "SUPPLIER|INVOICE NO" -> row index
-  inactiveSupplierIndex: null, // Inactive partition: "SUPPLIER" -> [row indices]
+  // Inactive partition: Paid invoices (cold data - 70-90% of total)
+  inactiveData: null,       // Inactive invoices array
+  inactiveIndexMap: null,   // "SUPPLIER|INVOICE NO" -> inactiveData index
+  inactiveSupplierIndex: null, // "SUPPLIER" -> [inactiveData indices]
+
+  // Global lookup map for finding invoices across partitions
+  globalIndexMap: null,     // "SUPPLIER|INVOICE NO" -> {partition: 'active'|'inactive', index: number}
 
   // ═══ PERFORMANCE STATISTICS ═══
   stats: {
@@ -59,79 +61,58 @@ const CacheManager = {
 
   /**
    * Get cached data if valid (within TTL)
-   * Returns null if cache is expired or not initialized
+   * SIMPLIFIED: Returns partition-only data (no backward compatibility)
    *
-   * PERFORMANCE FIX #2: Now includes partition data for partition-aware consumers
-   *
-   * @returns {{data:Array, indexMap:Map, supplierIndex:Map, activeData:Array, activeIndexMap:Map, activeSupplierIndex:Map, inactiveData:Array, inactiveIndexMap:Map, inactiveSupplierIndex:Map}|null}
+   * @returns {{activeData:Array, activeIndexMap:Map, activeSupplierIndex:Map, inactiveData:Array, inactiveIndexMap:Map, inactiveSupplierIndex:Map, globalIndexMap:Map}|null}
    */
   get: function () {
     const now = Date.now();
-    if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
+    if (this.activeData && this.timestamp && (now - this.timestamp) < this.TTL) {
+      this.stats.cacheHits++;
       return {
-        // Unified cache (backward compatibility)
-        data: this.data,
-        indexMap: this.indexMap,
-        supplierIndex: this.supplierIndex,
-
-        // ✅ PERFORMANCE FIX #2: Expose partition data
         activeData: this.activeData,
         activeIndexMap: this.activeIndexMap,
         activeSupplierIndex: this.activeSupplierIndex,
         inactiveData: this.inactiveData,
         inactiveIndexMap: this.inactiveIndexMap,
-        inactiveSupplierIndex: this.inactiveSupplierIndex
+        inactiveSupplierIndex: this.inactiveSupplierIndex,
+        globalIndexMap: this.globalIndexMap
       };
     }
     // Expired or not initialized
+    this.stats.cacheMisses++;
     return null;
   },
 
   /**
-   * Set new cache with supplier/invoice indexing
-   * Builds primary and secondary indices for fast lookups
-   * NEW: Partitions data into active and inactive caches
+   * Set new cache with partition-only indexing
+   * SIMPLIFIED: Builds only partition structures (no unified cache)
    *
    * @param {Array[]} data - Sheet data array
    */
   set: function (data) {
-    this.data = data;
     this.timestamp = Date.now();
 
-    // Initialize unified indices (backward compatibility)
-    this.indexMap = new Map();
-    this.supplierIndex = new Map();
-
-    // Initialize partitioned indices
+    // Initialize partition indices
     this.activeIndexMap = new Map();
     this.activeSupplierIndex = new Map();
     this.inactiveIndexMap = new Map();
     this.inactiveSupplierIndex = new Map();
+    this.globalIndexMap = new Map();
 
-    // Initialize partitioned data arrays
+    // Initialize partition data arrays
     this.activeData = [data[0]];  // Include header
     this.inactiveData = [data[0]]; // Include header
 
     const col = CONFIG.invoiceCols;
 
-    // Start from 1 if row 0 = header
+    // Build partitions - iterate once
     for (let i = 1; i < data.length; i++) {
       const supplier = StringUtils.normalize(data[i][col.supplier]);
       const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
       if (!supplier || !invoiceNo) continue;
 
-      // Primary index: supplier|invoiceNo -> row index (unified)
       const key = `${supplier}|${invoiceNo}`;
-      this.indexMap.set(key, i);
-
-      // Secondary index: supplier -> [row indices] (unified)
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(i);
-
-      // ═══ PARTITION LOGIC ═══
-      // Determine partition based on payment status
       const isActive = this._isActiveInvoice(data[i]);
 
       if (isActive) {
@@ -144,6 +125,9 @@ const CacheManager = {
           this.activeSupplierIndex.set(supplier, []);
         }
         this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
+
+        // Global index for cross-partition lookups
+        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex });
       } else {
         // Add to inactive partition
         const inactiveArrayIndex = this.inactiveData.length;
@@ -154,8 +138,13 @@ const CacheManager = {
           this.inactiveSupplierIndex.set(supplier, []);
         }
         this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
+
+        // Global index for cross-partition lookups
+        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex });
       }
     }
+
+    this.stats.fullReloads++;
   },
 
   /**
@@ -176,29 +165,22 @@ const CacheManager = {
   },
 
   /**
-   * ADD INVOICE TO CACHE (Write-Through Optimized)
+   * ADD INVOICE TO CACHE (Partition-Only Write-Through)
    *
-   * PERFORMANCE FIX #1: Eliminates redundant sheet reads after writes
+   * SIMPLIFIED: Direct partition write without redundant reads or unified cache
    *
-   * NEW STRATEGY:
-   * - Trusts pre-calculated data passed by caller (no re-read)
-   * - Eliminates 100-200ms cross-file read in Master mode
-   * - Accepts data "as-is" since new invoices have calculated values, not formulas
-   * - Formulas in InvoiceDatabase (SUMIFS, etc.) will evaluate asynchronously
+   * STRATEGY:
+   * - Trusts pre-calculated data (no sheet re-read)
+   * - Adds directly to appropriate partition
+   * - Updates global index for cross-partition lookups
+   * - Tracks write time for smart refresh deferral
    *
-   * RATIONALE:
-   * - Reading immediately after write captures unevaluated formulas (timing issue)
-   * - Formula evaluation is asynchronous in Google Sheets (50-200ms delay)
-   * - Better to cache write-time values and refresh on next TTL expiration
-   * - Eliminates 300-600ms latency per transaction in Master mode
-   *
-   * @param {number} rowNumber - Sheet row number (1-based)
+   * @param {number} rowNumber - Sheet row number (1-based, NOT USED in partition-only mode)
    * @param {Array} rowData - Invoice row data (pre-calculated values)
-   * @param {boolean} preEvaluated - If true, data is already evaluated (default: true for new invoices)
    */
-  addInvoiceToCache: function (rowNumber, rowData, preEvaluated = true) {
+  addInvoiceToCache: function (rowNumber, rowData) {
     // Only add if cache is currently active
-    if (!this.data || !this.indexMap || !this.supplierIndex) {
+    if (!this.activeData) {
       AuditLogger.logWarning('CacheManager.addInvoiceToCache',
         'Cache not initialized, skipping write-through');
       return;
@@ -215,70 +197,37 @@ const CacheManager = {
     }
 
     try {
-      // Calculate array index (row number is 1-based, array is 0-based)
-      const arrayIndex = rowNumber - 1;
-
-      // Ensure array is large enough
-      while (this.data.length <= arrayIndex) {
-        this.data.push([]);
-      }
-
-      // ✅ PERFORMANCE FIX: Trust pre-evaluated data (no sheet read)
-      // For new invoices, caller provides calculated values
-      // Formulas will evaluate asynchronously - we accept write-time state
-      let cacheData = rowData;
-
-      // Optional: Read from sheet only if explicitly requested (rare case)
-      if (!preEvaluated) {
-        // Fallback: Read from sheet if caller indicates data needs evaluation
-        const invoiceSh = CONFIG.isMasterMode()
-          ? MasterDatabaseUtils.getTargetSheet('invoice')
-          : MasterDatabaseUtils.getSourceSheet('invoice');
-
-        cacheData = invoiceSh.getRange(
-          rowNumber,
-          1,
-          1,
-          CONFIG.totalColumns.invoice
-        ).getValues()[0];
-      }
-
-      // Store data in unified cache
-      this.data[arrayIndex] = cacheData;
-
-      // Add to unified indexMap
       const key = `${supplier}|${invoiceNo}`;
-      this.indexMap.set(key, arrayIndex);
-
-      // Add to unified supplierIndex
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(arrayIndex);
-
-      // ═══ PARTITIONED CACHE: Add to appropriate partition ═══
-      const isActive = this._isActiveInvoice(cacheData);
+      const isActive = this._isActiveInvoice(rowData);
 
       if (isActive) {
         // Add to active partition
         const activeArrayIndex = this.activeData.length;
-        this.activeData.push(cacheData);
+        this.activeData.push(rowData);
         this.activeIndexMap.set(key, activeArrayIndex);
 
         if (!this.activeSupplierIndex.has(supplier)) {
           this.activeSupplierIndex.set(supplier, []);
         }
         this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
+
+        // Update global index
+        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex });
+        this.stats.activePartitionHits++;
       } else {
         // Add to inactive partition
         const inactiveArrayIndex = this.inactiveData.length;
-        this.inactiveData.push(cacheData);
+        this.inactiveData.push(rowData);
         this.inactiveIndexMap.set(key, inactiveArrayIndex);
 
         if (!this.inactiveSupplierIndex.has(supplier)) {
           this.inactiveSupplierIndex.set(supplier, []);
         }
         this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
+
+        // Update global index
+        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex });
+        this.stats.inactivePartitionHits++;
       }
 
       // Track write time for smart refresh deferral
@@ -286,49 +235,24 @@ const CacheManager = {
       this._recentWrites.set(key, Date.now());
 
       AuditLogger.logInfo('CacheManager.addInvoiceToCache',
-        `Added invoice ${invoiceNo} to cache (partition: ${isActive ? 'ACTIVE' : 'INACTIVE'})`);
+        `Added invoice ${invoiceNo} to ${isActive ? 'ACTIVE' : 'INACTIVE'} partition`);
 
     } catch (error) {
       AuditLogger.logError('CacheManager.addInvoiceToCache',
         `Failed to add invoice to cache: ${error.toString()}`);
-      // Don't throw - cache inconsistency is better than transaction failure
     }
   },
 
   /**
-   * UPDATE INVOICE IN CACHE (After Payment Processing)
+   * UPDATE INVOICE IN CACHE (Partition-Only)
    *
-   * PERFORMANCE FIX #1: Eliminates redundant sheet reads by using incremental update
-   *
-   * NEW STRATEGY:
-   * - Delegates to updateSingleInvoice() for smart incremental update
-   * - Avoids redundant 100-200ms cross-file read in Master mode
-   * - Maintains backward compatibility with existing callers
-   *
-   * RATIONALE:
-   * - updateSingleInvoice() already handles formula evaluation timing correctly
-   * - Includes partition transition logic and validation
-   * - No need to duplicate logic here
+   * SIMPLIFIED: Direct delegation to updateSingleInvoice
    *
    * @param {string} supplier - Supplier name
    * @param {string} invoiceNo - Invoice number
    * @returns {boolean} Success flag
    */
   updateInvoiceInCache: function (supplier, invoiceNo) {
-    if (!this.data || !this.indexMap || !this.supplierIndex) {
-      AuditLogger.logWarning('CacheManager.updateInvoiceInCache',
-        'Cache not initialized, skipping update');
-      return false;
-    }
-
-    if (!supplier || !invoiceNo) {
-      AuditLogger.logWarning('CacheManager.updateInvoiceInCache',
-        'Invalid supplier or invoice number');
-      return false;
-    }
-
-    // ✅ PERFORMANCE FIX: Use smart incremental update
-    // Eliminates redundant read, includes partition logic and validation
     return this.updateSingleInvoice(supplier, invoiceNo);
   },
 
