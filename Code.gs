@@ -415,14 +415,15 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 /**
  * Clear only necessary fields based on payment type
  * Uses batch range operations to minimize API calls
- * 
+ *
  * STRATEGY:
  * - Unpaid: Clear both paymentAmt and prevInvoice (no payments made)
  * - Regular/Partial: Clear prevInvoice only (payment amount will auto-populate)
  * - Due: Clear paymentAmt only (user will select previous invoice from dropdown)
- * 
+ *
  * OPTIMIZATION: Batch clear multiple cells in single operation when possible
- * 
+ * AUDIT: Logs all cleared values for accountability and debugging
+ *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} row - Row number
  * @param {string} newPaymentType - New payment type selected
@@ -432,47 +433,107 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
     const cols = CONFIG.cols;
     const paymentAmtCol = cols.paymentAmt + 1;
     const prevInvoiceCol = cols.prevInvoice + 1;
+    const timestamp = Date.now();
+
+    // Capture current values BEFORE clearing (for audit trail)
+    const prevInvoiceCell = sheet.getRange(row, prevInvoiceCol);
+    const paymentAmtCell = sheet.getRange(row, paymentAmtCol);
+
+    const oldPrevInvoice = prevInvoiceCell.getValue();
+    const oldPaymentAmt = paymentAmtCell.getValue();
+    const oldPrevInvoiceNote = prevInvoiceCell.getNote();
+    const oldPaymentAmtNote = paymentAmtCell.getNote();
 
     AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-      `[TS:${Date.now()}] Row ${row}: Clearing fields for "${newPaymentType}"`);
+      `[TS:${timestamp}] Row ${row}: BEFORE CLEAR → PaymentType="${newPaymentType}", PrevInvoice="${oldPrevInvoice}", PaymentAmt="${oldPaymentAmt}"`);
+
+    // Track what was actually cleared for audit
+    let clearedFields = [];
+    let clearedValues = {};
 
     switch (newPaymentType) {
       case 'Unpaid':
         // ✓ BATCH CLEAR: Both fields at once (2 cells)
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${Date.now()}] Row ${row}: Clearing prevInvoice AND paymentAmt for Unpaid`);
         const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2); // F:G
-        unpaidRange.clearContent().clearNote().clearDataValidations();
-        unpaidRange.setBackground(null);
+        unpaidRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+
+        clearedFields = ['prevInvoice', 'paymentAmt'];
+        clearedValues = {
+          prevInvoice: oldPrevInvoice || '(empty)',
+          paymentAmt: oldPaymentAmt || '(empty)',
+          prevInvoiceNote: oldPrevInvoiceNote || 'none',
+          paymentAmtNote: oldPaymentAmtNote || 'none'
+        };
+
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${timestamp}] Row ${row}: CLEARED prevInvoice AND paymentAmt for Unpaid`);
         break;
 
       case 'Regular':
       case 'Partial':
         // ✓ SINGLE CELL: Only clear prevInvoice (Regular/Partial auto-populate paymentAmt)
+        prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+
+        clearedFields = ['prevInvoice'];
+        clearedValues = {
+          prevInvoice: oldPrevInvoice || '(empty)',
+          prevInvoiceNote: oldPrevInvoiceNote || 'none'
+        };
+
         AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${Date.now()}] Row ${row}: Clearing prevInvoice only for ${newPaymentType}`);
-        const invoiceRange = sheet.getRange(row, prevInvoiceCol);
-        invoiceRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+          `[TS:${timestamp}] Row ${row}: CLEARED prevInvoice only for ${newPaymentType}`);
         break;
 
       case 'Due':
-        // ✓ SINGLE CELL: Only clear paymentAmt (user selects from dropdown, amount auto-populates)
+        // ✅ FIX: Added .clearNote() and .clearDataValidations() for consistency
+        paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+
+        clearedFields = ['paymentAmt'];
+        clearedValues = {
+          paymentAmt: oldPaymentAmt || '(empty)',
+          paymentAmtNote: oldPaymentAmtNote || 'none'
+        };
+
         AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${Date.now()}] Row ${row}: Clearing paymentAmt only for Due`);
-        const amountRange = sheet.getRange(row, paymentAmtCol);
-        amountRange.clearContent().setBackground(null);
+          `[TS:${timestamp}] Row ${row}: CLEARED paymentAmt only for Due`);
         break;
 
       default:
         // Unknown type - clear both for safety
         AuditLogger.logWarning('clearPaymentFieldsForTypeChange',
-          `[TS:${Date.now()}] Row ${row}: Unknown type "${newPaymentType}", clearing both fields`);
+          `[TS:${timestamp}] Row ${row}: Unknown type "${newPaymentType}", clearing both fields`);
+
         const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
-        defaultRange.clearContent().clearNote().clearDataValidations();
-        defaultRange.setBackground(null);
+        defaultRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+
+        clearedFields = ['prevInvoice', 'paymentAmt'];
+        clearedValues = {
+          prevInvoice: oldPrevInvoice || '(empty)',
+          paymentAmt: oldPaymentAmt || '(empty)',
+          prevInvoiceNote: oldPrevInvoiceNote || 'none',
+          paymentAmtNote: oldPaymentAmtNote || 'none'
+        };
     }
 
+    // ✅ STRUCTURED AUDIT EVENT for accountability
+    const auditData = {
+      sheetName: sheet.getName(),
+      rowNum: row,
+      paymentType: newPaymentType,
+      clearedFields: clearedFields.join(', '),
+      oldValues: clearedValues,
+      timestamp: new Date().toISOString()
+    };
+
+    AuditLogger.log('FIELD_CLEARED', auditData,
+      `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
+
+    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+      `[TS:${timestamp}] Row ${row}: COMPLETE → Cleared ${clearedFields.length} field(s): ${clearedFields.join(', ')}`);
+
   } catch (error) {
+    AuditLogger.logError('clearPaymentFieldsForTypeChange',
+      `Failed to clear fields at row ${row}: ${error.toString()}`);
     logSystemError('clearPaymentFieldsForTypeChange',
       `Failed to clear fields at row ${row}: ${error.toString()}`);
   }
