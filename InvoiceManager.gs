@@ -736,8 +736,8 @@ const InvoiceManager = {
 
       const rule = SpreadsheetApp.newDataValidation()
         .requireValueInList(invoiceNumbers, true)
-        .setAllowInvalid(false)
-        .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s)`)
+        .setAllowInvalid(true)  // ✅ ALLOW MANUAL INPUT (prevents cascade clearing)
+        .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s), or enter manually`)
         .build();
 
       // CRITICAL FIX: Set dropdown FIRST, then clear content
