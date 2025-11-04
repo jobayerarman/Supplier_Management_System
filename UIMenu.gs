@@ -313,7 +313,7 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     }
   } catch (error) {
     // Handle critical errors (sheet access, config issues, etc.)
-    Logger.log(`Critical error in validateRowsInSheet: ${error.message}`);
+    logSystemError('validateRowsInSheet', error.toString());
     results.errors.push({
       row: 'N/A',
       supplier: 'SYSTEM',

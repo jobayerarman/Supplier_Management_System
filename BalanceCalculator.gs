@@ -307,7 +307,7 @@ const BalanceCalculator = {
         // Log summary if rows were skipped
         if (skippedRows > 0) {
           AuditLogger.logWarning('BalanceCalculator.getSupplierOutstanding',
-            `Calculated outstanding for "${supplier}": ${total} (${skippedRows} rows skipped, ACTIVE partition - FAST PATH)`);
+            `Calculated outstanding for "${supplier}": ${total} (${skippedRows} rows skipped)`);
         }
 
         return total;

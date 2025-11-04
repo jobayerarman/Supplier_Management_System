@@ -235,9 +235,6 @@ const CacheManager = {
       this._recentWrites = this._recentWrites || new Map();
       this._recentWrites.set(key, Date.now());
 
-      AuditLogger.logInfo('CacheManager.addInvoiceToCache',
-        `Added invoice ${invoiceNo} to ${isActive ? 'ACTIVE' : 'INACTIVE'} partition`);
-
     } catch (error) {
       AuditLogger.logError('CacheManager.addInvoiceToCache',
         `Failed to add invoice to cache: ${error.toString()}`);
@@ -277,12 +274,8 @@ const CacheManager = {
    * @returns {boolean} Success flag
    */
   updateSingleInvoice: function (supplier, invoiceNo, forceRead = false) {
-    const startTime = Date.now();
-
     // Validate cache is active
     if (!this.activeData || !this.globalIndexMap) {
-      AuditLogger.logWarning('CacheManager.updateSingleInvoice',
-        'Cache not initialized, cannot perform incremental update');
       return false;
     }
 
@@ -349,13 +342,7 @@ const CacheManager = {
       }
 
       // Update statistics
-      const updateTime = Date.now() - startTime;
       this.stats.incrementalUpdates++;
-      this.stats.updateTimes.push(updateTime);
-
-      if (this.stats.incrementalUpdates % 100 === 0) {
-        this._logStatistics();
-      }
 
       return true;
 
@@ -406,9 +393,6 @@ const CacheManager = {
       this.inactiveSupplierIndex.set(supplier, []);
     }
     this.inactiveSupplierIndex.get(supplier).push(inactiveIndex);
-
-    AuditLogger.logInfo('CacheManager._moveToInactivePartition',
-      `Invoice ${key} transitioned: Active → Inactive (fully paid)`);
   },
 
   /**
@@ -449,9 +433,6 @@ const CacheManager = {
       this.activeSupplierIndex.set(supplier, []);
     }
     this.activeSupplierIndex.get(supplier).push(activeIndex);
-
-    AuditLogger.logInfo('CacheManager._moveToActivePartition',
-      `Invoice ${key} transitioned: Inactive → Active (reopened)`);
   },
 
   /**
@@ -578,8 +559,6 @@ const CacheManager = {
       const inactiveRows = this.inactiveSupplierIndex?.get(normalizedSupplier) || [];
 
       if (activeRows.length === 0 && inactiveRows.length === 0) {
-        AuditLogger.logInfo('CacheManager.invalidateSupplierCache',
-          `Supplier "${supplier}" not found in cache, no update needed`);
         return;
       }
 
@@ -652,9 +631,6 @@ const CacheManager = {
             `Failed to update invoice for supplier "${supplier}": ${rowError.toString()}`);
         }
       }
-
-      AuditLogger.logInfo('CacheManager.invalidateSupplierCache',
-        `Updated ${updatedCount} invoices for supplier "${supplier}" (${partitionTransitions} partition transitions, SURGICAL - FAST)`);
 
     } catch (error) {
       // Fallback: Clear entire cache if surgical update fails
@@ -732,11 +708,6 @@ const CacheManager = {
     const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
     this.set(data);
 
-    // Log cache source for transparency
-    AuditLogger.logInfo('CacheManager.getInvoiceData',
-      `Cache loaded from ${CONFIG.isMasterMode() ? 'Master Database' : 'Local sheet'} (${lastRow - 1} invoices)`);
-
-    // ✅ Return partition-only data (backward compatibility removed)
     return {
       activeData: this.activeData,
       activeIndexMap: this.activeIndexMap,
@@ -766,8 +737,6 @@ const CacheManager = {
     const inactiveRows = cacheData.inactiveSupplierIndex?.get(normalized) || [];
 
     if (activeRows.length === 0 && inactiveRows.length === 0) {
-      AuditLogger.logWarning('CacheManager.getSupplierData',
-        `No invoice data found for supplier: ${supplier}`);
       return [];
     }
 

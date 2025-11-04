@@ -549,12 +549,6 @@ const PaymentManager = {
         CacheManager.updateInvoiceInCache(supplier, invoiceNo);
       }
 
-      // ═══ STEP 7: LOG SUCCESS ═══
-      // AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
-      //   `Invoice ${invoiceNo} fully paid and marked | Payment: ${context.paymentId} | ` +
-      //   `Type: ${context.paymentType} | Total Paid: ${totalPaid} | ` +
-      //   `Paid Date: ${DateUtils.formatDate(paidDate)}`);
-
       return result;
 
     } catch (error) {
