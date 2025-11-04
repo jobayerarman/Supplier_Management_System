@@ -28,6 +28,51 @@ function onEdit(e) {
   // Validate event object
   if (!e || !e.range) return;
 
+  // ═══ CRITICAL FIX: Detect and exit simple trigger in Master Database mode ═══
+  // Simple triggers cannot access Master Database (SpreadsheetApp.openById permission denied)
+  // If we're in Master mode and this is a simple trigger, exit immediately to avoid:
+  // 1. 32-second timeout attempting Master DB access
+  // 2. Continuing with empty data after timeout
+  // 3. Clearing dropdowns/amounts that installable trigger populated correctly
+  try {
+    const authMode = ScriptApp.getAuthMode();
+    const isSimpleTrigger = (authMode === ScriptApp.AuthMode.LIMITED);
+    const isMasterMode = CONFIG.isMasterMode();
+
+    if (isSimpleTrigger && isMasterMode) {
+      // We're in simple trigger AND Master Database mode
+      // Exit immediately - installable trigger will handle everything
+      Logger.log('⚠️  SIMPLE TRIGGER DETECTED in Master Database mode');
+      Logger.log('Exiting immediately to avoid permission errors and timeout.');
+      Logger.log('Installable trigger will handle this edit event.');
+
+      // Log to AuditLogger for visibility
+      AuditLogger.logInfo('onEdit.simpleTriggerExit',
+        `Simple trigger detected in Master mode - exiting to defer to installable trigger (Row ${e.range.getRow()})`);
+
+      return; // ← EXIT IMMEDIATELY
+    }
+
+    // If we get here, either:
+    // - We're in installable trigger (full permissions) OR
+    // - We're in local mode (no Master DB access needed)
+    // Continue with normal execution...
+
+    if (isSimpleTrigger) {
+      Logger.log('ℹ️  Simple trigger detected in LOCAL mode - continuing normally');
+    } else {
+      Logger.log('✅ Installable trigger detected - full permissions available');
+    }
+
+  } catch (authError) {
+    // If we can't detect auth mode, assume worst case (simple trigger in Master mode)
+    // Better to exit early than risk clearing data
+    Logger.log('⚠️  Cannot detect trigger type - assuming simple trigger, exiting for safety');
+    AuditLogger.logWarning('onEdit.authDetectionFailed',
+      `Failed to detect trigger type: ${authError.toString()} - exiting as safety measure`);
+    return; // ← EXIT FOR SAFETY
+  }
+
   const sheet = e.range.getSheet();
   const sheetName = sheet.getName();
   const row = e.range.getRow();
