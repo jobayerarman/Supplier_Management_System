@@ -472,13 +472,27 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
       case 'Regular':
       case 'Partial':
         // ✓ SINGLE CELL: Only clear prevInvoice (Regular/Partial auto-populate paymentAmt)
-        prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${timestamp}] Row ${row}: ENTERING Regular/Partial case for ${newPaymentType}`);
+
+        try {
+          prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+          AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+            `[TS:${timestamp}] Row ${row}: Successfully cleared prevInvoiceCell`);
+        } catch (clearError) {
+          AuditLogger.logError('clearPaymentFieldsForTypeChange',
+            `[TS:${timestamp}] Row ${row}: ERROR clearing prevInvoiceCell: ${clearError.toString()}`);
+          throw clearError; // Re-throw to be caught by outer catch
+        }
 
         clearedFields = ['prevInvoice'];
         clearedValues = {
           prevInvoice: oldPrevInvoice || '(empty)',
           prevInvoiceNote: oldPrevInvoiceNote || 'none'
         };
+
+        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+          `[TS:${timestamp}] Row ${row}: Set clearedFields=${JSON.stringify(clearedFields)}, clearedValues=${JSON.stringify(clearedValues)}`);
 
         AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
           `[TS:${timestamp}] Row ${row}: CLEARED prevInvoice only for ${newPaymentType}`);
@@ -515,6 +529,10 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
         };
     }
 
+    // ✅ DEBUG: Verify clearedFields before audit
+    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+      `[TS:${timestamp}] Row ${row}: PRE-AUDIT → clearedFields.length=${clearedFields.length}, clearedFields=${JSON.stringify(clearedFields)}`);
+
     // ✅ STRUCTURED AUDIT EVENT for accountability
     const auditData = {
       sheetName: sheet.getName(),
@@ -524,6 +542,9 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
       oldValues: clearedValues,
       timestamp: new Date().toISOString()
     };
+
+    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
+      `[TS:${timestamp}] Row ${row}: AUDIT DATA → ${JSON.stringify(auditData)}`);
 
     AuditLogger.log('FIELD_CLEARED', auditData,
       `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
