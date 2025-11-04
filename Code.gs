@@ -89,8 +89,6 @@ function onEdit(e) {
           } else {
             // Clear Prev Invoice when Invoice No is deleted
             prevInvoiceCell.clearContent().clearNote();
-            AuditLogger.logInfo('onEdit.invoiceNoCleared',
-              `Row ${row}: Invoice No cleared, cleared linked Prev Invoice field for ${paymentType} payment`);
           }
         }
         break;
@@ -105,26 +103,17 @@ function onEdit(e) {
           } else {
             // Clear Payment Amt when Received Amt is cleared/zero
             paymentAmtCell.clearContent().clearNote();
-            AuditLogger.logInfo('onEdit.receivedAmtCleared',
-              `Row ${row}: Received Amount cleared, cleared linked Payment Amount field for Regular payment`);
           }
         }
         break;
 
       // ═══ ALL OTHER EDITS - Deferred to Installable Trigger ═══
       default:
-        // Simple trigger does NOTHING for:
-        // - Post checkbox (needs database)
-        // - Supplier edit (needs cache for dropdown)
-        // - Payment type (needs cache for dropdown/balance)
-        // - Previous invoice (needs cache for balance lookup)
-        // - Payment amount (needs cache for balance preview)
         return;
     }
 
   } catch (error) {
-    console.error("onEdit (simple trigger) error:", error);
-    Logger.log("Simple trigger error (non-critical):", error.toString());
+    logSystemError("onEdit", error.toString());
   }
 }
 
@@ -260,80 +249,42 @@ function onEditInstallable(e) {
 
       // ═══ 2. HANDLE SUPPLIER EDIT ═══
       case configCols.supplier + 1:
-        // Log supplier edit for debugging dropdown issues
-        AuditLogger.logInfo('onEditInstallable.supplierEdit',
-          `[TS:${Date.now()}] Row ${row}: Supplier edited to "${editedValue}", PaymentType="${paymentType}"`);
-
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
-          // Use editedValue (the new supplier value just entered)
           if (editedValue && String(editedValue).trim()) {
-            AuditLogger.logInfo('onEditInstallable.supplierEdit',
-              `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${editedValue}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
-          } else {
-            AuditLogger.logWarning('onEditInstallable.supplierEdit',
-              `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
-          // Don't update balance for Due - wait for invoice selection
           updateBalance = false;
         } else {
-          // For other payment types, update balance normally
           updateBalance = true;
         }
         break;
 
       // ═══ 3. HANDLE PAYMENT TYPE EDIT ═══
       case configCols.paymentType + 1:
-        AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
-          `[TS:${Date.now()}] Row ${row}: PaymentType changed to "${paymentType}", Supplier="${supplier}"`);
-
         clearPaymentFieldsForTypeChange(sheet, row, paymentType);
 
         if (['Regular', 'Partial'].includes(paymentType)) {
-          // Update local array with returned values (eliminates redundant read/recalculation)
           const populatedValues = autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
           rowValues[configCols.paymentAmt] = populatedValues.paymentAmt;
           rowValues[configCols.prevInvoice] = populatedValues.prevInvoice;
+          updateBalance = true;
         } else if (paymentType === 'Due') {
-          // Due: Build dropdown for previous invoices
-          // IMPORTANT: Re-read supplier from sheet to ensure we have the latest value
           const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
-          AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
-            `[TS:${Date.now()}] Row ${row}: Re-read supplier="${currentSupplier}" (original="${supplier}")`);
-
           if (currentSupplier && String(currentSupplier).trim()) {
-            AuditLogger.logInfo('onEditInstallable.paymentTypeEdit',
-              `[TS:${Date.now()}] Row ${row}: Calling buildUnpaidDropdown for supplier "${currentSupplier}"`);
             InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
-          } else {
-            AuditLogger.logWarning('onEditInstallable.paymentTypeEdit',
-              `[TS:${Date.now()}] Row ${row}: Supplier empty, skipping dropdown build`);
           }
-          // Don't update balance immediately for Due - wait for invoice selection
           updateBalance = false;
-        }
-
-        // Only update balance for non-Due payment types
-        if (paymentType !== 'Due') {
+        } else {
           updateBalance = true;
         }
         break;
 
       // ═══ 4. HANDLE PREVIOUS INVOICE SELECTION ═══
       case configCols.prevInvoice + 1:
-        AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
-          `[TS:${Date.now()}] Row ${row}: PrevInvoice edited to "${editedValue}", PaymentType="${paymentType}", Supplier="${supplier}"`);
-
         if ((paymentType === 'Due') && supplier && editedValue) {
-          AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
-            `[TS:${Date.now()}] Row ${row}: Calling autoPopulateDuePaymentAmount for invoice "${editedValue}"`);
-          // Update local array with returned value (eliminates redundant recalculation)
           const populatedAmount = autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
           rowValues[configCols.paymentAmt] = populatedAmount;
-        } else {
-          AuditLogger.logInfo('onEditInstallable.prevInvoiceEdit',
-            `[TS:${Date.now()}] Row ${row}: Skipping autoPopulate (PaymentType="${paymentType}", Supplier="${supplier}", editedValue="${editedValue}")`);
         }
         updateBalance = true;
         break;
@@ -358,13 +309,11 @@ function onEditInstallable(e) {
     }
 
     // ═══ CONSOLIDATED BALANCE UPDATE ═══
-    // Single balance calculation and sheet write (reduces 5 calls to 1)
     if (updateBalance) {
       BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
     }
 
   } catch (error) {
-    console.error("onEditInstallable error:", error);
     logSystemError("onEditInstallable", error.toString());
   }
 }
@@ -508,12 +457,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     }
 
     // Write 5: Consolidated background color (A-J including balance)
-    // Extends to include balance cell (H) in the success color
     const bgRange = CONFIG.totalColumns.daily - 4; // A:J
     sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
-
-    // ═══ 7. FINAL AUDIT ═══
-    // auditAction("══AFTER-POST══", data, `Posted successfully`);
 
   } catch (error) {
     const errMsg = `SYSTEM ERROR: ${error.message || error}`;
@@ -545,107 +490,55 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
     const cols = CONFIG.cols;
     const paymentAmtCol = cols.paymentAmt + 1;
     const prevInvoiceCol = cols.prevInvoice + 1;
-    const timestamp = Date.now();
 
-    // Capture current values BEFORE clearing (for audit trail)
+    // Capture current values for audit trail
     const prevInvoiceCell = sheet.getRange(row, prevInvoiceCol);
     const paymentAmtCell = sheet.getRange(row, paymentAmtCol);
-
     const oldPrevInvoice = prevInvoiceCell.getValue();
     const oldPaymentAmt = paymentAmtCell.getValue();
-    const oldPrevInvoiceNote = prevInvoiceCell.getNote();
-    const oldPaymentAmtNote = paymentAmtCell.getNote();
 
-    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-      `[TS:${timestamp}] Row ${row}: BEFORE CLEAR → PaymentType="${newPaymentType}", PrevInvoice="${oldPrevInvoice}", PaymentAmt="${oldPaymentAmt}"`);
-
-    // Track what was actually cleared for audit
     let clearedFields = [];
     let clearedValues = {};
 
     switch (newPaymentType) {
       case 'Unpaid':
-        // ✓ BATCH CLEAR: Both fields at once (2 cells)
-        const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2); // F:G
+        const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
         unpaidRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-
         clearedFields = ['prevInvoice', 'paymentAmt'];
         clearedValues = {
           prevInvoice: oldPrevInvoice || '(empty)',
-          paymentAmt: oldPaymentAmt || '(empty)',
-          prevInvoiceNote: oldPrevInvoiceNote || 'none',
-          paymentAmtNote: oldPaymentAmtNote || 'none'
+          paymentAmt: oldPaymentAmt || '(empty)'
         };
-
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: CLEARED prevInvoice AND paymentAmt for Unpaid`);
         break;
 
       case 'Regular':
       case 'Partial':
-        // ✓ SINGLE CELL: Only clear prevInvoice (Regular/Partial auto-populate paymentAmt)
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: ENTERING Regular/Partial case for ${newPaymentType}`);
-
-        try {
-          prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-          AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-            `[TS:${timestamp}] Row ${row}: Successfully cleared prevInvoiceCell`);
-        } catch (clearError) {
-          AuditLogger.logError('clearPaymentFieldsForTypeChange',
-            `[TS:${timestamp}] Row ${row}: ERROR clearing prevInvoiceCell: ${clearError.toString()}`);
-          throw clearError; // Re-throw to be caught by outer catch
-        }
-
+        prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
         clearedFields = ['prevInvoice'];
         clearedValues = {
-          prevInvoice: oldPrevInvoice || '(empty)',
-          prevInvoiceNote: oldPrevInvoiceNote || 'none'
+          prevInvoice: oldPrevInvoice || '(empty)'
         };
-
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: Set clearedFields=${JSON.stringify(clearedFields)}, clearedValues=${JSON.stringify(clearedValues)}`);
-
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: CLEARED prevInvoice only for ${newPaymentType}`);
         break;
 
       case 'Due':
-        // ✅ FIX: Added .clearNote() and .clearDataValidations() for consistency
         paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-
         clearedFields = ['paymentAmt'];
         clearedValues = {
-          paymentAmt: oldPaymentAmt || '(empty)',
-          paymentAmtNote: oldPaymentAmtNote || 'none'
+          paymentAmt: oldPaymentAmt || '(empty)'
         };
-
-        AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: CLEARED paymentAmt only for Due`);
         break;
 
       default:
-        // Unknown type - clear both for safety
-        AuditLogger.logWarning('clearPaymentFieldsForTypeChange',
-          `[TS:${timestamp}] Row ${row}: Unknown type "${newPaymentType}", clearing both fields`);
-
         const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
         defaultRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-
         clearedFields = ['prevInvoice', 'paymentAmt'];
         clearedValues = {
           prevInvoice: oldPrevInvoice || '(empty)',
-          paymentAmt: oldPaymentAmt || '(empty)',
-          prevInvoiceNote: oldPrevInvoiceNote || 'none',
-          paymentAmtNote: oldPaymentAmtNote || 'none'
+          paymentAmt: oldPaymentAmt || '(empty)'
         };
     }
 
-    // ✅ DEBUG: Verify clearedFields before audit
-    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-      `[TS:${timestamp}] Row ${row}: PRE-AUDIT → clearedFields.length=${clearedFields.length}, clearedFields=${JSON.stringify(clearedFields)}`);
-
-    // ✅ STRUCTURED AUDIT EVENT for accountability
+    // Audit log for accountability
     const auditData = {
       sheetName: sheet.getName(),
       rowNum: row,
@@ -655,19 +548,11 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
       timestamp: new Date().toISOString()
     };
 
-    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-      `[TS:${timestamp}] Row ${row}: AUDIT DATA → ${JSON.stringify(auditData)}`);
-
     AuditLogger.log('FIELD_CLEARED', auditData,
       `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
 
-    AuditLogger.logInfo('clearPaymentFieldsForTypeChange',
-      `[TS:${timestamp}] Row ${row}: COMPLETE → Cleared ${clearedFields.length} field(s): ${clearedFields.join(', ')}`);
-
   } catch (error) {
     AuditLogger.logError('clearPaymentFieldsForTypeChange',
-      `Failed to clear fields at row ${row}: ${error.toString()}`);
-    logSystemError('clearPaymentFieldsForTypeChange',
       `Failed to clear fields at row ${row}: ${error.toString()}`);
   }
 }
@@ -686,59 +571,36 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
  */
 function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
   try {
-    // Validate inputs
     if (!prevInvoice || !String(prevInvoice).trim()) {
-      AuditLogger.logWarning('autoPopulateDuePaymentAmount',
-        `No invoice selected at row ${row}`);
       return '';
     }
 
-    // Log the attempt
-    AuditLogger.logInfo('autoPopulateDuePaymentAmount',
-      `Fetching balance for invoice "${prevInvoice}" of supplier "${supplier}" at row ${row}`);
-
-    // Get the balance due for the selected invoice
     const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
     const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
 
-    // Log the result
-    AuditLogger.logInfo('autoPopulateDuePaymentAmount',
-      `Invoice "${prevInvoice}" balance: ${invoiceBalance}`);
-
     if (invoiceBalance > 0) {
-      // Set payment amount to invoice balance
       targetCell
         .setValue(invoiceBalance)
         .setNote(`Outstanding balance of ${prevInvoice}: ${invoiceBalance}/-`)
-        .setBackground(null);  // Clear any warning background
-
-      AuditLogger.logInfo('autoPopulateDuePaymentAmount',
-        `Successfully populated payment amount ${invoiceBalance} for invoice "${prevInvoice}" at row ${row}`);
-
-      return invoiceBalance;  // Return value for caller to update local array
+        .setBackground(null);
+      return invoiceBalance;
     } else {
-      // Invoice has no balance or not found
       targetCell
         .clearContent()
         .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance.\n\nPossible reasons:\n- Invoice is fully paid\n- Invoice not found\n- Invoice belongs to different supplier`)
         .setBackground(CONFIG.colors.warning);
-
-      AuditLogger.logWarning('autoPopulateDuePaymentAmount',
-        `Invoice "${prevInvoice}" has no outstanding balance (returned: ${invoiceBalance}) at row ${row}`);
-
-      return '';  // Return empty for caller to update local array
+      return '';
     }
 
   } catch (error) {
     logSystemError('autoPopulateDuePaymentAmount',
       `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
-
     const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
     targetCell
       .clearContent()
       .setNote('Error loading invoice balance')
       .setBackground(CONFIG.colors.error);
-    return '';  // Return empty on error
+    return '';
   }
 }
 
@@ -756,40 +618,26 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
  */
 function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
   try {
-    // Extract values from pre-read data
     const invoiceNo = rowData[CONFIG.cols.invoiceNo];
     const receivedAmt = rowData[CONFIG.cols.receivedAmt];
-
-    // ═══ BATCH OPTIMIZATION: Set both prevInvoice and paymentAmt in single call ═══
-    // Instead of 2 separate setValue() calls, batch them together
     const hasInvoice = invoiceNo && invoiceNo !== '';
     const hasAmount = receivedAmt && receivedAmt !== '';
 
     if (hasInvoice && hasAmount) {
-      // Both fields have values - batch write (F:G)
       const startCol = CONFIG.cols.prevInvoice + 1;
       sheet.getRange(row, startCol, 1, 2).setValues([[invoiceNo, receivedAmt]]);
     } else if (hasInvoice) {
-      // Only invoice number
       sheet.getRange(row, CONFIG.cols.prevInvoice + 1).setValue(invoiceNo);
     } else if (hasAmount) {
-      // Only payment amount
       sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
     }
 
-    // Add visual cue for Partial payments
     if (StringUtils.equals(paymentType, 'Partial')) {
-      // Highlight payment amount cell to remind user to adjust
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
-        .setBackground(CONFIG.colors.warning);
-        // .setNote('⚠️ Adjust this to partial payment amount (must be less than received amount)');
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(CONFIG.colors.warning);
     } else {
-      // Clear any previous highlighting for Regular
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1)
-        .setBackground(null)
+      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(null);
     }
 
-    // Return values for caller to update local array (eliminates redundant read)
     return {
       paymentAmt: receivedAmt || '',
       prevInvoice: invoiceNo || ''
@@ -798,7 +646,7 @@ function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
   } catch (error) {
     logSystemError('autoPopulatePaymentFields',
       `Failed to auto-populate at row ${row}: ${error.toString()}`);
-    return { paymentAmt: '', prevInvoice: '' };  // Return empty on error
+    return { paymentAmt: '', prevInvoice: '' };
   }
 }
 
@@ -853,25 +701,15 @@ function setupInstallableEditTrigger() {
   triggers.forEach(trigger => {
     if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
       ScriptApp.deleteTrigger(trigger);
-      Logger.log(`Removed existing Edit trigger: ${trigger.getUniqueId()}`);
     }
   });
 
   // Create new installable Edit trigger → Calls onEditInstallable (NOT onEdit)
-  const newTrigger = ScriptApp.newTrigger('onEditInstallable')
+  ScriptApp.newTrigger('onEditInstallable')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  Logger.log('✅ Installable Edit trigger created successfully!');
-  Logger.log(`   Trigger ID: ${newTrigger.getUniqueId()}`);
-  Logger.log(`   Handler Function: onEditInstallable`);
-  Logger.log('');
-  Logger.log('The onEditInstallable function now has full permissions to access Master Database.');
-  Logger.log('Simple trigger (onEdit) will handle lightweight UI operations only.');
-  Logger.log('You can now post transactions that will write to the Master Database.');
-
-  // Show success message to user
   SpreadsheetApp.getUi().alert(
     'Trigger Setup Complete',
     '✅ Installable Edit trigger has been set up successfully!\n\n' +
@@ -899,12 +737,9 @@ function removeInstallableEditTrigger() {
   triggers.forEach(trigger => {
     if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
       ScriptApp.deleteTrigger(trigger);
-      Logger.log(`Removed Edit trigger: ${trigger.getUniqueId()}`);
       removed++;
     }
   });
-
-  Logger.log(`✅ Removed ${removed} Edit trigger(s)`);
 
   SpreadsheetApp.getUi().alert(
     'Trigger Removed',

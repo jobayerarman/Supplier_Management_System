@@ -207,13 +207,10 @@ const InvoiceManager = {
       }
 
       // Cache invalidation only if numeric data changed
-      // NEW: Use incremental update instead of full cache clear
       if (amountChanged) {
         const invoiceNo = existingInvoice.data[col.invoiceNo];
         CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
       }
-
-      // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} at row ${rowNum} | Amount ${oldTotal} → ${data.receivedAmt }`);
 
       return { success: true, action: 'updated', row: rowNum };
 
@@ -266,8 +263,6 @@ const InvoiceManager = {
         CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
       }
 
-      // AuditLogger.log('INVOICE_UPDATED', data, `Updated invoice ${existingInvoice.data[col.invoiceNo]} | Amount: ${oldTotal} → ${newTotal}`);
-      
       return { success: true, action: 'updated', row: rowNum };
 
     } catch (error) {
@@ -487,21 +482,15 @@ const InvoiceManager = {
           if (balanceDue > 0.01) {
             unpaidInvoices.push({
               invoiceNo,
-              rowIndex: i,  // Index in activeData
+              rowIndex: i,
               amount: balanceDue
             });
           }
         }
 
-        AuditLogger.logInfo('InvoiceManager.getUnpaidForSupplier',
-          `Found ${unpaidInvoices.length} unpaid invoices for "${supplier}" (ACTIVE partition - FAST PATH)`);
-
         return unpaidInvoices;
       }
 
-      // No active partition available - return empty
-      AuditLogger.logWarning('InvoiceManager.getUnpaidForSupplier',
-        `Active partition not available for supplier "${supplier}"`);
       return [];
 
     } catch (error) {
@@ -682,110 +671,55 @@ const InvoiceManager = {
    */
   buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
-    const callTime = new Date().getTime();
 
-    // Log EVERY call with timestamp to track multiple calls
-    AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-      `[TS:${callTime}] ENTRY → Row ${row}, Supplier="${supplier}", PaymentType="${paymentType}"`);
-
-    // Clear dropdown if not "Due" or missing supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] CLEARING → paymentType="${paymentType}", supplierEmpty=${StringUtils.isEmpty(supplier)}`);
-
       try {
         targetCell.clearDataValidations().clearNote().clearContent().setBackground(null);
       } catch (e) {
-        AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
-          `[TS:${callTime}] Failed to clear: ${e.toString()}`);
+        AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', `Failed to clear: ${e.toString()}`);
       }
       return false;
     }
 
     try {
-      // Log supplier for debugging
-      const normalizedSupplier = StringUtils.normalize(supplier);
-
-      // IMPORTANT: Log BEFORE calling getUnpaidForSupplier to see if cache is the issue
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] FETCHING unpaid invoices for "${supplier}" (norm: "${normalizedSupplier}")`);
-
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
-      // Log result immediately
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] FOUND ${unpaidInvoices.length} unpaid invoice(s)`);
-
       if (unpaidInvoices.length === 0) {
-        // No unpaid invoices found - show informative message
         targetCell.clearDataValidations()
           .clearContent()
           .setNote(`No unpaid invoices found for ${supplier}.\n\nThis supplier either has no invoices or all invoices are fully paid.`)
           .setBackground(CONFIG.colors.warning);
-
-        AuditLogger.logWarning('InvoiceManager.buildUnpaidDropdown',
-          `[TS:${callTime}] NO INVOICES → Dropdown cleared with warning message`);
-
         return false;
       }
 
       const invoiceNumbers = unpaidInvoices.map(inv => inv.invoiceNo);
-
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] BUILDING dropdown with: ${invoiceNumbers.join(', ')}`);
-
       const rule = SpreadsheetApp.newDataValidation()
         .requireValueInList(invoiceNumbers, true)
-        .setAllowInvalid(true)  // ✅ ALLOW MANUAL INPUT (prevents cascade clearing)
+        .setAllowInvalid(true)
         .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s), or enter manually`)
         .build();
 
-      // CRITICAL FIX: Set dropdown FIRST, then clear content
-      // This prevents the clearContent() edit event from interfering with the dropdown
-      // Old order: clearContent → setDataValidation (dropdown could be cleared by cascade events)
-      // New order: setDataValidation → clearContent (dropdown already set when cascade fires)
       const currentValue = targetCell.getValue();
       const isValidValue = invoiceNumbers.includes(String(currentValue));
 
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] Current value="${currentValue}", isValid=${isValidValue}`);
-
-      // Set dropdown and background first (no edit event triggered)
       targetCell
         .setDataValidation(rule)
         .setBackground(CONFIG.colors.info);
 
-      // Clear content and note ONLY if current value is invalid or empty
-      // This minimizes edit event cascades
       if (!isValidValue || !currentValue) {
-        AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-          `[TS:${callTime}] Clearing invalid/empty value "${currentValue}"`);
         targetCell.clearContent().clearNote();
       } else {
-        AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-          `[TS:${callTime}] Preserving valid value "${currentValue}"`);
-        targetCell.clearNote(); // Clear note but preserve value
+        targetCell.clearNote();
       }
-
-      AuditLogger.logInfo('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] SUCCESS → Dropdown set with ${invoiceNumbers.length} options`);
-
-      // FLUSH immediately to ensure logs are written
-      AuditLogger.flush();
 
       return true;
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.buildUnpaidDropdown',
-        `[TS:${callTime}] ERROR → ${error.toString()}`);
-
+      AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', error.toString());
       targetCell.clearDataValidations()
         .clearContent()
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
-
-      AuditLogger.flush();
-
       return false;
     }
   },
