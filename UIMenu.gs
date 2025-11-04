@@ -494,12 +494,10 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
       }
 
-      // ═══ CALCULATE FINAL BALANCE ═══
-      // Use BalanceCalculator.calculate() which handles all payment types
-      // and calculates balance change automatically
-      const finalBalance = BalanceCalculator.calculate(data);
-      const now = new Date();
-      const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
+      // ═══ UPDATE BALANCE CELL ═══
+      // Use updateBalanceCell with afterPost=true to get correct balance
+      // This reads the current outstanding (which already reflects the payment)
+      BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
       // Update status to POSTED
       setBatchPostStatus(
@@ -511,10 +509,6 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         true,
         CONFIG.colors.success
       );
-
-      // Write balance value and note
-      const balanceCell = sheet.getRange(rowNum, CONFIG.cols.balance + 1);
-      balanceCell.setValue(finalBalance).setNote(balanceNote);
 
       // Collect supplier for batch cache invalidation (done after loop)
       suppliersToInvalidate.add(data.supplier);

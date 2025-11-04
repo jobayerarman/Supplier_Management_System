@@ -428,16 +428,15 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
-    // ═══ 4. CALCULATE FINAL BALANCE ═══
-    // Use BalanceCalculator.calculate() which handles all payment types
-    // and calculates balance change automatically
-    const finalBalance = BalanceCalculator.calculate(data);
+    // ═══ 4. UPDATE BALANCE CELL ═══
+    // Use updateBalanceCell with afterPost=true to get correct balance
+    // This reads the current outstanding (which already reflects the payment)
+    BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
-    // ═══ 5. PRE-CALCULATE ALL VALUES (Before sheet writes) ═══
-    const balanceNote = `Posted: Supplier outstanding = ${finalBalance}/-\nUpdated: ${DateUtils.formatDateTime(now)}`;
+    // ═══ 5. PRE-CALCULATE SYSTEM ID ═══
     const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
 
-    // Invalidate cache AFTER calculation (cache will rebuild on next access)
+    // Invalidate cache AFTER balance update (cache will rebuild on next access)
     CacheManager.invalidateSupplierCache(supplier);
 
     // ═══ 6. BATCHED WRITES (Minimize API calls) ═══
@@ -445,18 +444,12 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     const statusUpdates = [[true, "POSTED", enteredBy.split("@")[0], timeStr]];
     sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
 
-    // Write 2: Balance value (H)
-    sheet.getRange(rowNum, cols.balance + 1).setValue(finalBalance);
-
-    // Write 3: Balance note
-    sheet.getRange(rowNum, cols.balance + 1).setNote(balanceNote);
-
-    // Write 4: System ID if missing (N)
+    // Write 2: System ID if missing (N)
     if (sysIdValue) {
       sheet.getRange(rowNum, cols.sysId + 1).setValue(sysIdValue);
     }
 
-    // Write 5: Consolidated background color (A-J including balance)
+    // Write 3: Consolidated background color (A-J including balance)
     const bgRange = CONFIG.totalColumns.daily - 4; // A:J
     sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
 
