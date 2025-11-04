@@ -79,19 +79,35 @@ function onEdit(e) {
 
     // ═══ LIGHTWEIGHT OPERATIONS ONLY ═══
     switch (col) {
-      // ═══ INVOICE NO EDIT - Simple Copy ═══
+      // ═══ INVOICE NO EDIT - Copy or Clear Linked Payment Invoice ═══
       case configCols.invoiceNo + 1:
         if (['Regular', 'Partial'].includes(paymentType)) {
-          if (invoiceNo) {
-            sheet.getRange(row, configCols.prevInvoice + 1).setValue(invoiceNo);
+          const prevInvoiceCell = sheet.getRange(row, configCols.prevInvoice + 1);
+          if (invoiceNo && String(invoiceNo).trim()) {
+            // Copy Invoice No → Prev Invoice (Payment Invoice)
+            prevInvoiceCell.setValue(invoiceNo);
+          } else {
+            // Clear Prev Invoice when Invoice No is deleted
+            prevInvoiceCell.clearContent().clearNote();
+            AuditLogger.logInfo('onEdit.invoiceNoCleared',
+              `Row ${row}: Invoice No cleared, cleared linked Prev Invoice field for ${paymentType} payment`);
           }
         }
         break;
 
-      // ═══ RECEIVED AMOUNT EDIT - Simple Copy for Regular ═══
+      // ═══ RECEIVED AMOUNT EDIT - Copy or Clear Linked Payment Amount ═══
       case configCols.receivedAmt + 1:
         if (paymentType === 'Regular') {
-          sheet.getRange(row, configCols.paymentAmt + 1).setValue(receivedAmt);
+          const paymentAmtCell = sheet.getRange(row, configCols.paymentAmt + 1);
+          if (receivedAmt > 0) {
+            // Copy Received Amt → Payment Amt
+            paymentAmtCell.setValue(receivedAmt);
+          } else {
+            // Clear Payment Amt when Received Amt is cleared/zero
+            paymentAmtCell.clearContent().clearNote();
+            AuditLogger.logInfo('onEdit.receivedAmtCleared',
+              `Row ${row}: Received Amount cleared, cleared linked Payment Amount field for Regular payment`);
+          }
         }
         break;
 
