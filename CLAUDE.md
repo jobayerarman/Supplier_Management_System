@@ -11,19 +11,103 @@ A Google Apps Script application for managing supplier invoices and payments thr
 ### Modular Design
 
 ```
-_Config.gs              → Configuration (sheets, columns, business rules)
-_Utils.gs               → Utilities (string/date/sheet helpers, ID generation, locks)
+_Config.gs              → Configuration (sheets, columns, business rules, Master DB config)
+_Utils.gs               → Utilities (string/date/sheet helpers, ID generation, locks, Master DB utils)
 _UserResolver.gs        → Reliable user identification with fallback strategy
-AuditLogger.gs          → Audit trail operations
+AuditLogger.gs          → Audit trail operations (Master DB aware)
 ValidationEngine.gs     → Business rule validation
-CacheManager.gs         → Centralized invoice data caching with write-through support
-InvoiceManager.gs       → Invoice CRUD operations
-PaymentManager.gs       → Payment processing + PaymentCache (quad-index) + paid date workflow
+CacheManager.gs         → Centralized invoice data caching with write-through support (Master DB aware)
+InvoiceManager.gs       → Invoice CRUD operations (Master DB aware)
+PaymentManager.gs       → Payment processing + PaymentCache (quad-index) + paid date workflow (Master DB aware)
 BalanceCalculator.gs    → Balance calculations
 UIMenu.gs               → Custom menu for batch operations
 Code.gs                 → Main entry point (onEdit handler)
 PerformanceBenchmarks.gs → Benchmark suite for cache optimizations
+MasterDatabaseTests.gs  → Master Database connection and write tests
 ```
+
+### Master Database Architecture (NEW)
+
+The system supports two operational modes for maximum flexibility:
+
+**1. Local Mode (Default)**
+- Each monthly file contains its own InvoiceDatabase, PaymentLog, AuditLog, and SupplierDatabase
+- All reads and writes happen within the monthly file
+- Traditional setup - data isolated by month
+- No additional configuration required
+
+**2. Master Database Mode (Centralized)**
+- One central file (00_SUPPLIER_ACCOUNTS_DATABASE_MASTER) contains all databases
+- Monthly files use IMPORTRANGE to display data from Master
+- Apps Script writes directly to Master Database
+- Cross-month queries and consolidated reporting enabled
+- Single source of truth for all invoice and payment data
+
+**Configuration (_Config.gs):**
+```javascript
+CONFIG.masterDatabase = {
+  connectionMode: 'local',  // or 'master' to enable Master DB mode
+  id: 'YOUR_MASTER_DB_SPREADSHEET_ID',  // From Master DB URL
+  url: 'https://docs.google.com/spreadsheets/d/YOUR_ID/edit',
+  sheets: {
+    invoice: 'InvoiceDatabase',
+    payment: 'PaymentLog',
+    audit: 'AuditLog',
+    supplier: 'SupplierDatabase'
+  },
+  importRanges: {
+    invoice: 'A:M',   // All invoice columns
+    payment: 'A:L',   // All payment columns
+    audit: 'A:G',     // All audit columns
+    supplier: 'A:D'   // All supplier columns
+  }
+}
+```
+
+**Key Components:**
+- `MasterDatabaseUtils` - Helper utilities for Master DB access
+- `MasterDatabaseUtils.getSourceSheet(sheetType)` - **For reads**: Always returns local sheet (IMPORTRANGE in master mode)
+- `MasterDatabaseUtils.getTargetSheet(sheetType)` - **For writes**: Returns Master (master mode) or local (local mode)
+- `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generates IMPORTRANGE formulas
+- `MasterDatabaseUtils.testConnection()` - Validates Master DB setup
+- **Read/Write Pattern**: Reads from local sheets (fast), writes to Master DB (master mode only)
+- Automatic routing - all operations go to correct location based on connectionMode
+- Backward compatible - works in both modes without code changes
+
+**Setup Process:**
+1. Create Master Database file (00_SUPPLIER_ACCOUNTS_DATABASE_MASTER)
+2. Copy sheet structures: InvoiceDatabase, PaymentLog, AuditLog, SupplierDatabase
+3. Update CONFIG.masterDatabase in monthly files:
+   - Set `connectionMode: 'master'`
+   - Set `id` to Master Database spreadsheet ID
+   - Set `url` to Master Database URL
+4. Run `testMasterDatabaseConnection()` to verify setup
+5. Replace local sheets in monthly files with IMPORTRANGE formulas
+6. Grant IMPORTRANGE permissions when prompted
+7. **CRITICAL**: Set up installable Edit trigger:
+   - Open Script Editor in monthly file
+   - Run `setupInstallableEditTrigger()` function
+   - Authorize when prompted
+   - This is required because simple triggers cannot access other spreadsheets
+   - Only needs to be done once per monthly file
+
+**Testing Functions (MasterDatabaseTests.gs):**
+- `testMasterDatabaseConnection()` - Test connectivity and configuration
+- `testMasterDatabaseWrites()` - Test write operations (creates test data)
+- `generateImportRangeFormulas()` - Generate formulas for monthly file setup
+- `showMasterDatabaseConfig()` - Display current configuration
+- `testMasterDatabaseCaching()` - Verify cache functionality with Master DB
+
+**Performance:**
+- **Read performance**: Identical to local mode - reads from local IMPORTRANGE sheets
+  - Cache hit: ~1-5ms
+  - Cache miss: ~200-400ms (local sheet read)
+  - No cross-file latency on reads
+- **Write performance**: Additional latency in master mode due to cross-file writes
+  - Local mode: ~20-50ms
+  - Master mode: ~70-150ms (+50-100ms cross-file latency)
+- Cache works identically in both modes
+- IMPORTRANGE updates automatically when Master DB changes
 
 ### Data Flow
 
@@ -110,8 +194,21 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
 - Inactive → Active: When paid invoice is reopened (rare edge case)
 - Transitions tracked in statistics for monitoring
 
+**Conditional Cache Strategy** (Master Database Support):
+- **Local Mode**: Cache reads from local InvoiceDatabase sheet
+  - Performance: 200-400ms per cache load
+  - Always fresh (same file, immediate updates)
+  - No timing issues
+- **Master Mode**: Cache reads from Master Database directly
+  - Performance: 300-600ms per cache load (+100-200ms cross-file latency)
+  - Always fresh (bypasses IMPORTRANGE timing issues)
+  - Eliminates index mismatch warnings
+- **Tradeoff**: Slight latency in Master mode for guaranteed data freshness
+- Cache loads happen once per TTL (60 seconds), not per transaction
+
 **Critical Implementation Details**:
 - Cache reads EVALUATED values from sheet after formula writes to prevent storing formula strings
+- **Conditional reads**: Master mode uses `getTargetSheet()` (Master DB), Local mode uses `getSourceSheet()` (local)
 - Incremental updates handle edge cases (supplier changes, missing invoices, corruption detection, partition transitions)
 - Automatic fallback to full cache clear if incremental update fails
 - Performance statistics logged every 100 updates for monitoring
@@ -122,6 +219,7 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
 - Memory overhead: ~450KB for 1,000 invoices (negligible)
 - Active cache reduction: 70-90% smaller (partition benefit)
 - Partition transition: <2ms (move invoice between partitions)
+- Cache load: 200-400ms (local), 300-600ms (master)
 
 ---
 
@@ -195,6 +293,13 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 
 **Purpose**: Streamline end-of-day processing with bulk validation and posting
 
+**Master Database Compatibility**:
+- ✅ Fully compatible with both Local and Master modes
+- Automatic connection mode detection and tracking
+- Performance metrics for both modes
+- Audit logging includes connection mode context
+- Results dialog shows mode and performance stats
+
 **Menu Structure** (created by `onOpen()`):
 - **Batch Validate All Rows**: Validate all rows without posting
 - **Batch Post All Valid Rows**: Validate and post all valid rows
@@ -213,7 +318,20 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 **Performance Optimization**:
 - Single batch read for all rows in range
 - In-memory processing before writes
-- Surgical cache invalidation per supplier
+- Surgical cache invalidation per supplier (once per unique supplier)
+- Performance tracking: duration, avg time per row
+- Expected: 50-300ms/row (Local), 100-500ms/row (Master)
+
+**Master Database Awareness**:
+- Connection mode logged at batch start (BATCH_POST_START)
+- Performance metrics logged at completion (BATCH_POST_COMPLETE)
+- Toast notifications show connection mode during processing
+- Results dialog includes:
+  - Connection Mode (LOCAL/MASTER)
+  - Total Duration (seconds)
+  - Average Time per Row (milliseconds)
+  - Performance expectations for current mode
+- Audit trail includes supplier cache invalidation count
 
 ### Sheet Structure
 
@@ -400,6 +518,7 @@ Enforced in `ValidationEngine.gs`:
 7. **Trigger context**: `Session.getActiveUser()` may not work in triggers, use UserResolver instead
 8. **Settings sheet**: Required for UserResolver sheet-based detection fallback
 9. **Menu initialization**: `onOpen()` trigger must be enabled for custom menu to appear
+10. **Master Database access**: Simple triggers (onEdit, onOpen) cannot access other spreadsheets via `SpreadsheetApp.openById()`. Must use installable triggers when in Master mode. Run `setupInstallableEditTrigger()` to convert. See "Simple Trigger Limitations" below.
 
 ## Dependencies
 
@@ -408,6 +527,51 @@ Enforced in `ValidationEngine.gs`:
 - LockService (concurrency)
 - Utilities (UUID, date formatting)
 - Session (timezone, user info - with UserResolver fallback)
+
+## Simple Trigger Limitations and Master Database
+
+**IMPORTANT**: When using Master Database mode, you MUST use an installable Edit trigger.
+
+### The Problem
+
+Google Apps Script has two types of triggers:
+
+**Simple Triggers** (default `onEdit`, `onOpen`):
+- ❌ Cannot call `SpreadsheetApp.openById()` to access other files
+- ❌ Cannot access services requiring authorization
+- ✅ Can only access the current spreadsheet
+- ✅ Easy to set up (just name function `onEdit`)
+
+**Installable Triggers** (manual setup required):
+- ✅ Full authorization and permissions
+- ✅ Can access any spreadsheet via `SpreadsheetApp.openById()`
+- ✅ Can use all Google Apps Script services
+- ⚠️ Requires one-time setup per spreadsheet
+
+### The Solution
+
+When using Master Database mode (`connectionMode: 'master'`), the system needs to write to a different spreadsheet file. This requires an installable trigger.
+
+**Setup Steps:**
+1. Open Script Editor in your monthly spreadsheet
+2. From the function dropdown, select `setupInstallableEditTrigger`
+3. Click Run ▶️
+4. Authorize when prompted (you'll see OAuth consent screen)
+5. Done! A success dialog will appear
+
+**To verify:** Check the installable trigger was created:
+- Script Editor → Triggers (⏰ icon on left sidebar)
+- You should see one Edit trigger for the onEdit function
+
+**To remove:** Run `removeInstallableEditTrigger()` function if you need to troubleshoot
+
+### Why testMasterDatabaseWrites() Works But Posting Doesn't
+
+- `testMasterDatabaseWrites()` runs manually from Script Editor → Full permissions ✅
+- `onEdit` runs as simple trigger → Restricted permissions ❌
+- **Solution:** Convert to installable trigger as described above
+
+**Note:** This is only required for **Master Database mode**. Local mode works fine with simple triggers since all operations stay within the current spreadsheet.
 
 ## Backward Compatibility
 
@@ -452,18 +616,42 @@ When working with this codebase:
 **Batch post**: `batchPostAllRows()` (from menu)
 **Run benchmarks**: `runAllBenchmarks()` (from Script Editor)
 
+**Master Database Functions:**
+**Setup trigger**: `setupInstallableEditTrigger()` - **REQUIRED** for Master mode (run once per file)
+**Remove trigger**: `removeInstallableEditTrigger()` - Remove installable trigger if needed
+**Test connection**: `testMasterDatabaseConnection()` (from Script Editor)
+**Test writes**: `testMasterDatabaseWrites()` (from Script Editor - creates test data)
+**Generate formulas**: `generateImportRangeFormulas()` (from Script Editor)
+**Show config**: `showMasterDatabaseConfig()` (from Script Editor)
+**Test caching**: `testMasterDatabaseCaching()` (from Script Editor)
+**Get source sheet** (reads): `MasterDatabaseUtils.getSourceSheet(sheetType)` - Always local (IMPORTRANGE in master mode)
+**Get target sheet** (writes): `MasterDatabaseUtils.getTargetSheet(sheetType)` - Master or local based on mode
+**Build IMPORTRANGE**: `MasterDatabaseUtils.buildImportFormula(sheetType)` - Generate formulas
+**Check mode**: `CONFIG.isMasterMode()` - Returns true if using Master Database
+
 ## Module Responsibilities
 
 ### _Config.gs
 - Centralized configuration for sheets, columns, rules, colors
-- Configuration validation on initialization
+- **Master Database configuration** (connectionMode, id, url, sheets, importRanges)
+- Configuration validation on initialization (includes Master DB validation)
 - Helper methods for column letter/index conversion
 - Configuration export and summary functions
+- **`isMasterMode()`** - Check if using Master Database
+- **`getMasterDatabaseId()`** - Get Master DB spreadsheet ID
+- **`getMasterDatabaseUrl()`** - Get Master DB URL
 
 ### _Utils.gs
 - StringUtils: Normalization, comparison, sanitization
 - DateUtils: Formatting for time, date, datetime
 - SheetUtils: Safe sheet access with validation
+- **MasterDatabaseUtils**: Master Database helper utilities
+  - **`getSourceSheet(sheetType)`** - **For reads**: Always returns local sheet (IMPORTRANGE in master mode)
+  - **`getTargetSheet(sheetType)`** - **For writes**: Returns Master (master mode) or local (local mode)
+  - **`buildImportFormula(sheetType)`** - Generate IMPORTRANGE formulas
+  - **`testConnection()`** - Validate Master DB setup
+  - **`getMasterDatabaseFile()`** - Get Master DB spreadsheet object
+  - **`getMasterSheet(sheetType)`** - Get specific Master DB sheet
 - IDGenerator: UUID, invoice ID, payment ID generation
 - LockManager: Document and script lock management
 
@@ -597,9 +785,57 @@ When working with this codebase:
 
 **Usage**: Run from Script Editor → Functions dropdown → Select test → Run → View Logs
 
+### MasterDatabaseTests.gs
+**Comprehensive test suite for Master Database setup and connectivity**
+
+**Test Functions**:
+1. **`testMasterDatabaseConnection()`** - Main connection test
+   - Configuration validation
+   - Master Database file access
+   - Sheet accessibility checks
+   - IMPORTRANGE formula generation
+   - Detailed error reporting
+
+2. **`testMasterDatabaseWrites()`** - Write operation test
+   - Creates test invoice in Master DB
+   - Creates test payment in Master DB
+   - Verifies audit logging
+   - **WARNING**: Writes test data to Master Database
+
+3. **`generateImportRangeFormulas()`** - Formula generator
+   - Generates IMPORTRANGE formulas for all sheet types
+   - Provides setup instructions
+   - Ready to copy-paste into monthly files
+
+4. **`showMasterDatabaseConfig()`** - Configuration display
+   - Shows current connectionMode
+   - Displays Master DB ID and URL
+   - Lists sheet mappings
+   - Shows import ranges
+
+5. **`testMasterDatabaseCaching()`** - Cache functionality test
+   - Tests cache loading from Master DB
+   - Verifies cache hit performance
+   - Shows partition statistics
+   - Performance validation
+
+**Usage Workflow**:
+1. Configure Master DB in _Config.gs
+2. Run `testMasterDatabaseConnection()` to validate setup
+3. Run `generateImportRangeFormulas()` to get formulas for monthly files
+4. (Optional) Run `testMasterDatabaseWrites()` to test write operations
+5. (Optional) Run `testMasterDatabaseCaching()` to verify cache performance
+
+**Expected Output**:
+- Connection test: Detailed status of all sheets and configuration
+- Write test: Confirmation of successful test data creation
+- Formula generator: Ready-to-use IMPORTRANGE formulas
+- Cache test: Performance metrics and partition stats
+
 ---
 
-**Last Updated**: 29 October 2025 - Added PaymentCache architecture and performance benchmarks
+**Last Updated**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
+**Previous Update**: 2 November 2025 - Added Master Database architecture
 **Maintained By**: Development team
 **Questions**: Check AuditLog sheet or code comments for implementation details
 

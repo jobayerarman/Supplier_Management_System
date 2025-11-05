@@ -195,7 +195,8 @@ const PaymentCache = {
 
     // Cache miss - load data
     try {
-      const paymentSh = SheetUtils.getSheet(CONFIG.paymentSheet);
+      // Always read from local sheet (IMPORTRANGE in master mode)
+      const paymentSh = MasterDatabaseUtils.getSourceSheet('payment');
       const lastRow = paymentSh.getLastRow();
 
       if (lastRow < 2) {
@@ -369,7 +370,8 @@ const PaymentManager = {
     }
 
     try {
-      const paymentSh = getSheet(CONFIG.paymentSheet);
+      // Use Master Database if in master mode, otherwise use local sheet
+      const paymentSh = MasterDatabaseUtils.getTargetSheet('payment');
       const lastRow = paymentSh.getLastRow();
       const newRow = lastRow + 1;
 
@@ -527,7 +529,8 @@ const PaymentManager = {
       }
 
       try {
-        const invoiceSh = getSheet(CONFIG.invoiceSheet);
+        // Use Master Database target sheet for writes
+        const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
         invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
 
         result.success = true;
@@ -545,12 +548,6 @@ const PaymentManager = {
       if (result.paidDateUpdated) {
         CacheManager.updateInvoiceInCache(supplier, invoiceNo);
       }
-
-      // ═══ STEP 7: LOG SUCCESS ═══
-      // AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
-      //   `Invoice ${invoiceNo} fully paid and marked | Payment: ${context.paymentId} | ` +
-      //   `Type: ${context.paymentType} | Total Paid: ${totalPaid} | ` +
-      //   `Paid Date: ${DateUtils.formatDate(paidDate)}`);
 
       return result;
 
