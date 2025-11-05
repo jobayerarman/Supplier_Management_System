@@ -467,7 +467,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
           sheet,
           rowNum,
           `ERROR: ${errorMsg.substring(0, 100)}`,
-          data.enteredBy,
+          data.enteredBy.split("@")[0],  // Display username only in sheet
           data.timestamp,
           false,
           CONFIG.colors.error
@@ -504,7 +504,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         'POSTED',
-        data.enteredBy,
+        data.enteredBy.split("@")[0],  // Display username only in sheet
         data.timestamp,
         true,
         CONFIG.colors.success
@@ -607,7 +607,7 @@ function buildDataObject(rowData, rowNum, sheetName) {
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
     invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
-    enteredBy: UserResolver.getCurrentUser().split("@")[0],
+    enteredBy: UserResolver.getCurrentUser(),  // ✅ FIXED: Store full email for audit trail (split only for display)
     timestamp: new Date(),     // Current processing time (for audit trail)
     rowNum: rowNum,
     sheetName: sheetName
