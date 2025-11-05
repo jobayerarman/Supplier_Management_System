@@ -1,81 +1,181 @@
 /**
- * UserResolver - Reliable user identification for shared Google Sheets environments.
- * Implements a fallback strategy to identify the active user when Session.getEffectiveUser() fails.
+ * UserResolver - Context-Aware User Identification for Google Sheets
+ *
+ * Provides reliable user identification across different execution contexts:
+ * - Menu context (batch operations): Uses Session → Prompt if needed
+ * - Trigger context (individual posts): Uses Session → Default if needed
+ *
+ * Features:
+ * - Context-aware fallback chains
+ * - Session caching (1-hour TTL)
+ * - User prompt fallback for menu context
+ * - Detection metadata for debugging
+ * - Email validation
+ *
+ * Version: 2.0
+ * Last Updated: 2025-11-05
  */
 
 const UserResolver = (() => {
   // Configuration
   const CONFIG = {
     DEFAULT_USER_EMAIL: 'default@google.com',
+    CACHE_TTL_MS: 3600000, // 1 hour
+    CACHE_KEY_PREFIX: 'UserResolver_',
+    MAX_PROMPT_ATTEMPTS: 3,
+    // Deprecated settings (kept for backward compatibility)
     SHEET_NAME: 'Settings',
     AUDIT_COLUMN: 'A'
   };
 
+  // Detection metadata (for debugging and audit)
+  let lastDetection = {
+    email: null,
+    method: null,
+    context: null,
+    timestamp: null
+  };
+
   /**
-   * Retrieves the current active user's email with fallback strategy.
-   * Fallback chain: Session.getActiveUser() → Sheet-based detection → Default fallback
-   * 
-   * @returns {string} User email address or default fallback
+   * Detect execution context
+   * @returns {string} Context type: 'menu', 'trigger_installable', 'trigger_simple', 'direct'
    */
-  function getCurrentUser() {
+  function getExecutionContext() {
     try {
-      // Attempt 1: Use Session.getActiveUser() (most reliable in bound scripts)
-      const sessionUser = getSessionActiveUser();
-      if (sessionUser) return sessionUser;
+      // Check if running in a trigger by examining authorization mode
+      const authMode = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL).getAuthorizationStatus();
 
-      // Attempt 2: Detect user from last edit in sheet (collaborative editing)
-      const sheetUser = detectUserFromSheetEdit();
-      if (sheetUser) return sheetUser;
-
-      // Attempt 3: Use effective user as last resort
-      const effectiveUser = getEffectiveUserEmail();
-      if (effectiveUser) return effectiveUser;
-
-      // Fallback: Return configured default
-      return CONFIG.DEFAULT_USER_EMAIL;
+      // Try to access UI - only works in menu/direct execution, not triggers
+      try {
+        const ui = SpreadsheetApp.getUi();
+        // If we get here, it's either menu or direct execution
+        // Differentiate by checking if there's an active user
+        const user = Session.getActiveUser();
+        if (user && user.getEmail()) {
+          return 'menu'; // Menu items always have active user
+        }
+        return 'direct'; // Direct execution from script editor
+      } catch (e) {
+        // UI not available - must be trigger context
+        // Check if Session.getActiveUser() works (installable trigger)
+        try {
+          const user = Session.getActiveUser();
+          if (user && user.getEmail()) {
+            return 'trigger_installable';
+          }
+        } catch (triggerError) {
+          // Session not available - simple trigger
+        }
+        return 'trigger_simple';
+      }
     } catch (error) {
-      Logger.log('UserResolver error: ' + error.message);
-      return CONFIG.DEFAULT_USER_EMAIL;
+      return 'unknown';
     }
   }
 
   /**
-   * Gets user email from Session.getActiveUser() if available.
-   * Works in bound scripts and direct executions, but not in triggers.
-   * 
-   * @returns {string|null} User email or null if unavailable
+   * Validate email format
+   * @param {string} email - Email to validate
+   * @returns {boolean} True if valid email format
+   */
+  function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+
+    // RFC 5322 simplified validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+  }
+
+  /**
+   * Get cached user email from UserProperties
+   * @returns {Object|null} Cached user object or null if expired/not found
+   */
+  function getCachedUser() {
+    try {
+      const userProps = PropertiesService.getUserProperties();
+      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+
+      const cachedEmail = userProps.getProperty(cacheKey);
+      const cachedTime = userProps.getProperty(cacheTimeKey);
+      const cachedMethod = userProps.getProperty(cacheMethodKey);
+
+      if (!cachedEmail || !cachedTime) return null;
+
+      // Check if cache is still valid (within TTL)
+      const cacheAge = Date.now() - parseInt(cachedTime, 10);
+      if (cacheAge > CONFIG.CACHE_TTL_MS) {
+        // Cache expired
+        clearCachedUser();
+        return null;
+      }
+
+      return {
+        email: cachedEmail,
+        method: cachedMethod || 'cached',
+        timestamp: new Date(parseInt(cachedTime, 10))
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Cache user email in UserProperties
+   * @param {string} email - Email to cache
+   * @param {string} method - Detection method used
+   */
+  function setCachedUser(email, method) {
+    try {
+      const userProps = PropertiesService.getUserProperties();
+      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+
+      userProps.setProperties({
+        [cacheKey]: email,
+        [cacheTimeKey]: Date.now().toString(),
+        [cacheMethodKey]: method
+      });
+    } catch (error) {
+      // Cache failure is non-fatal
+      Logger.log('UserResolver cache write failed: ' + error.message);
+    }
+  }
+
+  /**
+   * Clear cached user data
+   */
+  function clearCachedUser() {
+    try {
+      const userProps = PropertiesService.getUserProperties();
+      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+
+      userProps.deleteProperty(cacheKey);
+      userProps.deleteProperty(cacheTimeKey);
+      userProps.deleteProperty(cacheMethodKey);
+    } catch (error) {
+      // Non-fatal
+    }
+  }
+
+  /**
+   * Try to get user from Session.getActiveUser()
+   * Works in: Installable triggers, menu items, direct execution
+   * Fails in: Simple triggers
+   *
+   * @returns {string|null} User email or null
    */
   function getSessionActiveUser() {
     try {
       const user = Session.getActiveUser();
       const email = user.getEmail();
-      return (email && email.length > 0) ? email : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /**
-   * Attempts to identify user from sheet edit metadata.
-   * Uses Apps Script's edit history to find the current user in collaborative sheets.
-   * 
-   * @returns {string|null} User email if detectable from sheet state
-   */
-  function detectUserFromSheetEdit() {
-    try {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
-      
-      if (!sheet) return null;
-
-      // Get the range where the last user email was stored (if tracking is enabled)
-      const lastUserRange = sheet.getRange(CONFIG.AUDIT_COLUMN + '1');
-      const lastUserEmail = lastUserRange.getValue();
-
-      if (lastUserEmail && typeof lastUserEmail === 'string' && lastUserEmail.includes('@')) {
-        return lastUserEmail;
+      if (email && email.trim().length > 0 && isValidEmail(email)) {
+        return email;
       }
-
       return null;
     } catch (error) {
       return null;
@@ -83,57 +183,287 @@ const UserResolver = (() => {
   }
 
   /**
-   * Falls back to Session.getEffectiveUser() as last resort.
-   * May return developer email in shared environments; use only after other methods fail.
-   * 
-   * @returns {string|null} User email or null if empty
+   * Try to get user from Session.getEffectiveUser()
+   * May return developer email in shared environments
+   *
+   * @returns {string|null} User email or null
    */
-  function getEffectiveUserEmail() {
+  function getSessionEffectiveUser() {
     try {
       const email = Session.getEffectiveUser().getEmail();
-      return (email && email.length > 0) ? email : null;
+      if (email && email.trim().length > 0 && isValidEmail(email)) {
+        return email;
+      }
+      return null;
     } catch (error) {
       return null;
     }
   }
 
   /**
-   * Sets the current user's email in the tracking sheet.
-   * Call this in trigger-based functions to establish user context.
-   * 
-   * @param {string} email - Email address to store
+   * Prompt user to enter their email address
+   * Only used in menu context when Session methods fail
+   *
+   * @returns {string|null} User email or null if cancelled
    */
-  function setCurrentUserEmail(email) {
+  function promptUserForIdentification() {
     try {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
-      
-      if (!sheet) {
-        Logger.log('Warning: Settings sheet not found for user tracking');
-        return;
+      const ui = SpreadsheetApp.getUi();
+      let attempts = 0;
+
+      while (attempts < CONFIG.MAX_PROMPT_ATTEMPTS) {
+        const response = ui.prompt(
+          'User Identification Required',
+          'Unable to automatically detect your email address.\n\n' +
+          'Please enter your email to continue:',
+          ui.ButtonSet.OK_CANCEL
+        );
+
+        if (response.getSelectedButton() !== ui.Button.OK) {
+          // User cancelled
+          return null;
+        }
+
+        const email = response.getResponseText().trim();
+
+        if (isValidEmail(email)) {
+          return email;
+        }
+
+        // Invalid email, try again
+        attempts++;
+        if (attempts < CONFIG.MAX_PROMPT_ATTEMPTS) {
+          ui.alert(
+            'Invalid Email',
+            `"${email}" is not a valid email address.\n\n` +
+            `Please try again (${attempts}/${CONFIG.MAX_PROMPT_ATTEMPTS} attempts used).`,
+            ui.ButtonSet.OK
+          );
+        }
       }
 
-      sheet.getRange(CONFIG.AUDIT_COLUMN + '1').setValue(email);
+      // Max attempts reached
+      ui.alert(
+        'User Identification Failed',
+        'Unable to verify your email address after multiple attempts.\n\n' +
+        'Operations will use default user identification.',
+        ui.ButtonSet.OK
+      );
+
+      return null;
     } catch (error) {
-      Logger.log('Error setting user email: ' + error.message);
+      return null;
     }
   }
 
   /**
-   * Updates configuration values.
-   * 
+   * Get current user with context-aware fallback strategy
+   * Main public API - maintains backward compatibility
+   *
+   * @returns {string} User email address
+   */
+  function getCurrentUser() {
+    try {
+      // Check cache first (performance optimization)
+      const cached = getCachedUser();
+      if (cached) {
+        lastDetection = {
+          email: cached.email,
+          method: 'cached',
+          context: getExecutionContext(),
+          timestamp: new Date()
+        };
+        return cached.email;
+      }
+
+      // Detect execution context
+      const context = getExecutionContext();
+
+      // Try Session.getActiveUser() first (works in most contexts)
+      const sessionActive = getSessionActiveUser();
+      if (sessionActive) {
+        setCachedUser(sessionActive, 'session_active');
+        lastDetection = {
+          email: sessionActive,
+          method: 'session_active',
+          context: context,
+          timestamp: new Date()
+        };
+        return sessionActive;
+      }
+
+      // Try Session.getEffectiveUser() second
+      const sessionEffective = getSessionEffectiveUser();
+      if (sessionEffective) {
+        setCachedUser(sessionEffective, 'session_effective');
+        lastDetection = {
+          email: sessionEffective,
+          method: 'session_effective',
+          context: context,
+          timestamp: new Date()
+        };
+        return sessionEffective;
+      }
+
+      // Context-specific fallbacks
+      if (context === 'menu') {
+        // In menu context, prompt user for identification
+        const prompted = promptUserForIdentification();
+        if (prompted) {
+          setCachedUser(prompted, 'user_prompt');
+          lastDetection = {
+            email: prompted,
+            method: 'user_prompt',
+            context: context,
+            timestamp: new Date()
+          };
+          return prompted;
+        }
+      }
+
+      // Final fallback: Default email
+      lastDetection = {
+        email: CONFIG.DEFAULT_USER_EMAIL,
+        method: 'default_fallback',
+        context: context,
+        timestamp: new Date()
+      };
+
+      // Log warning for audit purposes
+      Logger.log(`⚠️ UserResolver using default fallback | Context: ${context}`);
+
+      return CONFIG.DEFAULT_USER_EMAIL;
+
+    } catch (error) {
+      Logger.log('UserResolver critical error: ' + error.message);
+      lastDetection = {
+        email: CONFIG.DEFAULT_USER_EMAIL,
+        method: 'error_fallback',
+        context: 'error',
+        timestamp: new Date()
+      };
+      return CONFIG.DEFAULT_USER_EMAIL;
+    }
+  }
+
+  /**
+   * Get current user with detection metadata (for debugging)
+   * Returns full detection information including method and context
+   *
+   * @returns {Object} Detection result with email, method, context, timestamp
+   */
+  function getUserWithMetadata() {
+    const email = getCurrentUser();
+    return {
+      ...lastDetection,
+      email: email // Ensure email is always set
+    };
+  }
+
+  /**
+   * Manually set user email (for "Set My Email" menu option)
+   * Stores in UserProperties cache
+   *
+   * @param {string} email - Email address to set
+   * @returns {boolean} True if successful
+   */
+  function setManualUserEmail(email) {
+    if (!isValidEmail(email)) {
+      return false;
+    }
+
+    try {
+      setCachedUser(email, 'manual_override');
+      lastDetection = {
+        email: email,
+        method: 'manual_override',
+        context: getExecutionContext(),
+        timestamp: new Date()
+      };
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Clear user cache (for logout or troubleshooting)
+   */
+  function clearUserCache() {
+    clearCachedUser();
+    lastDetection = {
+      email: null,
+      method: null,
+      context: null,
+      timestamp: null
+    };
+  }
+
+  /**
+   * Get current detection metadata (for debugging)
+   * @returns {Object} Last detection metadata
+   */
+  function getLastDetection() {
+    return { ...lastDetection };
+  }
+
+  /**
+   * Update configuration values
    * @param {Object} overrides - Configuration properties to override
    */
   function setConfig(overrides) {
     Object.assign(CONFIG, overrides);
   }
 
+  /**
+   * Get current configuration
+   * @returns {Object} Configuration object
+   */
+  function getConfig() {
+    return { ...CONFIG };
+  }
+
+  // ═══ DEPRECATED METHODS (Kept for backward compatibility) ═══
+
+  /**
+   * @deprecated Since v2.0 - Sheet-based detection is unreliable and no longer used
+   * This method is kept for backward compatibility but always returns null
+   * Use getCurrentUser() instead which uses Session + Prompt fallback
+   */
+  function detectUserFromSheetEdit() {
+    Logger.log('⚠️ detectUserFromSheetEdit() is deprecated and no longer functional');
+    return null;
+  }
+
+  /**
+   * @deprecated Since v2.0 - Sheet-based tracking is no longer used
+   * Use UserProperties cache instead (automatic via getCurrentUser())
+   */
+  function setCurrentUserEmail(email) {
+    Logger.log('⚠️ setCurrentUserEmail() is deprecated - use setManualUserEmail() instead');
+    return setManualUserEmail(email);
+  }
+
   // Public API
   return {
+    // Core methods
     getCurrentUser,
-    setCurrentUserEmail,
+    getUserWithMetadata,
+    setManualUserEmail,
+    clearUserCache,
+
+    // Utility methods
+    getLastDetection,
+    getExecutionContext,
+    isValidEmail,
+
+    // Configuration
     setConfig,
-    getConfig: () => ({ ...CONFIG })
+    getConfig,
+
+    // Deprecated methods (keep for backward compatibility)
+    setCurrentUserEmail,
+    detectUserFromSheetEdit
   };
 })();
 
@@ -142,32 +472,185 @@ const UserResolver = (() => {
  * Run in Apps Script editor: Run > testUserResolver
  */
 function testUserResolver() {
-  Logger.log('=== UserResolver Unit Tests ===');
+  Logger.log('═══ UserResolver v2.0 Unit Tests ═══\n');
 
   // Test 1: getCurrentUser returns a valid email format
+  Logger.log('Test 1: getCurrentUser returns valid email');
   const user = UserResolver.getCurrentUser();
-  Logger.log('Test 1 - getCurrentUser returns email: ' + (user.includes('@') ? 'PASS' : 'FAIL'));
-  Logger.log('  Result: ' + user);
+  const test1 = user && user.includes('@');
+  Logger.log(`  Result: ${user}`);
+  Logger.log(`  Status: ${test1 ? '✅ PASS' : '❌ FAIL'}\n`);
 
-  // Test 2: Config can be retrieved
-  const config = UserResolver.getConfig();
-  Logger.log('Test 2 - getConfig returns object: ' + (config && config.DEFAULT_USER_EMAIL ? 'PASS' : 'FAIL'));
+  // Test 2: getUserWithMetadata returns detection info
+  Logger.log('Test 2: getUserWithMetadata returns metadata');
+  const metadata = UserResolver.getUserWithMetadata();
+  const test2 = metadata && metadata.email && metadata.method && metadata.context;
+  Logger.log(`  Email: ${metadata.email}`);
+  Logger.log(`  Method: ${metadata.method}`);
+  Logger.log(`  Context: ${metadata.context}`);
+  Logger.log(`  Timestamp: ${metadata.timestamp}`);
+  Logger.log(`  Status: ${test2 ? '✅ PASS' : '❌ FAIL'}\n`);
 
-  // Test 3: setCurrentUserEmail stores value (if Settings sheet exists)
-  try {
-    const testEmail = 'test@example.com';
-    UserResolver.setCurrentUserEmail(testEmail);
-    Logger.log('Test 3 - setCurrentUserEmail executes: PASS');
-  } catch (error) {
-    Logger.log('Test 3 - setCurrentUserEmail executes: FAIL (' + error.message + ')');
+  // Test 3: getExecutionContext returns valid context
+  Logger.log('Test 3: getExecutionContext returns valid context');
+  const context = UserResolver.getExecutionContext();
+  const validContexts = ['menu', 'trigger_installable', 'trigger_simple', 'direct', 'unknown'];
+  const test3 = validContexts.includes(context);
+  Logger.log(`  Context: ${context}`);
+  Logger.log(`  Status: ${test3 ? '✅ PASS' : '❌ FAIL'}\n`);
+
+  // Test 4: isValidEmail validates correctly
+  Logger.log('Test 4: isValidEmail validation');
+  const validEmail = UserResolver.isValidEmail('test@example.com');
+  const invalidEmail1 = !UserResolver.isValidEmail('invalid');
+  const invalidEmail2 = !UserResolver.isValidEmail('');
+  const invalidEmail3 = !UserResolver.isValidEmail(null);
+  const test4 = validEmail && invalidEmail1 && invalidEmail2 && invalidEmail3;
+  Logger.log(`  "test@example.com": ${validEmail ? 'Valid ✅' : 'Invalid ❌'}`);
+  Logger.log(`  "invalid": ${invalidEmail1 ? 'Invalid ✅' : 'Valid ❌'}`);
+  Logger.log(`  "": ${invalidEmail2 ? 'Invalid ✅' : 'Valid ❌'}`);
+  Logger.log(`  null: ${invalidEmail3 ? 'Invalid ✅' : 'Valid ❌'}`);
+  Logger.log(`  Status: ${test4 ? '✅ PASS' : '❌ FAIL'}\n`);
+
+  // Test 5: Cache functionality
+  Logger.log('Test 5: Cache functionality');
+  UserResolver.clearUserCache(); // Clear first
+  const firstCall = UserResolver.getCurrentUser();
+  const firstMetadata = UserResolver.getLastDetection();
+  const secondCall = UserResolver.getCurrentUser();
+  const secondMetadata = UserResolver.getLastDetection();
+  const test5 = firstCall === secondCall && secondMetadata.method === 'cached';
+  Logger.log(`  First call method: ${firstMetadata.method}`);
+  Logger.log(`  Second call method: ${secondMetadata.method}`);
+  Logger.log(`  Status: ${test5 ? '✅ PASS (cache working)' : '❌ FAIL'}\n`);
+
+  // Test 6: Manual email setting
+  Logger.log('Test 6: Manual email setting');
+  const manualEmail = 'manual@example.com';
+  const setResult = UserResolver.setManualUserEmail(manualEmail);
+  const retrievedEmail = UserResolver.getCurrentUser();
+  const retrievedMetadata = UserResolver.getLastDetection();
+  const test6 = setResult && retrievedEmail === manualEmail && retrievedMetadata.method === 'manual_override';
+  Logger.log(`  Set email: ${manualEmail}`);
+  Logger.log(`  Retrieved email: ${retrievedEmail}`);
+  Logger.log(`  Method: ${retrievedMetadata.method}`);
+  Logger.log(`  Status: ${test6 ? '✅ PASS' : '❌ FAIL'}\n`);
+
+  // Test 7: Cache clearing
+  Logger.log('Test 7: Cache clearing');
+  UserResolver.clearUserCache();
+  const afterClearEmail = UserResolver.getCurrentUser();
+  const afterClearMetadata = UserResolver.getLastDetection();
+  const test7 = afterClearMetadata.method !== 'cached' && afterClearMetadata.method !== 'manual_override';
+  Logger.log(`  After clear method: ${afterClearMetadata.method}`);
+  Logger.log(`  Status: ${test7 ? '✅ PASS (cache cleared)' : '❌ FAIL'}\n`);
+
+  // Summary
+  const totalTests = 7;
+  const passedTests = [test1, test2, test3, test4, test5, test6, test7].filter(Boolean).length;
+  Logger.log('═══ Test Summary ═══');
+  Logger.log(`Passed: ${passedTests}/${totalTests}`);
+  Logger.log(`Status: ${passedTests === totalTests ? '✅ ALL TESTS PASSED' : '⚠️ SOME TESTS FAILED'}`);
+}
+
+/**
+ * Menu option: Set My Email
+ * Allows users to manually set their email if auto-detection fails
+ */
+function menuSetMyEmail() {
+  const ui = SpreadsheetApp.getUi();
+
+  const response = ui.prompt(
+    'Set My Email',
+    'Enter your email address for user identification:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return;
   }
 
-  // Test 4: setConfig updates configuration
-  const originalDefault = UserResolver.getConfig().DEFAULT_USER_EMAIL;
-  UserResolver.setConfig({ DEFAULT_USER_EMAIL: 'new-default@example.com' });
-  const newDefault = UserResolver.getConfig().DEFAULT_USER_EMAIL;
-  Logger.log('Test 4 - setConfig updates values: ' + (newDefault === 'new-default@example.com' ? 'PASS' : 'FAIL'));
-  UserResolver.setConfig({ DEFAULT_USER_EMAIL: originalDefault });
+  const email = response.getResponseText().trim();
 
-  Logger.log('=== Tests Complete ===');
+  if (!UserResolver.isValidEmail(email)) {
+    ui.alert(
+      'Invalid Email',
+      `"${email}" is not a valid email address.`,
+      ui.ButtonSet.OK
+    );
+    return;
+  }
+
+  const success = UserResolver.setManualUserEmail(email);
+
+  if (success) {
+    ui.alert(
+      'Email Set Successfully',
+      `Your email has been set to: ${email}\n\n` +
+      'This will be used for all operations until cache expires (1 hour) or is cleared.',
+      ui.ButtonSet.OK
+    );
+  } else {
+    ui.alert(
+      'Error',
+      'Failed to set email. Please try again.',
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+/**
+ * Menu option: Clear User Cache
+ * For troubleshooting user identification issues
+ */
+function menuClearUserCache() {
+  const ui = SpreadsheetApp.getUi();
+
+  const response = ui.alert(
+    'Clear User Cache',
+    'This will clear your cached user identification.\n\n' +
+    'Your email will be automatically detected again on the next operation.\n\n' +
+    'Continue?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (response !== ui.Button.YES) {
+    return;
+  }
+
+  UserResolver.clearUserCache();
+
+  ui.alert(
+    'Cache Cleared',
+    'User cache has been cleared successfully.\n\n' +
+    'Your email will be automatically detected on the next operation.',
+    ui.ButtonSet.OK
+  );
+}
+
+/**
+ * Menu option: Show User Info
+ * For debugging user identification
+ */
+function menuShowUserInfo() {
+  const ui = SpreadsheetApp.getUi();
+
+  const metadata = UserResolver.getUserWithMetadata();
+  const context = UserResolver.getExecutionContext();
+
+  const message =
+    `Current User: ${metadata.email}\n\n` +
+    `Detection Method: ${metadata.method}\n` +
+    `Execution Context: ${context}\n` +
+    `Detected At: ${metadata.timestamp ? metadata.timestamp.toLocaleString() : 'N/A'}\n\n` +
+    `─────────────────────\n` +
+    `Detection Methods:\n` +
+    `• session_active: From Session.getActiveUser()\n` +
+    `• session_effective: From Session.getEffectiveUser()\n` +
+    `• user_prompt: Manually entered by user\n` +
+    `• manual_override: Set via "Set My Email" menu\n` +
+    `• cached: Retrieved from cache\n` +
+    `• default_fallback: All methods failed`;
+
+  ui.alert('User Identification Info', message, ui.ButtonSet.OK);
 }

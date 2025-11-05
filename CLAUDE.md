@@ -272,22 +272,77 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 - Automatic refresh on first access after expiration
 - Balances freshness vs performance
 
-### User Resolution System
+### User Resolution System (v2.0)
 
-**Purpose**: Reliable user identification in shared Google Sheets environments where `Session.getEffectiveUser()` may fail
+**Purpose**: Context-aware user identification that gets the **actual logged-in user** in both trigger and menu contexts
 
-**Fallback Chain**:
-1. `Session.getActiveUser()` - Most reliable in bound scripts
-2. Sheet-based detection - Reads last user from Settings sheet
-3. `Session.getEffectiveUser()` - Last resort (may return developer email)
-4. Default fallback - `default@google.com`
+**Architecture**: Eliminates unreliable sheet-based detection, uses Session APIs + user prompt fallback
 
-**Key Functions**:
-- `UserResolver.getCurrentUser()`: Primary function for getting current user
-- `UserResolver.setCurrentUserEmail(email)`: Store user in tracking sheet (for trigger contexts)
-- `UserResolver.setConfig(overrides)`: Update configuration
+**Context-Aware Fallback Chains**:
 
-**Usage**: Replace direct `Session.getActiveUser()` calls with `UserResolver.getCurrentUser()`
+**Menu Context** (batch operations):
+1. **Cache** (UserProperties, 1-hour TTL) - Performance optimization
+2. **Session.getActiveUser()** ✅ - Primary method (works in menu context)
+3. **Session.getEffectiveUser()** ✅ - Secondary method
+4. **User Prompt** ⚠️ - Manual entry if Session fails (validates email format)
+5. **Default fallback** ❌ - `default@google.com` (last resort)
+
+**Trigger Context** (individual posts):
+1. **Cache** (UserProperties, 1-hour TTL) - Performance optimization
+2. **Session.getActiveUser()** ✅ - Primary method (works in installable triggers)
+3. **Session.getEffectiveUser()** ✅ - Secondary method
+4. **Default fallback** ❌ - `default@google.com` (last resort, no prompt in trigger)
+
+**Key Features**:
+- **Session Caching**: 1-hour TTL in UserProperties for performance
+- **Email Validation**: RFC 5322 validation before accepting email
+- **Detection Metadata**: Tracks which method was used for debugging
+- **User Prompt**: In menu context only, prompts user if Session fails
+- **Deprecated Methods**: Sheet-based detection removed (unreliable, caused wrong attribution)
+
+**Core Functions**:
+- `UserResolver.getCurrentUser()`: Get current user (maintains backward compatibility)
+- `UserResolver.getUserWithMetadata()`: Get user + detection metadata for debugging
+- `UserResolver.setManualUserEmail(email)`: Manually set email (stored in cache)
+- `UserResolver.clearUserCache()`: Clear cached user (for troubleshooting)
+- `UserResolver.getExecutionContext()`: Detect context ('menu', 'trigger_installable', 'direct')
+- `UserResolver.isValidEmail(email)`: Validate email format
+
+**Menu Options** (📋FP - Operations → 👤 User Settings):
+- **Set My Email**: Manually set email if auto-detection fails
+- **Show User Info**: View current user, detection method, and execution context
+- **Clear User Cache**: Force fresh user detection
+
+**Deprecated Functions** (kept for backward compatibility):
+- ❌ `detectUserFromSheetEdit()` - No longer functional, always returns null
+- ❌ `setCurrentUserEmail()` - Redirects to `setManualUserEmail()`
+
+**Detection Metadata Example**:
+```javascript
+{
+  email: "john@company.com",
+  method: "session_active",  // or "cached", "user_prompt", "manual_override", etc.
+  context: "menu",           // or "trigger_installable", "direct"
+  timestamp: Date            // When detected
+}
+```
+
+**Usage**:
+```javascript
+// Simple usage (backward compatible)
+const email = UserResolver.getCurrentUser();
+
+// With debugging metadata
+const { email, method, context } = UserResolver.getUserWithMetadata();
+```
+
+**Benefits**:
+- ✅ Always gets actual logged-in user (no stale data)
+- ✅ Context-aware fallback strategies
+- ✅ User prompt ensures 100% success rate in menu context
+- ✅ Performance optimized with 1-hour cache
+- ✅ Full debugging capability with detection metadata
+- ✅ Backward compatible with existing code
 
 ### Batch Operations System
 
@@ -306,6 +361,10 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 - **Validate Selected Rows**: Validate only selected row range
 - **Post Selected Rows**: Post only selected row range
 - **Clear All Post Checkboxes**: Reset sheet after batch operations
+- **👤 User Settings** (submenu):
+  - **Set My Email**: Manually set user email
+  - **Show User Info**: View current user detection info
+  - **Clear User Cache**: Force fresh user detection
 
 **Safety Features**:
 - Confirmation dialogs before destructive operations

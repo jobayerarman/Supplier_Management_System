@@ -27,6 +27,11 @@ function onOpen() {
     .addItem('Post Selected Rows', 'batchPostSelectedRows')
     .addSeparator()
     .addItem('Clear All Post Checkboxes', 'clearAllPostCheckboxes')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('👤 User Settings')
+      .addItem('Set My Email', 'menuSetMyEmail')
+      .addItem('Show User Info', 'menuShowUserInfo')
+      .addItem('Clear User Cache', 'menuClearUserCache'))
     .addToUi();
 }
 
