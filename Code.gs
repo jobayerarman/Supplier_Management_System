@@ -187,7 +187,7 @@ function onEditInstallable(e) {
             paymentType,
             prevInvoice: rowValues[configCols.prevInvoice],
             notes: rowValues[configCols.notes],
-            enteredBy: getCurrentUserEmail(),
+            enteredBy: UserResolver.getCurrentUser(),  // UserResolver v2.0
             timestamp: now,
             sysId: rowValues[configCols.sysId] || IDGenerator.generateUUID()
           };
@@ -368,7 +368,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 
     // Use provided date or fallback to reading from sheet
     const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
-    const enteredBy = getCurrentUserEmail();
+    const enteredBy = UserResolver.getCurrentUser();  // UserResolver v2.0
 
     // Build transaction context object
     const data = {
