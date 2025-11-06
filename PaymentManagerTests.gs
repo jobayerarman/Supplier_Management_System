@@ -245,6 +245,7 @@ const MockDataGenerator = {
 
   /**
    * Generate multiple mock payments
+   * NOTE: sysId uses _PAY suffix to match what _recordPayment stores in the sheet
    */
   createMultiplePayments: function(count, baseSupplier = 'Supplier') {
     const payments = [];
@@ -254,7 +255,7 @@ const MockDataGenerator = {
         invoiceNo: `INV-${String(i + 1).padStart(3, '0')}`,
         amount: (i + 1) * 100,
         paymentType: i % 2 === 0 ? 'Regular' : 'Partial',
-        sysId: `PMT-TEST-${String(i + 1).padStart(3, '0')}`
+        sysId: `TEST-${String(i + 1).padStart(3, '0')}_PAY`
       });
     }
     return payments;
@@ -601,16 +602,18 @@ function testPaymentManager_IsDuplicate() {
   TestUtils.resetResults();
 
   // Setup: Create cache with known payments
+  // NOTE: sysId should have _PAY suffix as that's what _recordPayment stores in the sheet
   PaymentCache.clear();
   const mockPayments = [
-    { sysId: 'PMT-EXISTING-001' },
-    { sysId: 'PMT-EXISTING-002' },
-    { sysId: 'PMT-EXISTING-003' }
+    { sysId: 'EXISTING-001_PAY' },
+    { sysId: 'EXISTING-002_PAY' },
+    { sysId: 'EXISTING-003_PAY' }
   ];
   const paymentData = MockDataGenerator.createPaymentLogData(mockPayments);
   PaymentCache.set(paymentData);
 
   // Test 1: Existing payment is duplicate
+  // Pass base sysId (without _PAY), isDuplicate will add it
   TestUtils.assertTrue(
     PaymentManager.isDuplicate('EXISTING-001'),
     'Existing payment detected as duplicate'
@@ -1001,10 +1004,11 @@ function testIntegration_WriteThroughWorkflow() {
   PaymentCache.set(paymentData);
 
   // Simulate payment processing workflow
+  // NOTE: sysId should have _PAY suffix as that's what _recordPayment stores in the sheet
   const newPayments = [
-    { supplier: 'New Supplier 1', invoiceNo: 'INV-NEW-1', amount: 1000, sysId: 'PMT-NEW-1' },
-    { supplier: 'New Supplier 1', invoiceNo: 'INV-NEW-2', amount: 500, sysId: 'PMT-NEW-2' },
-    { supplier: 'New Supplier 2', invoiceNo: 'INV-NEW-3', amount: 750, sysId: 'PMT-NEW-3' }
+    { supplier: 'New Supplier 1', invoiceNo: 'INV-NEW-1', amount: 1000, sysId: 'NEW-1_PAY' },
+    { supplier: 'New Supplier 1', invoiceNo: 'INV-NEW-2', amount: 500, sysId: 'NEW-2_PAY' },
+    { supplier: 'New Supplier 2', invoiceNo: 'INV-NEW-3', amount: 750, sysId: 'NEW-3_PAY' }
   ];
 
   let currentRow = paymentData.length;
@@ -1204,7 +1208,7 @@ function documentPerformanceBaseline() {
     row[col.supplier] = `Supplier ${i}`;
     row[col.invoiceNo] = `INV-${i}`;
     row[col.amount] = i * 100;
-    row[col.sysId] = `PMT-${i}`;
+    row[col.sysId] = `PERF-${i}_PAY`; // Use _PAY suffix to match real system format
     PaymentCache.addPaymentToCache(paymentData.length + i, row);
   }
   const writeThroughTime = Date.now() - t5;
