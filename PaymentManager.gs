@@ -530,6 +530,34 @@ const PaymentManager = {
   },
 
   /**
+   * Generic lock wrapper for operations requiring lock management
+   * Standardizes acquire → execute → release pattern
+   *
+   * @private
+   * @param {string} lockType - Type of lock ('script' or 'document')
+   * @param {function(): *} operation - Function to execute while holding lock
+   * @param {string} context - Context description for error messages
+   * @returns {*} Result from operation function
+   * @throws {Error} If unable to acquire lock or operation fails
+   */
+  _withLock: function(lockType, operation, context) {
+    // Acquire appropriate lock type
+    const lock = lockType === 'document'
+      ? LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS)
+      : LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+
+    if (!lock) {
+      throw new Error(`Unable to acquire ${lockType} lock for ${context}`);
+    }
+
+    try {
+      return operation();
+    } finally {
+      LockManager.releaseLock(lock);
+    }
+  },
+
+  /**
    * Helper: Calculate balance information from invoice data
    * @private
    * @param {Object} invoice - Invoice object from InvoiceManager.find()
@@ -562,24 +590,19 @@ const PaymentManager = {
 
   /**
    * Helper: Write paid date to sheet with lock management
+   * ✓ REFACTORED: Uses _withLock wrapper for standardized lock handling
+   *
    * @private
    * @param {Object} invoice - Invoice object from InvoiceManager.find()
    * @param {Date} paidDate - Date to set as paid date
    * @throws {Error} If unable to acquire lock
    */
   _writePaidDateToSheet: function(invoice, paidDate) {
-    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    if (!lock) {
-      throw new Error('Unable to acquire lock for paid date update');
-    }
-
-    try {
+    return this._withLock('script', () => {
       const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const col = CONFIG.invoiceCols;
       invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
-    } finally {
-      LockManager.releaseLock(lock);
-    }
+    }, 'paid date update');
   },
 
   /**
