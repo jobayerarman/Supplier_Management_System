@@ -640,7 +640,7 @@ function getPaymentMethod(paymentType) {
  * @returns {boolean} True if payment should be recorded
  */
 function shouldProcessPayment(data) {
-  return PaymentManager._shouldRecordPayment(data);
+  return PaymentManager.shouldRecordPayment(data);
 }
 
 /**

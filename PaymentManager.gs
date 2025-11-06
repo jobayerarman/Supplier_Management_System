@@ -344,11 +344,10 @@ const PaymentManager = {
   /**
    * Check if payment should be recorded based on payment amount and type
    *
-   * @private
    * @param {Object} data - Transaction data
    * @returns {boolean} True if payment should be recorded
    */
-  _shouldRecordPayment: function(data) {
+  shouldRecordPayment: function(data) {
     return data.paymentAmt > 0 || data.paymentType === 'Regular';
   },
 

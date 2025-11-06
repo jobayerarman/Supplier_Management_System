@@ -529,16 +529,16 @@ function testPaymentManager_ShouldUpdatePaidDate() {
 }
 
 /**
- * Test: PaymentManager._shouldRecordPayment
+ * Test: PaymentManager.shouldRecordPayment
  */
 function testPaymentManager_ShouldRecordPayment() {
-  Logger.log('\n▶️ TEST: PaymentManager._shouldRecordPayment');
+  Logger.log('\n▶️ TEST: PaymentManager.shouldRecordPayment');
   TestUtils.resetResults();
 
   // Test 1: Payment amount > 0
   const data1 = MockDataGenerator.createTransactionData({ paymentAmt: 1000 });
   TestUtils.assertTrue(
-    PaymentManager._shouldRecordPayment(data1),
+    PaymentManager.shouldRecordPayment(data1),
     'Should record payment when payment amount > 0'
   );
 
@@ -548,7 +548,7 @@ function testPaymentManager_ShouldRecordPayment() {
     paymentType: 'Regular'
   });
   TestUtils.assertTrue(
-    PaymentManager._shouldRecordPayment(data2),
+    PaymentManager.shouldRecordPayment(data2),
     'Should record Regular payment type even with 0 amount'
   );
 
@@ -558,11 +558,11 @@ function testPaymentManager_ShouldRecordPayment() {
     paymentType: 'Partial'
   });
   TestUtils.assertFalse(
-    PaymentManager._shouldRecordPayment(data3),
+    PaymentManager.shouldRecordPayment(data3),
     'Should NOT record payment when amount = 0 and not Regular'
   );
 
-  TestUtils.printSummary('PaymentManager._shouldRecordPayment');
+  TestUtils.printSummary('PaymentManager.shouldRecordPayment');
 }
 
 /**
