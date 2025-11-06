@@ -236,6 +236,36 @@ const PaymentCache = {
 
 const PaymentManager = {
   /**
+   * Helper: Build payment object from row data
+   * @private
+   * @param {Array} rowData - Payment row data
+   * @param {Object} col - Column configuration
+   * @param {string} includeField - Optional field to include ('supplier' or 'invoiceNo')
+   * @returns {Object} Payment object
+   */
+  _buildPaymentObject: function(rowData, col, includeField) {
+    const payment = {
+      date: rowData[col.date],
+      amount: rowData[col.amount],
+      type: rowData[col.paymentType],
+      method: rowData[col.method],
+      reference: rowData[col.reference],
+      fromSheet: rowData[col.fromSheet],
+      enteredBy: rowData[col.enteredBy],
+      timestamp: rowData[col.timestamp]
+    };
+
+    // Add conditional field if specified
+    if (includeField === 'supplier') {
+      payment.supplier = rowData[col.supplier];
+    } else if (includeField === 'invoiceNo') {
+      payment.invoiceNo = rowData[col.invoiceNo];
+    }
+
+    return payment;
+  },
+
+  /**
    * Process and log payment with delegated paid date workflow
    *
    * ✓ OPTIMIZED: Lock-free coordination with granular locking in sub-functions
@@ -661,17 +691,7 @@ const PaymentManager = {
       const col = CONFIG.paymentCols;
 
       // Map indices to payment objects
-      return indices.map(i => ({
-        date: data[i][col.date],
-        supplier: data[i][col.supplier],
-        amount: data[i][col.amount],
-        type: data[i][col.paymentType],
-        method: data[i][col.method],
-        reference: data[i][col.reference],
-        fromSheet: data[i][col.fromSheet],
-        enteredBy: data[i][col.enteredBy],
-        timestamp: data[i][col.timestamp]
-      }));
+      return indices.map(i => this._buildPaymentObject(data[i], col, 'supplier'));
 
     } catch (error) {
       AuditLogger.logError('PaymentManager.getHistoryForInvoice',
@@ -707,17 +727,7 @@ const PaymentManager = {
       const col = CONFIG.paymentCols;
 
       // Map indices to payment objects
-      return indices.map(i => ({
-        date: data[i][col.date],
-        invoiceNo: data[i][col.invoiceNo],
-        amount: data[i][col.amount],
-        type: data[i][col.paymentType],
-        method: data[i][col.method],
-        reference: data[i][col.reference],
-        fromSheet: data[i][col.fromSheet],
-        enteredBy: data[i][col.enteredBy],
-        timestamp: data[i][col.timestamp]
-      }));
+      return indices.map(i => this._buildPaymentObject(data[i], col, 'invoiceNo'));
 
     } catch (error) {
       AuditLogger.logError('PaymentManager.getHistoryForSupplier',
