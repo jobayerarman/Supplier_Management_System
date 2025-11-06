@@ -636,7 +636,7 @@ function testRegularPaymentFlow() {
 
     // Step 3: Payment Processing
     const payAudit = audit.startNested("Payment Processing");
-    const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
+    const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
     payAudit.end();
 
     if (!paymentResult.success) {

@@ -416,7 +416,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 
     // Process payment if applicable
     if (shouldProcessPayment(data)) {
-      const paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
+      const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
       if (!paymentResult.success) {
         setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
         // Clear balance cell with error indicator (consistent error state)

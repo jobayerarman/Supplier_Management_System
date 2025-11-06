@@ -135,7 +135,7 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
     → buildDataObject()
     → validatePostData()
     → InvoiceManager.processOptimized()
-    → PaymentManager.processOptimized()
+    → PaymentManager.processPayment()
     → setBatchPostStatus()
   → showValidationResults()
 ```
@@ -356,7 +356,7 @@ const isDupe = PaymentManager.isDuplicate(sysId);
 const rowData = sheet.getRange(row, 1, 1, totalCols).getValues()[0];
 validatePostData(data);
 InvoiceManager.processOptimized(data);
-PaymentManager.processOptimized(data, invoiceId);
+PaymentManager.processPayment(data, invoiceId);
 BalanceCalculator.updateBalanceCell(sheet, row, true, rowData);
 ```
 
@@ -396,9 +396,9 @@ for (let i = 0; i < allData.length; i++) {
 ```
 
 ### 6. Optimized Functions
-Functions ending in `Optimized` accept pre-read data:
+Optimized functions accept pre-read data:
 - `InvoiceManager.processOptimized(data)`
-- `PaymentManager.processOptimized(data, invoiceId)`
+- `PaymentManager.processPayment(data, invoiceId)`
 - `InvoiceManager.updateOptimized(existingInvoice, data)`
 
 ## Configuration
@@ -444,7 +444,7 @@ Enforced in `ValidationEngine.gs`:
 ## Naming Conventions
 
 - **Modules**: PascalCase objects (`InvoiceManager`, `AuditLogger`, `UserResolver`)
-- **Functions**: camelCase (`processOptimized`, `calculateBalance`, `getCurrentUser`)
+- **Functions**: camelCase (`processPayment`, `calculateBalance`, `getCurrentUser`)
 - **Private methods**: Underscore prefix (`_recordPayment`, `_calculateTransactionImpact`)
 - **Constants**: SCREAMING_SNAKE_CASE in CONFIG
 - **UI functions**: camelCase with descriptive names (`batchPostAllRows`, `showValidationResults`)
@@ -703,7 +703,7 @@ When working with this codebase:
 
 ### PaymentManager.gs
 **Core Functions**:
-- Process payment: `processOptimized(data, invoiceId)` - with paid date workflow and granular locking
+- Process payment: `processPayment(data, invoiceId)` - with paid date workflow and granular locking
 - Get history: `getHistoryForInvoice(invoiceNo)`, `getHistoryForSupplier(supplier)` - **O(1) cached**
 - Get totals: `getTotalForSupplier(supplier)` - **O(1) cached**
 - Check duplicate: `isDuplicate(sysId)` - **O(1) hash lookup**
