@@ -9,12 +9,24 @@
  * - Clean separation of concerns with comprehensive result objects
  *
  * PERFORMANCE OPTIMIZATIONS:
- * - PaymentCache: TTL-based cache with triple-index structure
+ * - PaymentCache: TTL-based cache with quad-index structure
  * - Granular locking: Lock acquired only during sheet writes
  * - Write-through cache: New payments added to cache immediately
+ *
+ * ORGANIZATION:
+ * 1. Constants
+ * 2. PaymentCache Module (separate cache system)
+ * 3. PaymentManager Public API (external interface)
+ * 4. PaymentManager Core Workflow (internal orchestration)
+ * 5. PaymentManager Helper Functions (utilities)
+ * 6. PaymentManager Result Builders (immutable constructors)
+ * 7. Backward Compatibility Functions (legacy support)
  */
 
-// ═══ CONSTANTS ═══
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 1: CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
 /** @const {number} Header row count in sheet data arrays */
 const HEADER_ROW_COUNT = 1;
 
@@ -30,70 +42,10 @@ const BALANCE_TOLERANCE = 0.01;
 /** @const {number} Minimum rows required for sheet to have data (header + at least 1 data row) */
 const MIN_ROWS_WITH_DATA = 2;
 
-// ═══ TYPE DEFINITIONS ═══
-/**
- * @typedef {Object} PaymentResult
- * @property {boolean} success - Whether payment processing succeeded
- * @property {string} [paymentId] - Generated payment ID (if successful)
- * @property {number} [row] - Row number in PaymentLog (if successful)
- * @property {boolean} [fullyPaid] - Whether invoice is fully paid after this payment
- * @property {boolean} [paidDateUpdated] - Whether paid date was set on invoice
- * @property {BalanceInfo} [balanceInfo] - Balance information after payment
- * @property {boolean} [cacheUpdated] - Whether cache was updated
- * @property {string} [error] - Error message (if failed)
- */
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 2: PAYMENT CACHE MODULE
+// ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @typedef {Object} RecordPaymentResult
- * @property {boolean} success - Whether payment was recorded
- * @property {string} [paymentId] - Generated payment ID (if successful)
- * @property {string} [targetInvoice] - Invoice number payment applies to (if successful)
- * @property {number} [row] - Row number in PaymentLog (if successful)
- * @property {string} [error] - Error message (if failed)
- */
-
-/**
- * @typedef {Object} PaidStatusResult
- * @property {boolean} attempted - Whether paid status update was attempted
- * @property {boolean} success - Whether paid date was successfully updated
- * @property {boolean} fullyPaid - Whether invoice is fully paid
- * @property {boolean} paidDateUpdated - Whether paid date was written to sheet
- * @property {string} [reason] - Reason for outcome (invoice_not_found, partial_payment, already_set, updated, lock_failed, error)
- * @property {string} [message] - Human-readable message about outcome
- * @property {BalanceInfo} [balanceInfo] - Balance information
- */
-
-/**
- * @typedef {Object} BalanceInfo
- * @property {number} totalAmount - Invoice total amount
- * @property {number} totalPaid - Amount paid so far
- * @property {number} balanceDue - Remaining balance
- * @property {boolean} fullyPaid - Whether balance is within tolerance (< 0.01)
- */
-
-/**
- * @typedef {Object} PaymentObject
- * @property {Date} date - Payment date
- * @property {number} amount - Payment amount
- * @property {string} type - Payment type (Regular, Due, Partial, Unpaid)
- * @property {string} method - Payment method (Cash, Bank, etc.)
- * @property {string} reference - Reference/notes
- * @property {string} fromSheet - Sheet where payment was entered
- * @property {string} enteredBy - User who entered payment
- * @property {Date} timestamp - Entry timestamp
- * @property {string} [supplier] - Supplier name (included in invoice history)
- * @property {string} [invoiceNo] - Invoice number (included in supplier history)
- */
-
-/**
- * @typedef {Object} PaymentStatistics
- * @property {number} total - Total number of payments
- * @property {number} totalAmount - Sum of all payment amounts
- * @property {Object.<string, number>} byType - Payment amounts grouped by type
- * @property {Object.<string, number>} byMethod - Payment amounts grouped by method
- */
-
-// ═══ PAYMENT CACHE WITH TRIPLE-INDEX STRUCTURE ═══
 /**
  * Optimized Payment Cache Module
  * ----------------------------------------------------
@@ -138,20 +90,6 @@ const PaymentCache = {
       };
     }
     return null;
-  },
-
-  /**
-   * Helper: Add value to index map (creates array if key doesn't exist)
-   * @private
-   * @param {Map} index - The index map to update
-   * @param {string} key - The key to add
-   * @param {*} value - The value to push to array
-   */
-  _addToIndex: function(index, key, value) {
-    if (!index.has(key)) {
-      index.set(key, []);
-    }
-    index.get(key).push(value);
   },
 
   /**
@@ -249,18 +187,6 @@ const PaymentCache = {
   },
 
   /**
-   * Clear entire cache memory
-   */
-  clear: function() {
-    this.data = null;
-    this.invoiceIndex = null;
-    this.supplierIndex = null;
-    this.combinedIndex = null;
-    this.paymentIdIndex = null;
-    this.timestamp = null;
-  },
-
-  /**
    * Lazy load payment data and build indices
    * @returns {{data:Array, invoiceIndex:Map, supplierIndex:Map, combinedIndex:Map, paymentIdIndex:Map}}
    */
@@ -308,42 +234,40 @@ const PaymentCache = {
         paymentIdIndex: new Map()
       };
     }
+  },
+
+  /**
+   * Clear entire cache memory
+   */
+  clear: function() {
+    this.data = null;
+    this.invoiceIndex = null;
+    this.supplierIndex = null;
+    this.combinedIndex = null;
+    this.paymentIdIndex = null;
+    this.timestamp = null;
+  },
+
+  /**
+   * Helper: Add value to index map (creates array if key doesn't exist)
+   * @private
+   * @param {Map} index - The index map to update
+   * @param {string} key - The key to add
+   * @param {*} value - The value to push to array
+   */
+  _addToIndex: function(index, key, value) {
+    if (!index.has(key)) {
+      index.set(key, []);
+    }
+    index.get(key).push(value);
   }
 };
 
-// ═══ PAYMENT MANAGER MODULE ═══
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 3: PAYMENT MANAGER - PUBLIC API
+// ═══════════════════════════════════════════════════════════════════════════
 
 const PaymentManager = {
-  /**
-   * Helper: Build payment object from row data
-   * @private
-   * @param {Array} rowData - Payment row data
-   * @param {Object} col - Column configuration
-   * @param {string} includeField - Optional field to include ('supplier' or 'invoiceNo')
-   * @returns {Object} Payment object
-   */
-  _buildPaymentObject: function(rowData, col, includeField) {
-    const payment = {
-      date: rowData[col.date],
-      amount: rowData[col.amount],
-      type: rowData[col.paymentType],
-      method: rowData[col.method],
-      reference: rowData[col.reference],
-      fromSheet: rowData[col.fromSheet],
-      enteredBy: rowData[col.enteredBy],
-      timestamp: rowData[col.timestamp]
-    };
-
-    // Add conditional field if specified
-    if (includeField === 'supplier') {
-      payment.supplier = rowData[col.supplier];
-    } else if (includeField === 'invoiceNo') {
-      payment.invoiceNo = rowData[col.invoiceNo];
-    }
-
-    return payment;
-  },
-
   /**
    * Process and log payment with delegated paid date workflow
    *
@@ -363,6 +287,16 @@ const PaymentManager = {
    * - Cache operations no longer block other transactions
    * - Eliminated double cache update (~50% reduction in cache operations)
    * - Single invoice lookup instead of two for Regular/Due payments
+   *
+   * @typedef {Object} PaymentResult
+   * @property {boolean} success - Whether payment processing succeeded
+   * @property {string} [paymentId] - Generated payment ID (if successful)
+   * @property {number} [row] - Row number in PaymentLog (if successful)
+   * @property {boolean} [fullyPaid] - Whether invoice is fully paid after this payment
+   * @property {boolean} [paidDateUpdated] - Whether paid date was set on invoice
+   * @property {BalanceInfo} [balanceInfo] - Balance information after payment
+   * @property {boolean} [cacheUpdated] - Whether cache was updated
+   * @property {string} [error] - Error message (if failed)
    *
    * @param {Object} data - Transaction data
    * @param {string} invoiceId - Invoice ID from InvoiceManager
@@ -455,12 +389,198 @@ const PaymentManager = {
       };
     }
   },
-  
+
+  /**
+   * Check if payment should be processed based on payment type
+   *
+   * @param {Object} data - Transaction data
+   * @returns {boolean} True if payment should be processed
+   */
+  shouldProcess: function(data) {
+    return data.paymentAmt > 0 || data.paymentType === 'Regular';
+  },
+
+  /**
+   * Check for duplicate payment
+   *
+   * ✓ OPTIMIZED: Uses PaymentCache paymentIdIndex for O(1) lookups
+   *
+   * @param {string} sysId - System ID to check
+   * @returns {boolean} True if duplicate exists
+   */
+  isDuplicate: function(sysId) {
+    if (!sysId) return false;
+
+    try {
+      // Generate payment ID from system ID
+      const searchId = IDGenerator.generatePaymentId(sysId);
+
+      // ✓ Use cached payment ID index for O(1) lookup
+      const { paymentIdIndex } = PaymentCache.getPaymentData();
+
+      // Check if payment ID exists in index
+      return paymentIdIndex.has(searchId);
+
+    } catch (error) {
+      AuditLogger.logError('PaymentManager.isDuplicate',
+        `Failed to check duplicate: ${error.toString()}`);
+      return false; // Don't block on error
+    }
+  },
+
+  /**
+   * Get payment method based on payment type
+   *
+   * @param {string} paymentType - Payment type
+   * @returns {string} Payment method
+   */
+  getPaymentMethod: function(paymentType) {
+    return CONFIG.getDefaultPaymentMethod(paymentType);
+  },
+
+  /**
+   * Get payment history for invoice
+   *
+   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
+   *
+   * @typedef {Object} PaymentObject
+   * @property {Date} date - Payment date
+   * @property {number} amount - Payment amount
+   * @property {string} type - Payment type (Regular, Due, Partial, Unpaid)
+   * @property {string} method - Payment method (Cash, Bank, etc.)
+   * @property {string} reference - Reference/notes
+   * @property {string} fromSheet - Sheet where payment was entered
+   * @property {string} enteredBy - User who entered payment
+   * @property {Date} timestamp - Entry timestamp
+   * @property {string} [supplier] - Supplier name (included in invoice history)
+   * @property {string} [invoiceNo] - Invoice number (included in supplier history)
+   *
+   * @param {string} invoiceNo - Invoice number
+   * @returns {PaymentObject[]} Array of payment records (includes supplier field)
+   */
+  getHistoryForInvoice: function(invoiceNo) {
+    return this._queryPayments(
+      invoiceNo,
+      'invoiceIndex',
+      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'supplier')),
+      [],
+      'getHistoryForInvoice'
+    );
+  },
+
+  /**
+   * Get payment history for supplier
+   *
+   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
+   *
+   * @param {string} supplier - Supplier name
+   * @returns {PaymentObject[]} Array of payment records (includes invoiceNo field)
+   */
+  getHistoryForSupplier: function(supplier) {
+    return this._queryPayments(
+      supplier,
+      'supplierIndex',
+      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'invoiceNo')),
+      [],
+      'getHistoryForSupplier'
+    );
+  },
+
+  /**
+   * Get total payments for supplier
+   *
+   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
+   *
+   * @param {string} supplier - Supplier name
+   * @returns {number} Total payment amount
+   */
+  getTotalForSupplier: function(supplier) {
+    return this._queryPayments(
+      supplier,
+      'supplierIndex',
+      (data, indices, col) => indices.reduce((sum, i) => sum + (Number(data[i][col.amount]) || 0), 0),
+      0,
+      'getTotalForSupplier'
+    );
+  },
+
+  /**
+   * Get payment statistics
+   *
+   * ✓ OPTIMIZED: Uses PaymentCache with single-pass aggregation
+   *
+   * @typedef {Object} PaymentStatistics
+   * @property {number} total - Total number of payments
+   * @property {number} totalAmount - Sum of all payment amounts
+   * @property {Object.<string, number>} byType - Payment amounts grouped by type
+   * @property {Object.<string, number>} byMethod - Payment amounts grouped by method
+   *
+   * @returns {PaymentStatistics} Statistics summary with totals and breakdowns
+   */
+  getStatistics: function() {
+    try {
+      // ✓ Use cached data for single-pass aggregation
+      const { data } = PaymentCache.getPaymentData();
+
+      if (data.length < MIN_ROWS_WITH_DATA) {
+        return {
+          total: 0,
+          totalAmount: 0,
+          byType: {},
+          byMethod: {}
+        };
+      }
+
+      const col = CONFIG.paymentCols;
+      let totalAmount = 0;
+      const byType = {};
+      const byMethod = {};
+
+      // Single-pass aggregation (skip header row)
+      for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
+        const amount = Number(data[i][col.amount]) || 0;
+        const type = data[i][col.paymentType];
+        const method = data[i][col.method];
+
+        totalAmount += amount;
+
+        byType[type] = (byType[type] || 0) + amount;
+        byMethod[method] = (byMethod[method] || 0) + amount;
+      }
+
+      return {
+        total: data.length - HEADER_ROW_COUNT, // Exclude header
+        totalAmount: totalAmount,
+        byType: byType,
+        byMethod: byMethod
+      };
+
+    } catch (error) {
+      AuditLogger.logError('PaymentManager.getStatistics',
+        `Failed to get statistics: ${error.toString()}`);
+      return null;
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 4: PAYMENT MANAGER - CORE WORKFLOW (PRIVATE)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /**
    * Record payment to PaymentLog sheet
    * INTERNAL: Separated for clarity and testability
    *
    * ✓ OPTIMIZED: Manages own lock for minimal lock duration
+   *
+   * @typedef {Object} RecordPaymentResult
+   * @property {boolean} success - Whether payment was recorded
+   * @property {string} [paymentId] - Generated payment ID (if successful)
+   * @property {string} [targetInvoice] - Invoice number payment applies to (if successful)
+   * @property {number} [row] - Row number in PaymentLog (if successful)
+   * @property {string} [error] - Error message (if failed)
    *
    * @private
    * @param {Object} data - Transaction data
@@ -527,6 +647,214 @@ const PaymentManager = {
       // ═══ RELEASE LOCK IMMEDIATELY AFTER WRITE ═══
       LockManager.releaseLock(lock);
     }
+  },
+
+  /**
+   * Check invoice balance and update paid date if fully settled
+   *
+   * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
+   * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
+   * ✓ REFACTORED: Uses helper functions for clearer separation of concerns
+   *
+   * WORKFLOW:
+   * 1. Find invoice (uses cached if provided)
+   * 2. Calculate balance (via _calculateBalanceInfo)
+   * 3. Check if fully paid (early return if partial)
+   * 4. Check if paid date already set (via _isPaidDateAlreadySet)
+   * 5. Write paid date (via _writePaidDateToSheet with lock management)
+   * 6. Update cache if written
+   * 7. Return result with audit logging
+   *
+   * @typedef {Object} PaidStatusResult
+   * @property {boolean} attempted - Whether paid status update was attempted
+   * @property {boolean} success - Whether paid date was successfully updated
+   * @property {boolean} fullyPaid - Whether invoice is fully paid
+   * @property {boolean} paidDateUpdated - Whether paid date was written to sheet
+   * @property {string} [reason] - Reason for outcome (invoice_not_found, partial_payment, already_set, updated, lock_failed, error)
+   * @property {string} [message] - Human-readable message about outcome
+   * @property {BalanceInfo} [balanceInfo] - Balance information
+   *
+   * @typedef {Object} BalanceInfo
+   * @property {number} totalAmount - Invoice total amount
+   * @property {number} totalPaid - Amount paid so far
+   * @property {number} balanceDue - Remaining balance
+   * @property {boolean} fullyPaid - Whether balance is within tolerance (< 0.01)
+   *
+   * @private
+   * @param {string} invoiceNo - Invoice number
+   * @param {string} supplier - Supplier name
+   * @param {Date} paidDate - Date to set as paid date
+   * @param {number} currentPaymentAmount - Amount just paid (for logging context)
+   * @param {Object} context - Additional context {paymentId, paymentType, transactionData}
+   * @param {Object} cachedInvoice - Optional pre-cached invoice data
+   * @returns {PaidStatusResult} Comprehensive result with balance info and update status
+   */
+  _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
+    try {
+      // ═══ STEP 1: FIND INVOICE ═══
+      const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
+
+      if (!invoice) {
+        const result = this._buildInvoiceNotFoundResult(invoiceNo, supplier);
+        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
+        return result;
+      }
+
+      // ═══ STEP 2: CALCULATE BALANCE ═══
+      const balanceInfo = this._calculateBalanceInfo(invoice);
+
+      // ═══ STEP 3: CHECK IF FULLY PAID ═══
+      if (!balanceInfo.fullyPaid) {
+        const result = this._buildPartialPaymentResult(invoiceNo, balanceInfo);
+
+        AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
+          `${result.message} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
+
+        return result;
+      }
+
+      // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
+      if (this._isPaidDateAlreadySet(invoice)) {
+        const col = CONFIG.invoiceCols;
+        const result = this._buildAlreadyPaidResult(invoiceNo, invoice.data[col.paidDate]);
+
+        AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
+          `${result.message} | Payment: ${context.paymentId}`);
+
+        return result;
+      }
+
+      // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
+      try {
+        this._writePaidDateToSheet(invoice, paidDate);
+      } catch (lockError) {
+        const result = this._buildLockFailedResult(lockError);
+        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
+        return result;
+      }
+
+      // ═══ STEP 6: UPDATE CACHE ═══
+      CacheManager.updateInvoiceInCache(supplier, invoiceNo);
+
+      // ═══ STEP 7: RETURN SUCCESS ═══
+      return this._buildPaidDateSuccessResult(paidDate, balanceInfo);
+
+    } catch (error) {
+      const result = this._buildErrorResult(error);
+
+      AuditLogger.logError('PaymentManager._updateInvoicePaidDate',
+        `Error updating paid date for ${invoiceNo}: ${error.toString()}`);
+
+      return result;
+    }
+  },
+
+  /**
+   * Determine if paid date should be checked/updated based on payment type
+   *
+   * BUSINESS RULES:
+   * - Regular: Full immediate payment → check paid status
+   * - Due: Payment on old invoice → check paid status
+   * - Partial: Incomplete payment → skip (by definition not fully paid)
+   * - Unpaid: No payment made → skip
+   *
+   * @private
+   * @param {string} paymentType - Payment type
+   * @returns {boolean} True if paid date workflow should be attempted
+   */
+  _shouldUpdatePaidDate: function(paymentType) {
+    switch (paymentType) {
+      case "Regular":
+      case "Due":
+        return true;
+
+      case "Partial":
+      case "Unpaid":
+        return false;
+
+      default:
+        return false;
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 5: PAYMENT MANAGER - HELPER FUNCTIONS (PRIVATE)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Generic query template for payment lookups
+   * Consolidates common pattern: validate → lookup index → transform data
+   *
+   * @private
+   * @param {string} key - Lookup key (invoice number or supplier name)
+   * @param {string} indexName - Name of index to use ('invoiceIndex' or 'supplierIndex')
+   * @param {function(Array, number[], Object): *} transformer - Function to transform results
+   * @param {*} defaultValue - Value to return if no results found
+   * @param {string} operationName - Operation name for error logging
+   * @returns {*} Transformed results or defaultValue
+   */
+  _queryPayments: function(key, indexName, transformer, defaultValue, operationName) {
+    // Validate input
+    if (StringUtils.isEmpty(key)) {
+      return defaultValue;
+    }
+
+    try {
+      // Get cached data and specified index
+      const cacheData = PaymentCache.getPaymentData();
+      const { data } = cacheData;
+      const index = cacheData[indexName];
+
+      // Normalize key and lookup
+      const normalizedKey = StringUtils.normalize(key);
+      const indices = index.get(normalizedKey) || [];
+
+      // Early return if no results
+      if (indices.length === 0) {
+        return defaultValue;
+      }
+
+      // Get column configuration
+      const col = CONFIG.paymentCols;
+
+      // Apply transformer function
+      return transformer(data, indices, col);
+
+    } catch (error) {
+      AuditLogger.logError(`PaymentManager.${operationName}`,
+        `Failed ${operationName} for ${key}: ${error.toString()}`);
+      return defaultValue;
+    }
+  },
+
+  /**
+   * Helper: Build payment object from row data
+   * @private
+   * @param {Array} rowData - Payment row data
+   * @param {Object} col - Column configuration
+   * @param {string} includeField - Optional field to include ('supplier' or 'invoiceNo')
+   * @returns {PaymentObject} Payment object
+   */
+  _buildPaymentObject: function(rowData, col, includeField) {
+    const payment = {
+      date: rowData[col.date],
+      amount: rowData[col.amount],
+      type: rowData[col.paymentType],
+      method: rowData[col.method],
+      reference: rowData[col.reference],
+      fromSheet: rowData[col.fromSheet],
+      enteredBy: rowData[col.enteredBy],
+      timestamp: rowData[col.timestamp]
+    };
+
+    // Add conditional field if specified
+    if (includeField === 'supplier') {
+      payment.supplier = rowData[col.supplier];
+    } else if (includeField === 'invoiceNo') {
+      payment.invoiceNo = rowData[col.invoiceNo];
+    }
+
+    return payment;
   },
 
   /**
@@ -604,6 +932,10 @@ const PaymentManager = {
       invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
     }, 'paid date update');
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 6: PAYMENT MANAGER - RESULT BUILDERS (PRIVATE)
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * Result Builder: Create base PaidStatusResult structure
@@ -709,338 +1041,37 @@ const PaymentManager = {
     result.reason = 'error';
     result.message = error.toString();
     return result;
-  },
-
-  /**
-   * Check invoice balance and update paid date if fully settled
-   *
-   * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
-   * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
-   * ✓ REFACTORED: Uses helper functions for clearer separation of concerns
-   *
-   * WORKFLOW:
-   * 1. Find invoice (uses cached if provided)
-   * 2. Calculate balance (via _calculateBalanceInfo)
-   * 3. Check if fully paid (early return if partial)
-   * 4. Check if paid date already set (via _isPaidDateAlreadySet)
-   * 5. Write paid date (via _writePaidDateToSheet with lock management)
-   * 6. Update cache if written
-   * 7. Return result with audit logging
-   *
-   * @private
-   * @param {string} invoiceNo - Invoice number
-   * @param {string} supplier - Supplier name
-   * @param {Date} paidDate - Date to set as paid date
-   * @param {number} currentPaymentAmount - Amount just paid (for logging context)
-   * @param {Object} context - Additional context {paymentId, paymentType, transactionData}
-   * @param {Object} cachedInvoice - Optional pre-cached invoice data
-   * @returns {PaidStatusResult} Comprehensive result with balance info and update status
-   */
-  _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
-    try {
-      // ═══ STEP 1: FIND INVOICE ═══
-      const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
-
-      if (!invoice) {
-        const result = this._buildInvoiceNotFoundResult(invoiceNo, supplier);
-        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
-        return result;
-      }
-
-      // ═══ STEP 2: CALCULATE BALANCE ═══
-      const balanceInfo = this._calculateBalanceInfo(invoice);
-
-      // ═══ STEP 3: CHECK IF FULLY PAID ═══
-      if (!balanceInfo.fullyPaid) {
-        const result = this._buildPartialPaymentResult(invoiceNo, balanceInfo);
-
-        AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
-          `${result.message} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
-
-        return result;
-      }
-
-      // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
-      if (this._isPaidDateAlreadySet(invoice)) {
-        const col = CONFIG.invoiceCols;
-        const result = this._buildAlreadyPaidResult(invoiceNo, invoice.data[col.paidDate]);
-
-        AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
-          `${result.message} | Payment: ${context.paymentId}`);
-
-        return result;
-      }
-
-      // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
-      try {
-        this._writePaidDateToSheet(invoice, paidDate);
-      } catch (lockError) {
-        const result = this._buildLockFailedResult(lockError);
-        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
-        return result;
-      }
-
-      // ═══ STEP 6: UPDATE CACHE ═══
-      CacheManager.updateInvoiceInCache(supplier, invoiceNo);
-
-      // ═══ STEP 7: RETURN SUCCESS ═══
-      return this._buildPaidDateSuccessResult(paidDate, balanceInfo);
-
-    } catch (error) {
-      const result = this._buildErrorResult(error);
-
-      AuditLogger.logError('PaymentManager._updateInvoicePaidDate',
-        `Error updating paid date for ${invoiceNo}: ${error.toString()}`);
-
-      return result;
-    }
-  },
-
-  /**
-   * Determine if paid date should be checked/updated based on payment type
-   * 
-   * BUSINESS RULES:
-   * - Regular: Full immediate payment → check paid status
-   * - Due: Payment on old invoice → check paid status
-   * - Partial: Incomplete payment → skip (by definition not fully paid)
-   * - Unpaid: No payment made → skip
-   * 
-   * @private
-   * @param {string} paymentType - Payment type
-   * @returns {boolean} True if paid date workflow should be attempted
-   */
-  _shouldUpdatePaidDate: function(paymentType) {
-    switch (paymentType) {
-      case "Regular":
-      case "Due":
-        return true;
-      
-      case "Partial":
-      case "Unpaid":
-        return false;
-      
-      default:
-        return false;
-    }
-  },
-  
-  /**
-   * Check if payment should be processed based on payment type
-   * 
-   * @param {Object} data - Transaction data
-   * @returns {boolean} True if payment should be processed
-   */
-  shouldProcess: function(data) {
-    return data.paymentAmt > 0 || data.paymentType === 'Regular';
-  },
-  
-  /**
-   * Check for duplicate payment
-   *
-   * ✓ OPTIMIZED: Uses PaymentCache paymentIdIndex for O(1) lookups
-   *
-   * @param {string} sysId - System ID to check
-   * @returns {boolean} True if duplicate exists
-   */
-  isDuplicate: function(sysId) {
-    if (!sysId) return false;
-
-    try {
-      // Generate payment ID from system ID
-      const searchId = IDGenerator.generatePaymentId(sysId);
-
-      // ✓ Use cached payment ID index for O(1) lookup
-      const { paymentIdIndex } = PaymentCache.getPaymentData();
-
-      // Check if payment ID exists in index
-      return paymentIdIndex.has(searchId);
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager.isDuplicate',
-        `Failed to check duplicate: ${error.toString()}`);
-      return false; // Don't block on error
-    }
-  },
-  
-  /**
-   * Get payment method based on payment type
-   * 
-   * @param {string} paymentType - Payment type
-   * @returns {string} Payment method
-   */
-  getPaymentMethod: function(paymentType) {
-    return CONFIG.getDefaultPaymentMethod(paymentType);
-  },
-
-  /**
-   * Generic query template for payment lookups
-   * Consolidates common pattern: validate → lookup index → transform data
-   *
-   * @private
-   * @param {string} key - Lookup key (invoice number or supplier name)
-   * @param {string} indexName - Name of index to use ('invoiceIndex' or 'supplierIndex')
-   * @param {function(Array, number[], Object): *} transformer - Function to transform results
-   * @param {*} defaultValue - Value to return if no results found
-   * @param {string} operationName - Operation name for error logging
-   * @returns {*} Transformed results or defaultValue
-   */
-  _queryPayments: function(key, indexName, transformer, defaultValue, operationName) {
-    // Validate input
-    if (StringUtils.isEmpty(key)) {
-      return defaultValue;
-    }
-
-    try {
-      // Get cached data and specified index
-      const cacheData = PaymentCache.getPaymentData();
-      const { data } = cacheData;
-      const index = cacheData[indexName];
-
-      // Normalize key and lookup
-      const normalizedKey = StringUtils.normalize(key);
-      const indices = index.get(normalizedKey) || [];
-
-      // Early return if no results
-      if (indices.length === 0) {
-        return defaultValue;
-      }
-
-      // Get column configuration
-      const col = CONFIG.paymentCols;
-
-      // Apply transformer function
-      return transformer(data, indices, col);
-
-    } catch (error) {
-      AuditLogger.logError(`PaymentManager.${operationName}`,
-        `Failed ${operationName} for ${key}: ${error.toString()}`);
-      return defaultValue;
-    }
-  },
-  
-  /**
-   * Get payment history for invoice
-   *
-   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
-   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
-   *
-   * @param {string} invoiceNo - Invoice number
-   * @returns {PaymentObject[]} Array of payment records (includes supplier field)
-   */
-  getHistoryForInvoice: function(invoiceNo) {
-    return this._queryPayments(
-      invoiceNo,
-      'invoiceIndex',
-      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'supplier')),
-      [],
-      'getHistoryForInvoice'
-    );
-  },
-  
-  /**
-   * Get payment history for supplier
-   *
-   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
-   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
-   *
-   * @param {string} supplier - Supplier name
-   * @returns {PaymentObject[]} Array of payment records (includes invoiceNo field)
-   */
-  getHistoryForSupplier: function(supplier) {
-    return this._queryPayments(
-      supplier,
-      'supplierIndex',
-      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'invoiceNo')),
-      [],
-      'getHistoryForSupplier'
-    );
-  },
-  
-  /**
-   * Get total payments for supplier
-   *
-   * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
-   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
-   *
-   * @param {string} supplier - Supplier name
-   * @returns {number} Total payment amount
-   */
-  getTotalForSupplier: function(supplier) {
-    return this._queryPayments(
-      supplier,
-      'supplierIndex',
-      (data, indices, col) => indices.reduce((sum, i) => sum + (Number(data[i][col.amount]) || 0), 0),
-      0,
-      'getTotalForSupplier'
-    );
-  },
-  
-  /**
-   * Get payment statistics
-   *
-   * ✓ OPTIMIZED: Uses PaymentCache with single-pass aggregation
-   *
-   * @returns {PaymentStatistics} Statistics summary with totals and breakdowns
-   */
-  getStatistics: function() {
-    try {
-      // ✓ Use cached data for single-pass aggregation
-      const { data } = PaymentCache.getPaymentData();
-
-      if (data.length < MIN_ROWS_WITH_DATA) {
-        return {
-          total: 0,
-          totalAmount: 0,
-          byType: {},
-          byMethod: {}
-        };
-      }
-
-      const col = CONFIG.paymentCols;
-      let totalAmount = 0;
-      const byType = {};
-      const byMethod = {};
-
-      // Single-pass aggregation (skip header row)
-      for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
-        const amount = Number(data[i][col.amount]) || 0;
-        const type = data[i][col.paymentType];
-        const method = data[i][col.method];
-
-        totalAmount += amount;
-
-        byType[type] = (byType[type] || 0) + amount;
-        byMethod[method] = (byMethod[method] || 0) + amount;
-      }
-
-      return {
-        total: data.length - HEADER_ROW_COUNT, // Exclude header
-        totalAmount: totalAmount,
-        byType: byType,
-        byMethod: byMethod
-      };
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager.getStatistics',
-        `Failed to get statistics: ${error.toString()}`);
-      return null;
-    }
   }
 };
 
-// Backward compatibility functions
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 7: BACKWARD COMPATIBILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * @deprecated Use PaymentManager.process() instead
+ */
 function processPayment(data) {
   return PaymentManager.process(data);
 }
 
+/**
+ * @deprecated Use PaymentManager.shouldProcess() instead
+ */
 function shouldProcessPayment(data) {
   return PaymentManager.shouldProcess(data);
 }
 
+/**
+ * @deprecated Use PaymentManager.isDuplicate() instead
+ */
 function isDuplicatePayment(sysId) {
   return PaymentManager.isDuplicate(sysId);
 }
 
+/**
+ * @deprecated Use PaymentManager.getPaymentMethod() instead
+ */
 function getPaymentMethod(paymentType) {
   return PaymentManager.getPaymentMethod(paymentType);
 }
