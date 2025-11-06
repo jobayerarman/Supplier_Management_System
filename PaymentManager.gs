@@ -583,6 +583,112 @@ const PaymentManager = {
   },
 
   /**
+   * Result Builder: Create base PaidStatusResult structure
+   * @private
+   * @returns {PaidStatusResult} Base result object with default values
+   */
+  _createBasePaidStatusResult: function() {
+    return {
+      attempted: true,
+      success: false,
+      fullyPaid: false,
+      paidDateUpdated: false,
+      reason: null,
+      message: null,
+      balanceInfo: null
+    };
+  },
+
+  /**
+   * Result Builder: Invoice not found result
+   * @private
+   * @param {string} invoiceNo - Invoice number
+   * @param {string} supplier - Supplier name
+   * @returns {PaidStatusResult} Result indicating invoice not found
+   */
+  _buildInvoiceNotFoundResult: function(invoiceNo, supplier) {
+    const result = this._createBasePaidStatusResult();
+    result.reason = 'invoice_not_found';
+    result.message = `Invoice ${invoiceNo} not found for supplier ${supplier}`;
+    return result;
+  },
+
+  /**
+   * Result Builder: Partial payment result
+   * @private
+   * @param {string} invoiceNo - Invoice number
+   * @param {BalanceInfo} balanceInfo - Balance information
+   * @returns {PaidStatusResult} Result indicating partial payment
+   */
+  _buildPartialPaymentResult: function(invoiceNo, balanceInfo) {
+    const result = this._createBasePaidStatusResult();
+    result.fullyPaid = false;
+    result.balanceInfo = balanceInfo;
+    result.reason = 'partial_payment';
+    result.message = `Invoice ${invoiceNo} partially paid | Balance: ${balanceInfo.balanceDue}`;
+    return result;
+  },
+
+  /**
+   * Result Builder: Already paid result
+   * @private
+   * @param {string} invoiceNo - Invoice number
+   * @param {string} currentPaidDate - Existing paid date
+   * @returns {PaidStatusResult} Result indicating already paid
+   */
+  _buildAlreadyPaidResult: function(invoiceNo, currentPaidDate) {
+    const result = this._createBasePaidStatusResult();
+    result.fullyPaid = true;
+    result.reason = 'already_set';
+    result.message = `Invoice ${invoiceNo} already marked as paid on ${currentPaidDate}`;
+    return result;
+  },
+
+  /**
+   * Result Builder: Successful paid date update result
+   * @private
+   * @param {Date} paidDate - Paid date that was set
+   * @param {BalanceInfo} balanceInfo - Balance information
+   * @returns {PaidStatusResult} Result indicating successful update
+   */
+  _buildPaidDateSuccessResult: function(paidDate, balanceInfo) {
+    const result = this._createBasePaidStatusResult();
+    result.success = true;
+    result.fullyPaid = true;
+    result.paidDateUpdated = true;
+    result.balanceInfo = balanceInfo;
+    result.reason = 'updated';
+    result.message = `Paid date set to ${DateUtils.formatDate(paidDate)}`;
+    return result;
+  },
+
+  /**
+   * Result Builder: Lock failed result
+   * @private
+   * @param {Error} error - Lock error
+   * @returns {PaidStatusResult} Result indicating lock failure
+   */
+  _buildLockFailedResult: function(error) {
+    const result = this._createBasePaidStatusResult();
+    result.reason = 'lock_failed';
+    result.message = error.toString();
+    return result;
+  },
+
+  /**
+   * Result Builder: Error result
+   * @private
+   * @param {Error} error - Error that occurred
+   * @returns {PaidStatusResult} Result indicating error
+   */
+  _buildErrorResult: function(error) {
+    const result = this._createBasePaidStatusResult();
+    result.reason = 'error';
+    result.message = error.toString();
+    return result;
+  },
+
+  /**
    * Check invoice balance and update paid date if fully settled
    *
    * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
@@ -608,38 +714,25 @@ const PaymentManager = {
    * @returns {PaidStatusResult} Comprehensive result with balance info and update status
    */
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
-    const result = {
-      attempted: true,
-      success: false,
-      fullyPaid: false,
-      paidDateUpdated: false,
-      reason: null,
-      message: null,
-      balanceInfo: null
-    };
-
     try {
       // ═══ STEP 1: FIND INVOICE ═══
       const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
 
       if (!invoice) {
-        result.reason = 'invoice_not_found';
-        result.message = `Invoice ${invoiceNo} not found for supplier ${supplier}`;
+        const result = this._buildInvoiceNotFoundResult(invoiceNo, supplier);
         AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
         return result;
       }
 
       // ═══ STEP 2: CALCULATE BALANCE ═══
-      result.balanceInfo = this._calculateBalanceInfo(invoice);
-      result.fullyPaid = result.balanceInfo.fullyPaid;
+      const balanceInfo = this._calculateBalanceInfo(invoice);
 
       // ═══ STEP 3: CHECK IF FULLY PAID ═══
-      if (!result.fullyPaid) {
-        result.reason = 'partial_payment';
-        result.message = `Invoice ${invoiceNo} partially paid | Balance: ${result.balanceInfo.balanceDue}`;
+      if (!balanceInfo.fullyPaid) {
+        const result = this._buildPartialPaymentResult(invoiceNo, balanceInfo);
 
         AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
-          `${result.message} | Total Paid: ${result.balanceInfo.totalPaid}/${result.balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
+          `${result.message} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
 
         return result;
       }
@@ -647,8 +740,7 @@ const PaymentManager = {
       // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
       if (this._isPaidDateAlreadySet(invoice)) {
         const col = CONFIG.invoiceCols;
-        result.reason = 'already_set';
-        result.message = `Invoice ${invoiceNo} already marked as paid on ${invoice.data[col.paidDate]}`;
+        const result = this._buildAlreadyPaidResult(invoiceNo, invoice.data[col.paidDate]);
 
         AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
           `${result.message} | Payment: ${context.paymentId}`);
@@ -659,28 +751,20 @@ const PaymentManager = {
       // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
       try {
         this._writePaidDateToSheet(invoice, paidDate);
-
-        result.success = true;
-        result.paidDateUpdated = true;
-        result.reason = 'updated';
-        result.message = `Paid date set to ${DateUtils.formatDate(paidDate)}`;
       } catch (lockError) {
-        result.reason = 'lock_failed';
-        result.message = lockError.toString();
+        const result = this._buildLockFailedResult(lockError);
         AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
         return result;
       }
 
       // ═══ STEP 6: UPDATE CACHE ═══
-      if (result.paidDateUpdated) {
-        CacheManager.updateInvoiceInCache(supplier, invoiceNo);
-      }
+      CacheManager.updateInvoiceInCache(supplier, invoiceNo);
 
-      return result;
+      // ═══ STEP 7: RETURN SUCCESS ═══
+      return this._buildPaidDateSuccessResult(paidDate, balanceInfo);
 
     } catch (error) {
-      result.reason = 'error';
-      result.message = error.toString();
+      const result = this._buildErrorResult(error);
 
       AuditLogger.logError('PaymentManager._updateInvoicePaidDate',
         `Error updating paid date for ${invoiceNo}: ${error.toString()}`);
