@@ -30,6 +30,69 @@ const BALANCE_TOLERANCE = 0.01;
 /** @const {number} Minimum rows required for sheet to have data (header + at least 1 data row) */
 const MIN_ROWS_WITH_DATA = 2;
 
+// ═══ TYPE DEFINITIONS ═══
+/**
+ * @typedef {Object} PaymentResult
+ * @property {boolean} success - Whether payment processing succeeded
+ * @property {string} [paymentId] - Generated payment ID (if successful)
+ * @property {number} [row] - Row number in PaymentLog (if successful)
+ * @property {boolean} [fullyPaid] - Whether invoice is fully paid after this payment
+ * @property {boolean} [paidDateUpdated] - Whether paid date was set on invoice
+ * @property {BalanceInfo} [balanceInfo] - Balance information after payment
+ * @property {boolean} [cacheUpdated] - Whether cache was updated
+ * @property {string} [error] - Error message (if failed)
+ */
+
+/**
+ * @typedef {Object} RecordPaymentResult
+ * @property {boolean} success - Whether payment was recorded
+ * @property {string} [paymentId] - Generated payment ID (if successful)
+ * @property {string} [targetInvoice] - Invoice number payment applies to (if successful)
+ * @property {number} [row] - Row number in PaymentLog (if successful)
+ * @property {string} [error] - Error message (if failed)
+ */
+
+/**
+ * @typedef {Object} PaidStatusResult
+ * @property {boolean} attempted - Whether paid status update was attempted
+ * @property {boolean} success - Whether paid date was successfully updated
+ * @property {boolean} fullyPaid - Whether invoice is fully paid
+ * @property {boolean} paidDateUpdated - Whether paid date was written to sheet
+ * @property {string} [reason] - Reason for outcome (invoice_not_found, partial_payment, already_set, updated, lock_failed, error)
+ * @property {string} [message] - Human-readable message about outcome
+ * @property {BalanceInfo} [balanceInfo] - Balance information
+ */
+
+/**
+ * @typedef {Object} BalanceInfo
+ * @property {number} totalAmount - Invoice total amount
+ * @property {number} totalPaid - Amount paid so far
+ * @property {number} balanceDue - Remaining balance
+ * @property {boolean} fullyPaid - Whether balance is within tolerance (< 0.01)
+ */
+
+/**
+ * @typedef {Object} PaymentObject
+ * @property {Date} date - Payment date
+ * @property {number} amount - Payment amount
+ * @property {string} type - Payment type (Regular, Due, Partial, Unpaid)
+ * @property {string} method - Payment method (Cash, Bank, etc.)
+ * @property {string} reference - Reference/notes
+ * @property {string} fromSheet - Sheet where payment was entered
+ * @property {string} enteredBy - User who entered payment
+ * @property {Date} timestamp - Entry timestamp
+ * @property {string} [supplier] - Supplier name (included in invoice history)
+ * @property {string} [invoiceNo] - Invoice number (included in supplier history)
+ */
+
+/**
+ * @typedef {Object} PaymentStatistics
+ * @property {number} total - Total number of payments
+ * @property {number} totalAmount - Sum of all payment amounts
+ * @property {Object.<string, number>} byType - Payment amounts grouped by type
+ * @property {Object.<string, number>} byMethod - Payment amounts grouped by method
+ */
+
 // ═══ PAYMENT CACHE WITH TRIPLE-INDEX STRUCTURE ═══
 /**
  * Optimized Payment Cache Module
@@ -303,7 +366,7 @@ const PaymentManager = {
    *
    * @param {Object} data - Transaction data
    * @param {string} invoiceId - Invoice ID from InvoiceManager
-   * @returns {Object} {success, paymentId, fullyPaid, paidDateUpdated, error}
+   * @returns {PaymentResult} Result object with success status, payment details, and balance info
    */
   processOptimized: function(data, invoiceId) {
     // ═══ VALIDATION ═══
@@ -402,7 +465,7 @@ const PaymentManager = {
    * @private
    * @param {Object} data - Transaction data
    * @param {string} invoiceId - Invoice ID
-   * @returns {Object} {success, paymentId, targetInvoice, row, error}
+   * @returns {RecordPaymentResult} Result with payment ID and row number
    */
   _recordPayment: function(data, invoiceId) {
     // ═══ ACQUIRE LOCK FOR SHEET WRITE ═══
@@ -494,7 +557,7 @@ const PaymentManager = {
    * @param {number} currentPaymentAmount - Amount just paid (for immediate context)
    * @param {Object} context - Additional context {paymentId, paymentType, transactionData}
    * @param {Object} cachedInvoice - Optional pre-cached invoice data from InvoiceManager.find()
-   * @returns {Object} Comprehensive result with all workflow details
+   * @returns {PaidStatusResult} Comprehensive result with balance info and update status
    */
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
     const result = {
@@ -686,7 +749,7 @@ const PaymentManager = {
    * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
    *
    * @param {string} invoiceNo - Invoice number
-   * @returns {Array} Array of payment records
+   * @returns {PaymentObject[]} Array of payment records (includes supplier field)
    */
   getHistoryForInvoice: function(invoiceNo) {
     if (StringUtils.isEmpty(invoiceNo)) {
@@ -722,7 +785,7 @@ const PaymentManager = {
    * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
    *
    * @param {string} supplier - Supplier name
-   * @returns {Array} Array of payment records
+   * @returns {PaymentObject[]} Array of payment records (includes invoiceNo field)
    */
   getHistoryForSupplier: function(supplier) {
     if (StringUtils.isEmpty(supplier)) {
@@ -795,7 +858,7 @@ const PaymentManager = {
    *
    * ✓ OPTIMIZED: Uses PaymentCache with single-pass aggregation
    *
-   * @returns {Object} Statistics summary
+   * @returns {PaymentStatistics} Statistics summary with totals and breakdowns
    */
   getStatistics: function() {
     try {
