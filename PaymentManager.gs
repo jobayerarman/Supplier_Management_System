@@ -742,115 +742,108 @@ const PaymentManager = {
   getPaymentMethod: function(paymentType) {
     return CONFIG.getDefaultPaymentMethod(paymentType);
   },
+
+  /**
+   * Generic query template for payment lookups
+   * Consolidates common pattern: validate → lookup index → transform data
+   *
+   * @private
+   * @param {string} key - Lookup key (invoice number or supplier name)
+   * @param {string} indexName - Name of index to use ('invoiceIndex' or 'supplierIndex')
+   * @param {function(Array, number[], Object): *} transformer - Function to transform results
+   * @param {*} defaultValue - Value to return if no results found
+   * @param {string} operationName - Operation name for error logging
+   * @returns {*} Transformed results or defaultValue
+   */
+  _queryPayments: function(key, indexName, transformer, defaultValue, operationName) {
+    // Validate input
+    if (StringUtils.isEmpty(key)) {
+      return defaultValue;
+    }
+
+    try {
+      // Get cached data and specified index
+      const cacheData = PaymentCache.getPaymentData();
+      const { data } = cacheData;
+      const index = cacheData[indexName];
+
+      // Normalize key and lookup
+      const normalizedKey = StringUtils.normalize(key);
+      const indices = index.get(normalizedKey) || [];
+
+      // Early return if no results
+      if (indices.length === 0) {
+        return defaultValue;
+      }
+
+      // Get column configuration
+      const col = CONFIG.paymentCols;
+
+      // Apply transformer function
+      return transformer(data, indices, col);
+
+    } catch (error) {
+      AuditLogger.logError(`PaymentManager.${operationName}`,
+        `Failed ${operationName} for ${key}: ${error.toString()}`);
+      return defaultValue;
+    }
+  },
   
   /**
    * Get payment history for invoice
    *
    * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
    *
    * @param {string} invoiceNo - Invoice number
    * @returns {PaymentObject[]} Array of payment records (includes supplier field)
    */
   getHistoryForInvoice: function(invoiceNo) {
-    if (StringUtils.isEmpty(invoiceNo)) {
-      return [];
-    }
-
-    try {
-      // ✓ Use cached data with invoice index for O(1) lookup
-      const { data, invoiceIndex } = PaymentCache.getPaymentData();
-      const normalizedInvoice = StringUtils.normalize(invoiceNo);
-
-      const indices = invoiceIndex.get(normalizedInvoice) || [];
-
-      if (indices.length === 0) {
-        return [];
-      }
-
-      const col = CONFIG.paymentCols;
-
-      // Map indices to payment objects
-      return indices.map(i => this._buildPaymentObject(data[i], col, 'supplier'));
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager.getHistoryForInvoice',
-        `Failed to get payment history for ${invoiceNo}: ${error.toString()}`);
-      return [];
-    }
+    return this._queryPayments(
+      invoiceNo,
+      'invoiceIndex',
+      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'supplier')),
+      [],
+      'getHistoryForInvoice'
+    );
   },
   
   /**
    * Get payment history for supplier
    *
    * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
    *
    * @param {string} supplier - Supplier name
    * @returns {PaymentObject[]} Array of payment records (includes invoiceNo field)
    */
   getHistoryForSupplier: function(supplier) {
-    if (StringUtils.isEmpty(supplier)) {
-      return [];
-    }
-
-    try {
-      // ✓ Use cached data with supplier index for O(1) lookup
-      const { data, supplierIndex } = PaymentCache.getPaymentData();
-      const normalizedSupplier = StringUtils.normalize(supplier);
-
-      const indices = supplierIndex.get(normalizedSupplier) || [];
-
-      if (indices.length === 0) {
-        return [];
-      }
-
-      const col = CONFIG.paymentCols;
-
-      // Map indices to payment objects
-      return indices.map(i => this._buildPaymentObject(data[i], col, 'invoiceNo'));
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager.getHistoryForSupplier',
-        `Failed to get payment history for ${supplier}: ${error.toString()}`);
-      return [];
-    }
+    return this._queryPayments(
+      supplier,
+      'supplierIndex',
+      (data, indices, col) => indices.map(i => this._buildPaymentObject(data[i], col, 'invoiceNo')),
+      [],
+      'getHistoryForSupplier'
+    );
   },
   
   /**
    * Get total payments for supplier
    *
    * ✓ OPTIMIZED: Uses PaymentCache for O(1) indexed lookups
+   * ✓ REFACTORED: Uses _queryPayments template to eliminate duplication
    *
    * @param {string} supplier - Supplier name
    * @returns {number} Total payment amount
    */
   getTotalForSupplier: function(supplier) {
-    if (StringUtils.isEmpty(supplier)) {
-      return 0;
-    }
-
-    try {
-      // ✓ Use cached data with supplier index for O(1) lookup
-      const { data, supplierIndex } = PaymentCache.getPaymentData();
-      const normalizedSupplier = StringUtils.normalize(supplier);
-
-      const indices = supplierIndex.get(normalizedSupplier) || [];
-
-      if (indices.length === 0) {
-        return 0;
-      }
-
-      const col = CONFIG.paymentCols;
-
-      // Sum all payment amounts for this supplier
-      return indices.reduce((sum, i) => {
-        return sum + (Number(data[i][col.amount]) || 0);
-      }, 0);
-
-    } catch (error) {
-      AuditLogger.logError('PaymentManager.getTotalForSupplier',
-        `Failed to get total payments for ${supplier}: ${error.toString()}`);
-      return 0;
-    }
+    return this._queryPayments(
+      supplier,
+      'supplierIndex',
+      (data, indices, col) => indices.reduce((sum, i) => sum + (Number(data[i][col.amount]) || 0), 0),
+      0,
+      'getTotalForSupplier'
+    );
   },
   
   /**
