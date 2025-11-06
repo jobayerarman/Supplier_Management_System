@@ -530,33 +530,81 @@ const PaymentManager = {
   },
 
   /**
-   * ALL-IN-ONE HANDLER: Check invoice balance and update paid date if fully settled
+   * Helper: Calculate balance information from invoice data
+   * @private
+   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @returns {BalanceInfo} Balance information object
+   */
+  _calculateBalanceInfo: function(invoice) {
+    const col = CONFIG.invoiceCols;
+    const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
+    const totalPaid = Number(invoice.data[col.totalPaid]) || 0;
+    const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
+
+    return {
+      totalAmount: totalAmount,
+      totalPaid: totalPaid,
+      balanceDue: balanceDue,
+      fullyPaid: Math.abs(balanceDue) < BALANCE_TOLERANCE
+    };
+  },
+
+  /**
+   * Helper: Check if paid date is already set on invoice
+   * @private
+   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @returns {boolean} True if paid date is already set
+   */
+  _isPaidDateAlreadySet: function(invoice) {
+    const col = CONFIG.invoiceCols;
+    return !!invoice.data[col.paidDate];
+  },
+
+  /**
+   * Helper: Write paid date to sheet with lock management
+   * @private
+   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @param {Date} paidDate - Date to set as paid date
+   * @throws {Error} If unable to acquire lock
+   */
+  _writePaidDateToSheet: function(invoice, paidDate) {
+    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      throw new Error('Unable to acquire lock for paid date update');
+    }
+
+    try {
+      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
+      const col = CONFIG.invoiceCols;
+      invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
+    } finally {
+      LockManager.releaseLock(lock);
+    }
+  },
+
+  /**
+   * Check invoice balance and update paid date if fully settled
    *
-   * ✓ OPTIMIZED: Lock acquired only during sheet write operation
+   * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
    * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
+   * ✓ REFACTORED: Uses helper functions for clearer separation of concerns
    *
-   * COMPREHENSIVE WORKFLOW:
-   * 1. Find invoice record (uses cached data if provided - no lock)
-   * 2. Calculate balance from cached data (no lock)
-   * 3. Determine if invoice is fully paid (no lock)
-   * 4. Check if paid date already set (no lock)
-   * 5. Acquire lock, update paid date in sheet, release lock
-   * 6. Update cache with new paid date only if written (no lock)
-   * 7. Log appropriate audit trail based on outcome
-   * 8. Return comprehensive result object
-   *
-   * PERFORMANCE:
-   * - Lock held only for ~10-20ms during setValue operation
-   * - Accepts pre-cached invoice to eliminate redundant InvoiceManager.find() call
-   * - Cache update skipped if no sheet write occurred
+   * WORKFLOW:
+   * 1. Find invoice (uses cached if provided)
+   * 2. Calculate balance (via _calculateBalanceInfo)
+   * 3. Check if fully paid (early return if partial)
+   * 4. Check if paid date already set (via _isPaidDateAlreadySet)
+   * 5. Write paid date (via _writePaidDateToSheet with lock management)
+   * 6. Update cache if written
+   * 7. Return result with audit logging
    *
    * @private
    * @param {string} invoiceNo - Invoice number
    * @param {string} supplier - Supplier name
    * @param {Date} paidDate - Date to set as paid date
-   * @param {number} currentPaymentAmount - Amount just paid (for immediate context)
+   * @param {number} currentPaymentAmount - Amount just paid (for logging context)
    * @param {Object} context - Additional context {paymentId, paymentType, transactionData}
-   * @param {Object} cachedInvoice - Optional pre-cached invoice data from InvoiceManager.find()
+   * @param {Object} cachedInvoice - Optional pre-cached invoice data
    * @returns {PaidStatusResult} Comprehensive result with balance info and update status
    */
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
@@ -571,51 +619,36 @@ const PaymentManager = {
     };
 
     try {
-      // ═══ STEP 1: FIND INVOICE (Use cached if provided) ═══
-      // ✓ OPTIMIZATION: Avoid redundant sheet read by using pre-cached invoice
+      // ═══ STEP 1: FIND INVOICE ═══
       const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
 
       if (!invoice) {
         result.reason = 'invoice_not_found';
         result.message = `Invoice ${invoiceNo} not found for supplier ${supplier}`;
-
         AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
         return result;
       }
 
-      // ═══ STEP 2: CALCULATE BALANCE FROM CACHED DATA ═══
-      // Note: Cache should have been updated in Step 2 of processOptimized
-      const col = CONFIG.invoiceCols;
-      const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
-      const totalPaid = Number(invoice.data[col.totalPaid]) || 0;
-      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
-
-      result.balanceInfo = {
-        totalAmount: totalAmount,
-        totalPaid: totalPaid,
-        balanceDue: balanceDue,
-        fullyPaid: Math.abs(balanceDue) < BALANCE_TOLERANCE
-      };
-
+      // ═══ STEP 2: CALCULATE BALANCE ═══
+      result.balanceInfo = this._calculateBalanceInfo(invoice);
       result.fullyPaid = result.balanceInfo.fullyPaid;
 
       // ═══ STEP 3: CHECK IF FULLY PAID ═══
-      if (!result.balanceInfo.fullyPaid) {
+      if (!result.fullyPaid) {
         result.reason = 'partial_payment';
-        result.message = `Invoice ${invoiceNo} partially paid | Balance: ${balanceDue}`;
+        result.message = `Invoice ${invoiceNo} partially paid | Balance: ${result.balanceInfo.balanceDue}`;
 
         AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
-          `${result.message} | Total Paid: ${totalPaid}/${totalAmount} | Payment: ${context.paymentId}`);
+          `${result.message} | Total Paid: ${result.balanceInfo.totalPaid}/${result.balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
 
         return result;
       }
 
       // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
-      const currentPaidDate = invoice.data[col.paidDate];
-
-      if (currentPaidDate) {
+      if (this._isPaidDateAlreadySet(invoice)) {
+        const col = CONFIG.invoiceCols;
         result.reason = 'already_set';
-        result.message = `Invoice ${invoiceNo} already marked as paid on ${currentPaidDate}`;
+        result.message = `Invoice ${invoiceNo} already marked as paid on ${invoice.data[col.paidDate]}`;
 
         AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
           `${result.message} | Payment: ${context.paymentId}`);
@@ -623,33 +656,22 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 5: UPDATE PAID DATE IN SHEET ═══
-      // ✓ OPTIMIZED: Acquire lock only for sheet write operation
-      const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-      if (!lock) {
-        result.reason = 'lock_failed';
-        result.message = 'Unable to acquire lock for paid date update';
-        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
-        return result;
-      }
-
+      // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
       try {
-        // Use Master Database target sheet for writes
-        const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-        invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
+        this._writePaidDateToSheet(invoice, paidDate);
 
         result.success = true;
         result.paidDateUpdated = true;
         result.reason = 'updated';
         result.message = `Paid date set to ${DateUtils.formatDate(paidDate)}`;
-      } finally {
-        // ═══ RELEASE LOCK IMMEDIATELY AFTER WRITE ═══
-        LockManager.releaseLock(lock);
+      } catch (lockError) {
+        result.reason = 'lock_failed';
+        result.message = lockError.toString();
+        AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
+        return result;
       }
 
-      // ═══ STEP 6: UPDATE CACHE WITH NEW PAID DATE ═══
-      // ✓ OPTIMIZATION: Only update cache if we actually wrote the paid date
-      // If cachedInvoice was provided, cache is already up-to-date except for paid date field
+      // ═══ STEP 6: UPDATE CACHE ═══
       if (result.paidDateUpdated) {
         CacheManager.updateInvoiceInCache(supplier, invoiceNo);
       }
@@ -659,10 +681,10 @@ const PaymentManager = {
     } catch (error) {
       result.reason = 'error';
       result.message = error.toString();
-      
+
       AuditLogger.logError('PaymentManager._updateInvoicePaidDate',
         `Error updating paid date for ${invoiceNo}: ${error.toString()}`);
-      
+
       return result;
     }
   },
