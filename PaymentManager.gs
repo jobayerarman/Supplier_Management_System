@@ -279,8 +279,8 @@ const PaymentManager = {
    * 1. Validate payment amount → _validatePaymentAmount()
    * 2. Record payment to PaymentLog → _recordPayment() (lock acquired internally)
    * 3. Update invoice cache and fetch cached data → _updateCacheAndFetchInvoice()
-   * 4. Process paid status update if needed → _processPaidStatusUpdate()
-   * 5. Build consolidated result → _buildProcessResult()
+   * 4. Handle paid status update if needed → _handlePaidStatusUpdate()
+   * 5. Build consolidated result → _buildPaymentResult()
    *
    * PERFORMANCE IMPROVEMENTS:
    * - Locks acquired only during sheet writes (~75% reduction: 100-200ms → 20-50ms)
@@ -302,7 +302,7 @@ const PaymentManager = {
    * @param {string} invoiceId - Invoice ID from InvoiceManager
    * @returns {PaymentResult} Result object with success status, payment details, and balance info
    */
-  processOptimized: function(data, invoiceId) {
+  processPayment: function(data, invoiceId) {
     // Step 1: Validate payment amount
     const validationError = this._validatePaymentAmount(data);
     if (validationError) {
@@ -321,8 +321,8 @@ const PaymentManager = {
       // Step 3: Update cache and fetch invoice data
       const cachedInvoice = this._updateCacheAndFetchInvoice(data.supplier, targetInvoice);
 
-      // Step 4: Process paid status update (lock acquired internally if needed)
-      const paidStatusResult = this._processPaidStatusUpdate(
+      // Step 4: Handle paid status update (lock acquired internally if needed)
+      const paidStatusResult = this._handlePaidStatusUpdate(
         targetInvoice,
         data,
         paymentId,
@@ -330,10 +330,10 @@ const PaymentManager = {
       );
 
       // Step 5: Build and return consolidated result
-      return this._buildProcessResult(paymentRecorded, paidStatusResult);
+      return this._buildPaymentResult(paymentRecorded, paidStatusResult);
 
     } catch (error) {
-      AuditLogger.logError('PaymentManager.processOptimized', error.toString());
+      AuditLogger.logError('PaymentManager.processPayment', error.toString());
       return {
         success: false,
         error: error.toString()
@@ -342,12 +342,13 @@ const PaymentManager = {
   },
 
   /**
-   * Check if payment should be processed based on payment type
+   * Check if payment should be recorded based on payment amount and type
    *
+   * @private
    * @param {Object} data - Transaction data
-   * @returns {boolean} True if payment should be processed
+   * @returns {boolean} True if payment should be recorded
    */
-  shouldProcess: function(data) {
+  _shouldRecordPayment: function(data) {
     return data.paymentAmt > 0 || data.paymentType === 'Regular';
   },
 
@@ -929,7 +930,7 @@ const PaymentManager = {
   },
 
   /**
-   * Helper: Process paid status update workflow
+   * Helper: Handle paid status update workflow
    * Determines if paid status should be checked and delegates to _updateInvoicePaidDate
    *
    * @private
@@ -939,7 +940,7 @@ const PaymentManager = {
    * @param {Object|null} cachedInvoice - Cached invoice object (may be null)
    * @returns {Object} Paid status result with fullyPaid, paidDateUpdated, balanceInfo
    */
-  _processPaidStatusUpdate: function(targetInvoice, data, paymentId, cachedInvoice) {
+  _handlePaidStatusUpdate: function(targetInvoice, data, paymentId, cachedInvoice) {
     // Default result if no update attempted
     const defaultResult = {
       attempted: false,
@@ -970,15 +971,15 @@ const PaymentManager = {
   },
 
   /**
-   * Helper: Build consolidated success result
+   * Helper: Build consolidated payment result
    * Creates final result object combining payment record and paid status results
    *
    * @private
    * @param {Object} paymentRecorded - Result from _recordPayment
-   * @param {Object} paidStatusResult - Result from _processPaidStatusUpdate
+   * @param {Object} paidStatusResult - Result from _handlePaidStatusUpdate
    * @returns {Object} Consolidated success result
    */
-  _buildProcessResult: function(paymentRecorded, paidStatusResult) {
+  _buildPaymentResult: function(paymentRecorded, paidStatusResult) {
     return {
       success: true,
       paymentId: paymentRecorded.paymentId,
@@ -1100,35 +1101,3 @@ const PaymentManager = {
     return result;
   }
 };
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 7: BACKWARD COMPATIBILITY FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * @deprecated Use PaymentManager.process() instead
- */
-function processPayment(data) {
-  return PaymentManager.process(data);
-}
-
-/**
- * @deprecated Use PaymentManager.shouldProcess() instead
- */
-function shouldProcessPayment(data) {
-  return PaymentManager.shouldProcess(data);
-}
-
-/**
- * @deprecated Use PaymentManager.isDuplicate() instead
- */
-function isDuplicatePayment(sysId) {
-  return PaymentManager.isDuplicate(sysId);
-}
-
-/**
- * @deprecated Use PaymentManager.getPaymentMethod() instead
- */
-function getPaymentMethod(paymentType) {
-  return PaymentManager.getPaymentMethod(paymentType);
-}

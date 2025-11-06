@@ -491,7 +491,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
       // Process payment if applicable
       let paymentResult = null;
       if (shouldProcessPayment(data)) {
-        paymentResult = PaymentManager.processOptimized(data, invoiceResult.invoiceId);
+        paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
       }
 
       // ═══ UPDATE BALANCE CELL ═══

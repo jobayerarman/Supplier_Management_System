@@ -635,12 +635,12 @@ function getPaymentMethod(paymentType) {
 }
 
 /**
- * Check if payment should be processed for transaction
+ * Check if payment should be recorded for transaction
  * @param {Object} data - Transaction data
- * @returns {boolean} True if payment should be logged
+ * @returns {boolean} True if payment should be recorded
  */
 function shouldProcessPayment(data) {
-  return data.paymentAmt > 0 || data.paymentType === 'Regular';
+  return PaymentManager._shouldRecordPayment(data);
 }
 
 /**

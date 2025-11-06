@@ -7,7 +7,7 @@
  * TEST CATEGORIES:
  * 1. Mock Data Generators
  * 2. PaymentCache Tests
- * 3. PaymentManager.processOptimized Tests
+ * 3. PaymentManager.processPayment Tests
  * 4. _recordPayment Tests
  * 5. _updateInvoicePaidDate Tests
  * 6. Query Function Tests (getHistory*, getTotal*)
@@ -529,17 +529,17 @@ function testPaymentManager_ShouldUpdatePaidDate() {
 }
 
 /**
- * Test: PaymentManager.shouldProcess
+ * Test: PaymentManager._shouldRecordPayment
  */
-function testPaymentManager_ShouldProcess() {
-  Logger.log('\n▶️ TEST: PaymentManager.shouldProcess');
+function testPaymentManager_ShouldRecordPayment() {
+  Logger.log('\n▶️ TEST: PaymentManager._shouldRecordPayment');
   TestUtils.resetResults();
 
   // Test 1: Payment amount > 0
   const data1 = MockDataGenerator.createTransactionData({ paymentAmt: 1000 });
   TestUtils.assertTrue(
-    PaymentManager.shouldProcess(data1),
-    'Should process when payment amount > 0'
+    PaymentManager._shouldRecordPayment(data1),
+    'Should record payment when payment amount > 0'
   );
 
   // Test 2: Regular payment type (even if amount = 0)
@@ -548,8 +548,8 @@ function testPaymentManager_ShouldProcess() {
     paymentType: 'Regular'
   });
   TestUtils.assertTrue(
-    PaymentManager.shouldProcess(data2),
-    'Should process Regular payment type even with 0 amount'
+    PaymentManager._shouldRecordPayment(data2),
+    'Should record Regular payment type even with 0 amount'
   );
 
   // Test 3: Payment amount = 0 and not Regular
@@ -558,11 +558,11 @@ function testPaymentManager_ShouldProcess() {
     paymentType: 'Partial'
   });
   TestUtils.assertFalse(
-    PaymentManager.shouldProcess(data3),
-    'Should NOT process when amount = 0 and not Regular'
+    PaymentManager._shouldRecordPayment(data3),
+    'Should NOT record payment when amount = 0 and not Regular'
   );
 
-  TestUtils.printSummary('PaymentManager.shouldProcess');
+  TestUtils.printSummary('PaymentManager._shouldRecordPayment');
 }
 
 /**

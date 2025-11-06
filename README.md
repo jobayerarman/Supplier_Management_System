@@ -431,7 +431,7 @@ InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType)
  * @param {string} invoiceId - Invoice system ID
  * @returns {Object} {success: boolean, error: string}
  */
-PaymentManager.processOptimized(data, invoiceId)
+PaymentManager.processPayment(data, invoiceId)
 ```
 
 #### BalanceCalculator
