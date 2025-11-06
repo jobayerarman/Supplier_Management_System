@@ -271,16 +271,16 @@ const PaymentManager = {
   /**
    * Process and log payment with delegated paid date workflow
    *
+   * ✓ REFACTORED: Orchestration function with extracted helpers for clarity
    * ✓ OPTIMIZED: Lock-free coordination with granular locking in sub-functions
    * ✓ OPTIMIZED: Eliminated double cache update by passing cached invoice
    *
-   * SIMPLIFIED RESPONSIBILITIES:
-   * 1. Validate payment amount
-   * 2. Write payment record to PaymentLog (lock acquired in _recordPayment)
-   * 3. Update invoice cache and fetch cached data (no lock - in-memory)
-   * 4. Determine if paid status check is needed
-   * 5. Pass cached invoice to _updateInvoicePaidDate (eliminates redundant read)
-   * 6. Return consolidated result
+   * WORKFLOW:
+   * 1. Validate payment amount → _validatePaymentAmount()
+   * 2. Record payment to PaymentLog → _recordPayment() (lock acquired internally)
+   * 3. Update invoice cache and fetch cached data → _updateCacheAndFetchInvoice()
+   * 4. Process paid status update if needed → _processPaidStatusUpdate()
+   * 5. Build consolidated result → _buildProcessResult()
    *
    * PERFORMANCE IMPROVEMENTS:
    * - Locks acquired only during sheet writes (~75% reduction: 100-200ms → 20-50ms)
@@ -303,84 +303,35 @@ const PaymentManager = {
    * @returns {PaymentResult} Result object with success status, payment details, and balance info
    */
   processOptimized: function(data, invoiceId) {
-    // ═══ VALIDATION ═══
-    if (!data.paymentAmt || data.paymentAmt <= 0) {
-      return {
-        success: false,
-        error: 'Invalid payment amount'
-      };
+    // Step 1: Validate payment amount
+    const validationError = this._validatePaymentAmount(data);
+    if (validationError) {
+      return validationError;
     }
 
     try {
-      // ═══ STEP 1: RECORD PAYMENT ═══
-      // Lock is acquired and released inside _recordPayment for minimal lock duration
+      // Step 2: Record payment (lock acquired internally)
       const paymentRecorded = this._recordPayment(data, invoiceId);
-
       if (!paymentRecorded.success) {
         return paymentRecorded;
       }
 
       const { paymentId, targetInvoice } = paymentRecorded;
 
-      // ═══ STEP 2: UPDATE INVOICE CACHE & FETCH UPDATED DATA ═══
-      // ✓ No lock needed: Cache operations are in-memory
-      let cachedInvoice = null;
+      // Step 3: Update cache and fetch invoice data
+      const cachedInvoice = this._updateCacheAndFetchInvoice(data.supplier, targetInvoice);
 
-      if (targetInvoice) {
-        const cacheUpdated = CacheManager.updateInvoiceInCache(
-          data.supplier,
-          targetInvoice
-        );
+      // Step 4: Process paid status update (lock acquired internally if needed)
+      const paidStatusResult = this._processPaidStatusUpdate(
+        targetInvoice,
+        data,
+        paymentId,
+        cachedInvoice
+      );
 
-        if (!cacheUpdated) {
-          // Log warning but don't fail - cache inconsistency is recoverable
-          AuditLogger.logWarning('PaymentManager.processOptimized',
-            `Cache update failed for invoice ${targetInvoice}, cache may be stale`);
-        } else {
-          // ✓ OPTIMIZATION: Fetch cached invoice to pass to paid date workflow
-          // This eliminates redundant sheet read in _updateInvoicePaidDate
-          cachedInvoice = InvoiceManager.find(data.supplier, targetInvoice);
-        }
-      }
+      // Step 5: Build and return consolidated result
+      return this._buildProcessResult(paymentRecorded, paidStatusResult);
 
-      // ═══ STEP 3: UPDATE PAID STATUS (If Applicable) ═══
-      // ✓ Lock is acquired inside _updateInvoicePaidDate if sheet write is needed
-      // ✓ OPTIMIZATION: Pass cached invoice to avoid redundant sheet read
-      let paidStatusResult = {
-        attempted: false,
-        fullyPaid: false,
-        paidDateUpdated: false
-      };
-
-      // Determine if we should attempt paid date update
-      const shouldCheckPaidStatus = this._shouldUpdatePaidDate(data.paymentType);
-
-      if (shouldCheckPaidStatus && targetInvoice) {
-        // Delegate entire workflow to _updateInvoicePaidDate with cached invoice
-        paidStatusResult = this._updateInvoicePaidDate(
-          targetInvoice,
-          data.supplier,
-          data.invoiceDate || data.timestamp,
-          data.paymentAmt,
-          {
-            paymentId: paymentId,
-            paymentType: data.paymentType,
-            transactionData: data
-          },
-          cachedInvoice  // ✓ Pass cached invoice to avoid redundant read
-        );
-      }
-
-      // ═══ STEP 4: RETURN CONSOLIDATED RESULT ═══
-      return {
-        success: true,
-        paymentId: paymentId,
-        row: paymentRecorded.row,
-        fullyPaid: paidStatusResult.fullyPaid,
-        paidDateUpdated: paidStatusResult.paidDateUpdated,
-        balanceInfo: paidStatusResult.balanceInfo,
-        cacheUpdated: true
-      };
     } catch (error) {
       AuditLogger.logError('PaymentManager.processOptimized', error.toString());
       return {
@@ -931,6 +882,112 @@ const PaymentManager = {
       const col = CONFIG.invoiceCols;
       invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
     }, 'paid date update');
+  },
+
+  /**
+   * Helper: Validate payment amount
+   * @private
+   * @param {Object} data - Transaction data
+   * @returns {Object|null} Error result if invalid, null if valid
+   */
+  _validatePaymentAmount: function(data) {
+    if (!data.paymentAmt || data.paymentAmt <= 0) {
+      return {
+        success: false,
+        error: 'Invalid payment amount'
+      };
+    }
+    return null;
+  },
+
+  /**
+   * Helper: Update cache and fetch invoice data
+   * Updates invoice cache after payment and retrieves cached invoice for downstream processing
+   *
+   * @private
+   * @param {string} supplier - Supplier name
+   * @param {string} targetInvoice - Invoice number
+   * @returns {Object|null} Cached invoice object or null if not found/failed
+   */
+  _updateCacheAndFetchInvoice: function(supplier, targetInvoice) {
+    if (!targetInvoice) {
+      return null;
+    }
+
+    const cacheUpdated = CacheManager.updateInvoiceInCache(supplier, targetInvoice);
+
+    if (!cacheUpdated) {
+      // Log warning but don't fail - cache inconsistency is recoverable
+      AuditLogger.logWarning('PaymentManager._updateCacheAndFetchInvoice',
+        `Cache update failed for invoice ${targetInvoice}, cache may be stale`);
+      return null;
+    }
+
+    // Fetch cached invoice to pass to paid date workflow
+    // This eliminates redundant sheet read in _updateInvoicePaidDate
+    return InvoiceManager.find(supplier, targetInvoice);
+  },
+
+  /**
+   * Helper: Process paid status update workflow
+   * Determines if paid status should be checked and delegates to _updateInvoicePaidDate
+   *
+   * @private
+   * @param {string} targetInvoice - Invoice number
+   * @param {Object} data - Transaction data
+   * @param {string} paymentId - Payment ID from recorded payment
+   * @param {Object|null} cachedInvoice - Cached invoice object (may be null)
+   * @returns {Object} Paid status result with fullyPaid, paidDateUpdated, balanceInfo
+   */
+  _processPaidStatusUpdate: function(targetInvoice, data, paymentId, cachedInvoice) {
+    // Default result if no update attempted
+    const defaultResult = {
+      attempted: false,
+      fullyPaid: false,
+      paidDateUpdated: false
+    };
+
+    // Determine if we should attempt paid date update
+    const shouldCheckPaidStatus = this._shouldUpdatePaidDate(data.paymentType);
+
+    if (!shouldCheckPaidStatus || !targetInvoice) {
+      return defaultResult;
+    }
+
+    // Delegate entire workflow to _updateInvoicePaidDate with cached invoice
+    return this._updateInvoicePaidDate(
+      targetInvoice,
+      data.supplier,
+      data.invoiceDate || data.timestamp,
+      data.paymentAmt,
+      {
+        paymentId: paymentId,
+        paymentType: data.paymentType,
+        transactionData: data
+      },
+      cachedInvoice  // Pass cached invoice to avoid redundant read
+    );
+  },
+
+  /**
+   * Helper: Build consolidated success result
+   * Creates final result object combining payment record and paid status results
+   *
+   * @private
+   * @param {Object} paymentRecorded - Result from _recordPayment
+   * @param {Object} paidStatusResult - Result from _processPaidStatusUpdate
+   * @returns {Object} Consolidated success result
+   */
+  _buildProcessResult: function(paymentRecorded, paidStatusResult) {
+    return {
+      success: true,
+      paymentId: paymentRecorded.paymentId,
+      row: paymentRecorded.row,
+      fullyPaid: paidStatusResult.fullyPaid,
+      paidDateUpdated: paidStatusResult.paidDateUpdated,
+      balanceInfo: paidStatusResult.balanceInfo,
+      cacheUpdated: true
+    };
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
