@@ -62,6 +62,20 @@ const PaymentCache = {
   },
 
   /**
+   * Helper: Add value to index map (creates array if key doesn't exist)
+   * @private
+   * @param {Map} index - The index map to update
+   * @param {string} key - The key to add
+   * @param {*} value - The value to push to array
+   */
+  _addToIndex: function(index, key, value) {
+    if (!index.has(key)) {
+      index.set(key, []);
+    }
+    index.get(key).push(value);
+  },
+
+  /**
    * Set new cache with quad-index structure
    * @param {Array[]} data - Sheet data array
    */
@@ -84,23 +98,14 @@ const PaymentCache = {
       if (!supplier || !invoiceNo) continue;
 
       // Index 1: Invoice-only lookups
-      if (!this.invoiceIndex.has(invoiceNo)) {
-        this.invoiceIndex.set(invoiceNo, []);
-      }
-      this.invoiceIndex.get(invoiceNo).push(i);
+      this._addToIndex(this.invoiceIndex, invoiceNo, i);
 
       // Index 2: Supplier-only lookups
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(i);
+      this._addToIndex(this.supplierIndex, supplier, i);
 
       // Index 3: Combined lookups
       const combinedKey = `${supplier}|${invoiceNo}`;
-      if (!this.combinedIndex.has(combinedKey)) {
-        this.combinedIndex.set(combinedKey, []);
-      }
-      this.combinedIndex.get(combinedKey).push(i);
+      this._addToIndex(this.combinedIndex, combinedKey, i);
 
       // Index 4: Payment ID for duplicate detection
       if (paymentId) {
@@ -144,23 +149,14 @@ const PaymentCache = {
       this.data[arrayIndex] = rowData;
 
       // Update invoice index
-      if (!this.invoiceIndex.has(invoiceNo)) {
-        this.invoiceIndex.set(invoiceNo, []);
-      }
-      this.invoiceIndex.get(invoiceNo).push(arrayIndex);
+      this._addToIndex(this.invoiceIndex, invoiceNo, arrayIndex);
 
       // Update supplier index
-      if (!this.supplierIndex.has(supplier)) {
-        this.supplierIndex.set(supplier, []);
-      }
-      this.supplierIndex.get(supplier).push(arrayIndex);
+      this._addToIndex(this.supplierIndex, supplier, arrayIndex);
 
       // Update combined index
       const combinedKey = `${supplier}|${invoiceNo}`;
-      if (!this.combinedIndex.has(combinedKey)) {
-        this.combinedIndex.set(combinedKey, []);
-      }
-      this.combinedIndex.get(combinedKey).push(arrayIndex);
+      this._addToIndex(this.combinedIndex, combinedKey, arrayIndex);
 
       // Update payment ID index for duplicate detection
       if (paymentId) {
