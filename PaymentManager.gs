@@ -14,6 +14,22 @@
  * - Write-through cache: New payments added to cache immediately
  */
 
+// ═══ CONSTANTS ═══
+/** @const {number} Header row count in sheet data arrays */
+const HEADER_ROW_COUNT = 1;
+
+/** @const {number} Index of header row in data array (0-based) */
+const HEADER_ROW_INDEX = 0;
+
+/** @const {number} Index of first data row in array (0-based) */
+const FIRST_DATA_ROW_INDEX = 1;
+
+/** @const {number} Tolerance for balance comparison (floating point precision) */
+const BALANCE_TOLERANCE = 0.01;
+
+/** @const {number} Minimum rows required for sheet to have data (header + at least 1 data row) */
+const MIN_ROWS_WITH_DATA = 2;
+
 // ═══ PAYMENT CACHE WITH TRIPLE-INDEX STRUCTURE ═══
 /**
  * Optimized Payment Cache Module
@@ -89,8 +105,8 @@ const PaymentCache = {
 
     const col = CONFIG.paymentCols;
 
-    // Start from 1 if row 0 = header
-    for (let i = 1; i < data.length; i++) {
+    // Start from first data row (skip header)
+    for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
       const supplier = StringUtils.normalize(data[i][col.supplier]);
       const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
       const paymentId = data[i][col.sysId]; // Payment ID column
@@ -195,7 +211,7 @@ const PaymentCache = {
       const paymentSh = MasterDatabaseUtils.getSourceSheet('payment');
       const lastRow = paymentSh.getLastRow();
 
-      if (lastRow < 2) {
+      if (lastRow < MIN_ROWS_WITH_DATA) {
         const emptyData = [[]]; // Header placeholder
         this.set(emptyData);
         return {
@@ -515,7 +531,7 @@ const PaymentManager = {
         totalAmount: totalAmount,
         totalPaid: totalPaid,
         balanceDue: balanceDue,
-        fullyPaid: Math.abs(balanceDue) < 0.01
+        fullyPaid: Math.abs(balanceDue) < BALANCE_TOLERANCE
       };
 
       result.fullyPaid = result.balanceInfo.fullyPaid;
@@ -786,7 +802,7 @@ const PaymentManager = {
       // ✓ Use cached data for single-pass aggregation
       const { data } = PaymentCache.getPaymentData();
 
-      if (data.length < 2) {
+      if (data.length < MIN_ROWS_WITH_DATA) {
         return {
           total: 0,
           totalAmount: 0,
@@ -800,8 +816,8 @@ const PaymentManager = {
       const byType = {};
       const byMethod = {};
 
-      // Single-pass aggregation (skip header row at index 0)
-      for (let i = 1; i < data.length; i++) {
+      // Single-pass aggregation (skip header row)
+      for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
         const amount = Number(data[i][col.amount]) || 0;
         const type = data[i][col.paymentType];
         const method = data[i][col.method];
@@ -813,7 +829,7 @@ const PaymentManager = {
       }
 
       return {
-        total: data.length - 1, // Exclude header
+        total: data.length - HEADER_ROW_COUNT, // Exclude header
         totalAmount: totalAmount,
         byType: byType,
         byMethod: byMethod
