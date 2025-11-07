@@ -8,7 +8,28 @@
  * Enhanced configuration object with validation
  */
 const CONFIG = {
-  // Sheet names
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CONSTANTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Shared constants used across multiple modules (PaymentManager, BalanceCalculator, etc.)
+
+  constants: {
+    // Balance calculation constants
+    BALANCE_TOLERANCE: 0.01,              // Tolerance for floating point balance comparison
+    VALID_BALANCE_MIN: 0,                 // Minimum valid balance value
+    FULLY_PAID_THRESHOLD: 0.01,           // Threshold for considering invoice fully paid
+
+    // Sheet data structure constants
+    HEADER_ROW_COUNT: 1,                  // Number of header rows in sheet arrays
+    HEADER_ROW_INDEX: 0,                  // Index of header row in data array (0-based)
+    FIRST_DATA_ROW_INDEX: 1,              // Index of first data row in array (0-based)
+    MIN_ROWS_WITH_DATA: 2                 // Minimum rows required (header + at least 1 data row)
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET NAMES
+  // ═══════════════════════════════════════════════════════════════════════════
+
   dailySheets: ['01','02','03','04','05','06','07','08','09','10',
                 '11','12','13','14','15','16','17','18','19','20',
                 '21','22','23','24','25','26','27','28','29','30','31'],
@@ -19,7 +40,10 @@ const CONFIG = {
   supplierList: 'SupplierList',
   idColHeader: 'SYS_ID',
 
-  // Master Database configuration
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MASTER DATABASE CONFIGURATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
   masterDatabase: {
     // Connection mode: 'local' (current monthly file) or 'master' (central database)
     connectionMode: 'local',  // Change to 'master' to enable Master Database writes
@@ -45,8 +69,15 @@ const CONFIG = {
     }
   },
 
-  // Sheet structure
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET STRUCTURE
+  // ═══════════════════════════════════════════════════════════════════════════
+
   dataStartRow: 7,        // First row of data in daily sheets (0-based would be 6)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COLUMN MAPPINGS
+  // ═══════════════════════════════════════════════════════════════════════════
 
   // Daily sheet column mappings (0-based indices)
   cols: {
@@ -124,8 +155,11 @@ const CONFIG = {
     details: 5,         // F
     message: 6          // G
   },
-  
-  // Business rules
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUSINESS RULES
+  // ═══════════════════════════════════════════════════════════════════════════
+
   rules: {
     MAX_TRANSACTION_AMOUNT: 1000000,
     CACHE_TTL_MS: 60000,
@@ -135,8 +169,11 @@ const CONFIG = {
     SUPPORTED_PAYMENT_METHODS: ['Cash', 'Check', 'Bank Transfer', 'None'],
     DEFAULT_PAYMENT_METHOD: 'Cash'
   },
-  
-  // UI Colors
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UI COLORS
+  // ═══════════════════════════════════════════════════════════════════════════
+
   colors: {
     success: '#E8F5E8',      // Light green
     error: '#FFEBEE',        // Light red
@@ -145,8 +182,11 @@ const CONFIG = {
     info: '#E3F2FD',         // Light blue
     neutral: '#F5F5F5'       // Light gray
   },
-  
-  // Total columns in each sheet
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TOTAL COLUMNS
+  // ═══════════════════════════════════════════════════════════════════════════
+
   totalColumns: {
     daily: 14,          // A through N
     invoice: 13,        // A through M (added enteredBy column)
@@ -154,12 +194,19 @@ const CONFIG = {
     ledger: 4,          // A through D
     audit: 7            // A through G
   },
-  
-  // Validation state
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VALIDATION STATE
+  // ═══════════════════════════════════════════════════════════════════════════
+
   _isValidated: false,
   _validationErrors: [],
   _validationWarnings: [],
-  
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UTILITY FUNCTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /**
    * Validate configuration on initialization
    * @returns {Object} Validation result with valid flag and errors
