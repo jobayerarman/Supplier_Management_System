@@ -22,31 +22,19 @@
  * - Easy to extend with new payment types
  *
  * ORGANIZATION:
- * 1. Constants
- * 2. Payment Type Configuration
- * 3. Helper Classes
- * 4. BalanceCalculator Public API
- * 5. BalanceCalculator Core Calculations (Private)
- * 6. BalanceCalculator Helper Functions (Private)
- * 7. BalanceCalculator Result Builders (Private)
- * 8. Backward Compatibility Functions
+ * 1. Payment Type Configuration (Internal)
+ * 2. Helper Classes
+ * 3. BalanceCalculator Public API
+ * 4. BalanceCalculator Core Calculations (Private)
+ * 5. BalanceCalculator Helper Functions (Private)
+ * 6. BalanceCalculator Result Builders (Private)
+ * 7. Backward Compatibility Functions
+ *
+ * NOTE: Shared constants moved to CONFIG.constants in _Config.gs for centralization
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 1: CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** @const {number} Tolerance for balance comparison (floating point precision) */
-const BALANCE_TOLERANCE = 0.01;
-
-/** @const {number} Minimum valid balance value */
-const VALID_BALANCE_MIN = 0;
-
-/** @const {number} Threshold for considering invoice fully paid */
-const FULLY_PAID_THRESHOLD = 0.01;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 2: PAYMENT TYPE CONFIGURATION (INTERNAL)
+// SECTION 1: PAYMENT TYPE CONFIGURATION (INTERNAL)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -83,7 +71,7 @@ const PAYMENT_TYPE_CONFIG = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 3: HELPER CLASSES
+// SECTION 2: HELPER CLASSES
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -137,7 +125,7 @@ class RowProcessingTracker {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 4: BALANCE CALCULATOR - PUBLIC API
+// SECTION 3: BALANCE CALCULATOR - PUBLIC API
 // ═══════════════════════════════════════════════════════════════════════════
 
 const BalanceCalculator = {
@@ -393,7 +381,7 @@ const BalanceCalculator = {
 
     // Compare (allow small rounding differences)
     const difference = Math.abs(preview.balance - actual);
-    const matches = difference < BALANCE_TOLERANCE;
+    const matches = difference < CONFIG.constants.BALANCE_TOLERANCE;
 
     if (!matches) {
       AuditLogger.logWarning('BalanceCalculator.validatePreviewAccuracy',
@@ -409,7 +397,7 @@ const BalanceCalculator = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 5: BALANCE CALCULATOR - CORE CALCULATIONS (PRIVATE)
+  // SECTION 4: BALANCE CALCULATOR - CORE CALCULATIONS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -450,7 +438,7 @@ const BalanceCalculator = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 6: BALANCE CALCULATOR - HELPER FUNCTIONS (PRIVATE)
+  // SECTION 5: BALANCE CALCULATOR - HELPER FUNCTIONS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -545,7 +533,7 @@ const BalanceCalculator = {
    * @returns {boolean} True if valid number >= 0
    */
   _isValidBalance: function(balance) {
-    return !isNaN(balance) && balance >= VALID_BALANCE_MIN;
+    return !isNaN(balance) && balance >= CONFIG.constants.VALID_BALANCE_MIN;
   },
 
   /**
@@ -671,7 +659,7 @@ const BalanceCalculator = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 7: BALANCE CALCULATOR - RESULT BUILDERS (PRIVATE)
+  // SECTION 6: BALANCE CALCULATOR - RESULT BUILDERS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -789,7 +777,7 @@ const BalanceCalculator = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 8: BACKWARD COMPATIBILITY
+// SECTION 7: BACKWARD COMPATIBILITY
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**

@@ -14,36 +14,18 @@
  * - Write-through cache: New payments added to cache immediately
  *
  * ORGANIZATION:
- * 1. Constants
- * 2. PaymentCache Module (separate cache system)
- * 3. PaymentManager Public API (external interface)
- * 4. PaymentManager Core Workflow (internal orchestration)
- * 5. PaymentManager Helper Functions (utilities)
- * 6. PaymentManager Result Builders (immutable constructors)
- * 7. Backward Compatibility Functions (legacy support)
+ * 1. PaymentCache Module (separate cache system)
+ * 2. PaymentManager Public API (external interface)
+ * 3. PaymentManager Core Workflow (internal orchestration)
+ * 4. PaymentManager Helper Functions (utilities)
+ * 5. PaymentManager Result Builders (immutable constructors)
+ * 6. Backward Compatibility Functions (legacy support)
+ *
+ * NOTE: Constants moved to CONFIG.constants in _Config.gs for centralization
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 1: CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** @const {number} Header row count in sheet data arrays */
-const HEADER_ROW_COUNT = 1;
-
-/** @const {number} Index of header row in data array (0-based) */
-const HEADER_ROW_INDEX = 0;
-
-/** @const {number} Index of first data row in array (0-based) */
-const FIRST_DATA_ROW_INDEX = 1;
-
-/** @const {number} Tolerance for balance comparison (floating point precision) */
-const BALANCE_TOLERANCE = 0.01;
-
-/** @const {number} Minimum rows required for sheet to have data (header + at least 1 data row) */
-const MIN_ROWS_WITH_DATA = 2;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 2: PAYMENT CACHE MODULE
+// SECTION 1: PAYMENT CACHE MODULE
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -107,7 +89,7 @@ const PaymentCache = {
     const col = CONFIG.paymentCols;
 
     // Start from first data row (skip header)
-    for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
+    for (let i = CONFIG.constants.FIRST_DATA_ROW_INDEX; i < data.length; i++) {
       const supplier = StringUtils.normalize(data[i][col.supplier]);
       const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
       const paymentId = data[i][col.sysId]; // Payment ID column
@@ -200,7 +182,7 @@ const PaymentCache = {
       const paymentSh = MasterDatabaseUtils.getSourceSheet('payment');
       const lastRow = paymentSh.getLastRow();
 
-      if (lastRow < MIN_ROWS_WITH_DATA) {
+      if (lastRow < CONFIG.constants.MIN_ROWS_WITH_DATA) {
         const emptyData = [[]]; // Header placeholder
         this.set(emptyData);
         return {
@@ -476,7 +458,7 @@ const PaymentManager = {
       // ✓ Use cached data for single-pass aggregation
       const { data } = PaymentCache.getPaymentData();
 
-      if (data.length < MIN_ROWS_WITH_DATA) {
+      if (data.length < CONFIG.constants.MIN_ROWS_WITH_DATA) {
         return {
           total: 0,
           totalAmount: 0,
@@ -491,7 +473,7 @@ const PaymentManager = {
       const byMethod = {};
 
       // Single-pass aggregation (skip header row)
-      for (let i = FIRST_DATA_ROW_INDEX; i < data.length; i++) {
+      for (let i = CONFIG.constants.FIRST_DATA_ROW_INDEX; i < data.length; i++) {
         const amount = Number(data[i][col.amount]) || 0;
         const type = data[i][col.paymentType];
         const method = data[i][col.method];
@@ -503,7 +485,7 @@ const PaymentManager = {
       }
 
       return {
-        total: data.length - HEADER_ROW_COUNT, // Exclude header
+        total: data.length - CONFIG.constants.HEADER_ROW_COUNT, // Exclude header
         totalAmount: totalAmount,
         byType: byType,
         byMethod: byMethod
@@ -852,7 +834,7 @@ const PaymentManager = {
       totalAmount: totalAmount,
       totalPaid: totalPaid,
       balanceDue: balanceDue,
-      fullyPaid: Math.abs(balanceDue) < BALANCE_TOLERANCE
+      fullyPaid: Math.abs(balanceDue) < CONFIG.constants.BALANCE_TOLERANCE
     };
   },
 
