@@ -1,28 +1,54 @@
 // ==================== MODULE: BalanceCalculator.gs ====================
 
 /**
- * BalanceCalculator.gs
- * Handles all balance-related calculations and supplier ledger updates
- * 
- * OPTIMIZATIONS:
- * - getSupplierOutstanding() uses CacheManager.supplierIndex for O(m) performance
- * - Consolidated calculate() and calculatePreview() logic via _calculateTransactionImpact()
- * - Moved updateBalanceCell() from Code.gs for better encapsulation
+ * Balance calculation and supplier ledger management
+ *
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Partition-aware queries using active invoice cache (70-90% faster)
+ * - O(m) complexity for supplier queries (m = supplier's active invoices)
+ * - Centralized calculation logic reduces duplication
  * - Single source of truth for all balance operations
- * - Added error logging for skipped rows
+ *
+ * ORGANIZATION:
+ * 1. Constants
+ * 2. BalanceCalculator Public API
+ * 3. BalanceCalculator Core Calculations (Private)
+ * 4. Backward Compatibility Functions
  */
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 1: CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** @const {number} Tolerance for balance comparison (floating point precision) */
+const BALANCE_TOLERANCE = 0.01;
+
+/** @const {number} Minimum valid balance value */
+const VALID_BALANCE_MIN = 0;
+
+/** @const {number} Threshold for considering invoice fully paid */
+const FULLY_PAID_THRESHOLD = 0.01;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 2: BALANCE CALCULATOR - PUBLIC API
+// ═══════════════════════════════════════════════════════════════════════════
 
 const BalanceCalculator = {
   /**
    * Calculate transaction impact on balance
    * INTERNAL: Core calculation logic used by both calculate() and calculatePreview()
-   * 
+   *
    * @private
+   * @typedef {Object} TransactionImpact
+   * @property {number} change - Balance change amount
+   * @property {string} description - Human-readable description of the transaction
+   * @property {string|null} error - Error message or null if successful
+   *
    * @param {string} paymentType - Transaction payment type
    * @param {number} receivedAmt - Amount received
    * @param {number} paymentAmt - Amount paid
    * @param {string} prevInvoice - Previous invoice reference (for Due payments)
-   * @returns {Object} {change: number, description: string, error: string|null}
+   * @returns {TransactionImpact} Impact calculation result
    */
   _calculateTransactionImpact: function(paymentType, receivedAmt, paymentAmt, prevInvoice) {
     switch (paymentType) {
@@ -73,13 +99,13 @@ const BalanceCalculator = {
   /**
    * Calculate balance after transaction
    * ALWAYS returns supplier's total outstanding after transaction
-   * 
+   *
    * @param {Object} data - Transaction data
    * @returns {number} New balance after transaction
    */
   calculate: function(data) {
     const supplierOutstanding = this.getSupplierOutstanding(data.supplier);
-    
+
     // Calculate impact using centralized logic
     const impact = this._calculateTransactionImpact(
       data.paymentType,
@@ -87,39 +113,43 @@ const BalanceCalculator = {
       data.paymentAmt,
       data.prevInvoice
     );
-    
+
     // Log errors if any
     if (impact.error) {
-      logSystemError('BalanceCalculator.calculate', 
+      logSystemError('BalanceCalculator.calculate',
         `${impact.error} | Supplier: ${data.supplier}, Type: ${data.paymentType}`);
     }
-    
+
     const newBalance = supplierOutstanding + impact.change;
-    
+
     return newBalance;
   },
 
   /**
    * Calculate balance preview (before post)
    * Shows what the balance will be after transaction is posted
-   * 
+   *
+   * @typedef {Object} BalancePreviewResult
+   * @property {number} balance - Projected balance after transaction
+   * @property {string} note - Human-readable preview note with transaction description
+   *
    * @param {string} supplier - Supplier name
    * @param {string} paymentType - Payment type
    * @param {number} receivedAmt - Received amount
    * @param {number} paymentAmt - Payment amount
    * @param {string} prevInvoice - Previous invoice reference
-   * @returns {Object} {balance: number, note: string}
+   * @returns {BalancePreviewResult} Balance preview with note
    */
   calculatePreview: function(supplier, paymentType, receivedAmt, paymentAmt, prevInvoice) {
     if (StringUtils.isEmpty(supplier) || !paymentType) {
-      return { 
-        balance: 0, 
-        note: "⚠️ Supplier and payment type required" 
+      return {
+        balance: 0,
+        note: "⚠️ Supplier and payment type required"
       };
     }
 
     const currentOutstanding = this.getSupplierOutstanding(supplier);
-    
+
     // Calculate impact using centralized logic
     const impact = this._calculateTransactionImpact(
       paymentType,
@@ -127,7 +157,7 @@ const BalanceCalculator = {
       paymentAmt,
       prevInvoice
     );
-    
+
     // Handle errors
     if (impact.error) {
       return {
@@ -135,12 +165,12 @@ const BalanceCalculator = {
         note: `⚠️ ${impact.error}`
       };
     }
-    
+
     const projectedBalance = currentOutstanding + impact.change;
-    
+
     let note = `Preview: ${impact.description}`;
-        
-    return { 
+
+    return {
       balance: projectedBalance,
       note: note
     };
@@ -150,7 +180,7 @@ const BalanceCalculator = {
    * Update balance cell in daily sheet
    * Shows preview before post, actual balance after post
    * MOVED FROM Code.gs for better encapsulation
-   * 
+   *
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
    * @param {number} row - Row number
    * @param {boolean} afterPost - Whether this is after posting
@@ -220,37 +250,19 @@ const BalanceCalculator = {
 
   /**
    * Get total outstanding balance for a supplier
-   * OPTIMIZED: Uses CacheManager.supplierIndex for O(m) performance where m = supplier's invoices
-   * 
-   * Performance improvements:
-   * - Leverages cached data (no sheet read)
-   * - Uses supplier index for direct lookup (no full table scan)
-   * - Only iterates supplier-specific rows
-   * - Logs skipped rows with details
-   * 
-   * @param {string} supplier - Supplier name
-   * @returns {number} Total outstanding balance
-   */
-  /**
-   * PERFORMANCE FIX #2: Partition-aware consumer implementation
    *
-   * Get total outstanding balance for supplier using ACTIVE PARTITION
+   * @performance Uses active partition cache for 70-90% faster iteration
+   * See CLAUDE.md "Cache Partitioning" for optimization details
    *
-   * OLD APPROACH:
-   * - Iterate ALL supplier invoices (including fully paid ones)
-   * - Sum balanceDue (mostly zeros for paid invoices)
-   * - Wasted iterations on paid invoices
+   * OPTIMIZATION: Partition-aware consumer - queries ACTIVE partition only
+   * - Active partition: Invoices with balance > $0.01 (typically 10-30% of total)
+   * - Skips fully paid invoices entirely
+   * - 10x faster for established suppliers with many paid invoices
    *
-   * NEW APPROACH (PARTITION-AWARE):
-   * - Query ACTIVE partition only (invoices with balance > 0.01)
-   * - Skip paid invoices entirely
-   * - 70-90% faster for suppliers with many paid invoices
-   *
-   * PERFORMANCE BENEFIT:
-   * - Typical supplier: 200 total invoices, 20 with outstanding balance
-   * - OLD: Iterate 200 invoices, add 180 zeros + 20 values → ~4ms
-   * - NEW: Iterate 20 invoices with balances only → ~0.4ms
-   * - **10x faster** for established suppliers
+   * Performance metrics:
+   * - Query time: O(m) where m = supplier's active invoices (not total invoices)
+   * - Typical supplier: 200 total, 20 active → iterates only 20 invoices
+   * - Cache hit: ~1-5ms, Cache miss: ~200-400ms (local), ~300-600ms (master)
    *
    * @param {string} supplier - Supplier name
    * @returns {number} Total outstanding balance
@@ -261,7 +273,7 @@ const BalanceCalculator = {
     }
 
     try {
-      // ✅ PERFORMANCE FIX #2: Use ACTIVE partition (invoices with balance > 0)
+      // ✅ PERFORMANCE: Use ACTIVE partition (invoices with balance > 0)
       const cacheData = CacheManager.getInvoiceData();
       const normalizedSupplier = StringUtils.normalize(supplier);
 
@@ -326,6 +338,7 @@ const BalanceCalculator = {
 
   /**
    * Get balance due for a specific invoice
+   *
    * @param {string} invoiceNo - Invoice number
    * @param {string} supplier - Supplier name
    * @returns {number} Invoice balance due or 0 if not found
@@ -340,9 +353,9 @@ const BalanceCalculator = {
       if (!invoice) {
         return 0;
       }
-      return Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0; // Column F (index 5)
+      return Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
     } catch (error) {
-      logSystemError('BalanceCalculator.getInvoiceOutstanding', 
+      logSystemError('BalanceCalculator.getInvoiceOutstanding',
         `Failed to get invoice outstanding: ${error.toString()}`);
       return 0;
     }
@@ -350,14 +363,21 @@ const BalanceCalculator = {
 
   /**
    * Get balance summary for supplier
+   *
+   * @typedef {Object} SupplierSummary
+   * @property {string} supplier - Supplier name
+   * @property {number} outstanding - Total outstanding balance
+   * @property {number} unpaidInvoiceCount - Number of unpaid invoices
+   * @property {Array} unpaidInvoices - Array of unpaid invoice objects
+   *
    * @param {string} supplier - Supplier name
-   * @returns {Object|null} Summary object or null on error
+   * @returns {SupplierSummary|null} Summary object or null on error
    */
   getSupplierSummary: function(supplier) {
     try {
       const outstanding = this.getSupplierOutstanding(supplier);
       const unpaidInvoices = InvoiceManager.getUnpaidForSupplier(supplier);
-      
+
       return {
         supplier: supplier,
         outstanding: outstanding,
@@ -365,7 +385,7 @@ const BalanceCalculator = {
         unpaidInvoices: unpaidInvoices
       };
     } catch (error) {
-      logSystemError('BalanceCalculator.getSupplierSummary', 
+      logSystemError('BalanceCalculator.getSupplierSummary',
         `Failed to get summary for ${supplier}: ${error.toString()}`);
       return null;
     }
@@ -373,9 +393,15 @@ const BalanceCalculator = {
 
   /**
    * Validate that preview matches actual result (for testing/debugging)
-   * 
+   *
+   * @typedef {Object} PreviewValidationResult
+   * @property {boolean} matches - Whether preview and actual match (within tolerance)
+   * @property {number} preview - Preview balance calculated
+   * @property {number} actual - Actual balance calculated
+   * @property {number} difference - Absolute difference between preview and actual
+   *
    * @param {Object} data - Transaction data
-   * @returns {Object} {matches: boolean, preview: number, actual: number, difference: number}
+   * @returns {PreviewValidationResult} Validation result with comparison details
    */
   validatePreviewAccuracy: function(data) {
     // Calculate preview
@@ -386,19 +412,19 @@ const BalanceCalculator = {
       data.paymentAmt,
       data.prevInvoice
     );
-    
+
     // Calculate actual
     const actual = this.calculate(data);
-    
+
     // Compare (allow small rounding differences)
     const difference = Math.abs(preview.balance - actual);
-    const matches = difference < 0.01;
-    
+    const matches = difference < BALANCE_TOLERANCE;
+
     if (!matches) {
       AuditLogger.logWarning('BalanceCalculator.validatePreviewAccuracy',
         `Preview/Actual mismatch | Supplier: ${data.supplier} | Preview: ${preview.balance} | Actual: ${actual} | Diff: ${difference}`);
     }
-    
+
     return {
       matches: matches,
       preview: preview.balance,
@@ -408,20 +434,47 @@ const BalanceCalculator = {
   }
 };
 
-// ==================== BACKWARD COMPATIBILITY ====================
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 3: BACKWARD COMPATIBILITY
+// ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Legacy wrapper for BalanceCalculator.calculate()
+ * @deprecated Use BalanceCalculator.calculate() directly
+ * @param {Object} data - Transaction data
+ * @returns {number} Calculated balance
+ */
 function calculateBalance(data) {
   return BalanceCalculator.calculate(data);
 }
 
+/**
+ * Legacy wrapper for BalanceCalculator.getSupplierOutstanding()
+ * @deprecated Use BalanceCalculator.getSupplierOutstanding() directly
+ * @param {string} supplier - Supplier name
+ * @returns {number} Total outstanding balance
+ */
 function getOutstandingForSupplier(supplier) {
   return BalanceCalculator.getSupplierOutstanding(supplier);
 }
 
+/**
+ * Legacy wrapper for BalanceCalculator.getInvoiceOutstanding()
+ * @deprecated Use BalanceCalculator.getInvoiceOutstanding() directly
+ * @param {string} invoiceNo - Invoice number
+ * @param {string} supplier - Supplier name
+ * @returns {number} Invoice balance due
+ */
 function getInvoiceOutstanding(invoiceNo, supplier) {
   return BalanceCalculator.getInvoiceOutstanding(invoiceNo, supplier);
 }
 
+/**
+ * Legacy function - no longer used
+ * @deprecated Ledger updates handled automatically by InvoiceManager
+ * @param {string} supplier - Supplier name
+ * @param {number} newBalance - New balance (unused)
+ */
 function updateSupplierLedger(supplier, newBalance) {
   return BalanceCalculator.updateLedger(supplier, newBalance);
 }
