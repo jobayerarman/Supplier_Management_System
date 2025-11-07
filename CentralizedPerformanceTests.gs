@@ -1009,6 +1009,7 @@ function runTestCategory(category) {
       const results = [];
       results.push(testCachePerformance());
       results.push(testCacheInvalidation());
+      results.push(testCachePartitionTransitions());
       results.push(testRegularPaymentFlow());
       return results;
     },

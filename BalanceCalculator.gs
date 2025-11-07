@@ -468,8 +468,6 @@ const BalanceCalculator = {
 
       const activeIndex = cacheData.activeSupplierIndex;
       if (!activeIndex || !activeIndex.has(normalizedSupplier)) {
-        AuditLogger.logWarning('BalanceCalculator._getActiveInvoicesForSupplier',
-          `Active partition not available for supplier "${supplier}"`);
         return null;
       }
 
@@ -591,7 +589,7 @@ const BalanceCalculator = {
    */
   _buildPostedBalanceInfo: function(supplier) {
     const balance = this.getSupplierOutstanding(supplier);
-    const note = `Posted: Supplier outstanding = ${balance}/-\nUpdated: ${DateUtils.formatDateTime(new Date())}`;
+    const note = ``;
 
     return {
       balance: balance,

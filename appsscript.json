@@ -6,12 +6,14 @@
   "runtimeVersion": "V8",
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.scriptapp",
     "https://www.googleapis.com/auth/script.container.ui"
   ],
   "sheets": {
     "macros": [{
-      "menuName": "Untitled Macro",
-      "functionName": "UntitledMacro"
+      "menuName": "HeadingFix",
+      "functionName": "HeadingFix",
+      "defaultShortcut": "Ctrl+Alt+Shift+7"
     }]
   }
 }

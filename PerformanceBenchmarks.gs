@@ -440,7 +440,7 @@ function benchmarkDashboardSimulation() {
  */
 function runAllBenchmarks() {
   Logger.log('╔' + '═'.repeat(68) + '╗');
-  Logger.log('║' + ' '.repeat(12) + 'PAYMENTMANAGER PERFORMANCE BENCHMARKS' + ' '.repeat(19) + '║');
+  Logger.log('║' + ' '.repeat(12) + 'PAYMENTMANAGER PERFORMANCE BENCHMARKS' + ' '.repeat(13) + '║');
   Logger.log('╚' + '═'.repeat(68) + '╝');
 
   const startTime = Date.now();

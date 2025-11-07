@@ -117,7 +117,6 @@ const InvoiceManager = {
       const formattedDate = DateUtils.formatDate(invoiceDate);
       const invoiceId = IDGenerator.generateInvoiceId(sysId);
 
-      // Cached formula templates (avoids repetitive string concatenations)
       // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid, F=balanceDue, G=status, H=paidDate, I=daysOutstanding
       const E = `=IF(C${newRow}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${newRow}, PaymentLog!B:B,B${newRow}),0))`;  // Total Paid
       const F = `=IF(D${newRow}="","",D${newRow}-E${newRow})`;  // Balance Due
@@ -125,7 +124,6 @@ const InvoiceManager = {
       const I = `=IF(F${newRow}=0,0,TODAY()-A${newRow})`;  // Days Outstanding
 
       // Build new invoice row WITH formulas included
-      // NEW ORDER: invoiceDate, supplier, invoiceNo, totalAmount, totalPaid, balanceDue, status, paidDate, daysOutstanding, originDay, enteredBy, timestamp, sysId
       const newRowData = [
         invoiceDate,      // A - invoiceDate
         supplier,         // B - supplier
@@ -251,7 +249,7 @@ const InvoiceManager = {
       if (newOrigin !== oldOrigin) {
         updates.push({ col: col.originDay + 1, val: newOrigin });
       }
-      
+
       if (updates.length > 0) {
         const range = invoiceSh.getRange(rowNum, 1, 1, CONFIG.totalColumns.invoice);
         const values = range.getValues()[0];
@@ -371,13 +369,6 @@ const InvoiceManager = {
   /**
    * Find invoice record by supplier and invoice number (cached lookup)
    * 
-   * @param {string} supplier - Supplier name
-   * @param {string} invoiceNo - Invoice number
-   * @returns {Object|null} Invoice record or null if not found
-   */
-  /**
-   * Find an invoice by supplier and invoice number
-   *
    * Uses globalIndexMap for O(1) cross-partition lookup.
    *
    * @param {string} supplier - Supplier name
@@ -500,13 +491,6 @@ const InvoiceManager = {
     }
   },
 
-  /**
-   * Get all invoices for supplier
-   * 
-   * @param {string} supplier - Supplier name
-   * @param {boolean} includePaid - Whether to include paid invoices
-   * @returns {Array} Array of invoice objects
-   */
   /**
    * Get all invoices for a supplier (paid and/or unpaid)
    *
@@ -672,6 +656,7 @@ const InvoiceManager = {
   buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
+    // Clear dropdown if not "Due" or missing supplier
     if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
       try {
         targetCell.clearDataValidations().clearNote().clearContent().setBackground(null);
@@ -685,10 +670,12 @@ const InvoiceManager = {
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
       if (unpaidInvoices.length === 0) {
+        // No unpaid invoices found - show informative message
         targetCell.clearDataValidations()
           .clearContent()
           .setNote(`No unpaid invoices found for ${supplier}.\n\nThis supplier either has no invoices or all invoices are fully paid.`)
           .setBackground(CONFIG.colors.warning);
+
         return false;
       }
 
@@ -696,22 +683,26 @@ const InvoiceManager = {
       const rule = SpreadsheetApp.newDataValidation()
         .requireValueInList(invoiceNumbers, true)
         .setAllowInvalid(true)
-        .setHelpText(`Select from ${invoiceNumbers.length} unpaid invoice(s), or enter manually`)
         .build();
 
+      // CRITICAL FIX: Set dropdown FIRST, then clear content
+      // This prevents the clearContent() edit event from interfering with the dropdown
+      // Old order: clearContent → setDataValidation (dropdown could be cleared by cascade events)
+      // New order: setDataValidation → clearContent (dropdown already set when cascade fires)
       const currentValue = targetCell.getValue();
       const isValidValue = invoiceNumbers.includes(String(currentValue));
 
+      // Set dropdown and background first (no edit event triggered)
       targetCell
         .setDataValidation(rule)
         .setBackground(CONFIG.colors.info);
 
+      // Clear content and note ONLY if current value is invalid or empty
       if (!isValidValue || !currentValue) {
         targetCell.clearContent().clearNote();
       } else {
         targetCell.clearNote();
       }
-
       return true;
 
     } catch (error) {
@@ -720,6 +711,7 @@ const InvoiceManager = {
         .clearContent()
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
+
       return false;
     }
   },
@@ -821,17 +813,16 @@ const InvoiceManager = {
           const invoiceDate = data.invoiceDate || data.timestamp;
 
           // Build the full row with data and formulas
-          // NEW ORDER: invoiceDate, supplier, invoiceNo, totalAmount, totalPaid, balanceDue, status, paidDate, daysOutstanding, originDay, enteredBy, timestamp, sysId
           const newInvoiceRow = [
             invoiceDate,                                                                                                                                    // A - invoiceDate
             data.supplier,                                                                                                                                  // B - supplier
             data.invoiceNo,                                                                                                                                 // C - invoiceNo
             data.receivedAmt,                                                                                                                               // D - totalAmount
-            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,         // E - totalPaid (formula)
-            `=IF(D${currentRowNum}="","", D${currentRowNum} - E${currentRowNum})`,                                                                         // F - balanceDue (formula)
-            `=IFS(F${currentRowNum}=0,"Paid", F${currentRowNum}=D${currentRowNum},"Unpaid", F${currentRowNum}<D${currentRowNum},"Partial")`,              // G - status (formula)
+            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,           // E - totalPaid (formula)
+            `=IF(D${currentRowNum}="","", D${currentRowNum} - E${currentRowNum})`,                                                                          // F - balanceDue (formula)
+            `=IFS(F${currentRowNum}=0,"Paid", F${currentRowNum}=D${currentRowNum},"Unpaid", F${currentRowNum}<D${currentRowNum},"Partial")`,                // G - status (formula)
             '',                                                                                                                                             // H - paidDate
-            `=IF(F${currentRowNum}=0, 0, TODAY() - A${currentRowNum})`,                                                                                    // I - daysOutstanding (formula)
+            `=IF(F${currentRowNum}=0, 0, TODAY() - A${currentRowNum})`,                                                                                     // I - daysOutstanding (formula)
             data.sheetName || 'IMPORT',                                                                                                                     // J - originDay
             data.enteredBy || UserResolver.getCurrentUser(),                                                                                                // K - enteredBy (NEW)
             data.timestamp,                                                                                                                                 // L - timestamp
