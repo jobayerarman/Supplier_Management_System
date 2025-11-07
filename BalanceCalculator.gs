@@ -28,7 +28,6 @@
  * 4. BalanceCalculator Core Calculations (Private)
  * 5. BalanceCalculator Helper Functions (Private)
  * 6. BalanceCalculator Result Builders (Private)
- * 7. Backward Compatibility Functions
  *
  * NOTE: Shared constants moved to CONFIG.constants in _Config.gs for centralization
  */
@@ -775,48 +774,3 @@ const BalanceCalculator = {
     };
   }
 };
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 7: BACKWARD COMPATIBILITY
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Legacy wrapper for BalanceCalculator.calculate()
- * @deprecated Use BalanceCalculator.calculate() directly
- * @param {Object} data - Transaction data
- * @returns {number} Calculated balance
- */
-function calculateBalance(data) {
-  return BalanceCalculator.calculate(data);
-}
-
-/**
- * Legacy wrapper for BalanceCalculator.getSupplierOutstanding()
- * @deprecated Use BalanceCalculator.getSupplierOutstanding() directly
- * @param {string} supplier - Supplier name
- * @returns {number} Total outstanding balance
- */
-function getOutstandingForSupplier(supplier) {
-  return BalanceCalculator.getSupplierOutstanding(supplier);
-}
-
-/**
- * Legacy wrapper for BalanceCalculator.getInvoiceOutstanding()
- * @deprecated Use BalanceCalculator.getInvoiceOutstanding() directly
- * @param {string} invoiceNo - Invoice number
- * @param {string} supplier - Supplier name
- * @returns {number} Invoice balance due
- */
-function getInvoiceOutstanding(invoiceNo, supplier) {
-  return BalanceCalculator.getInvoiceOutstanding(invoiceNo, supplier);
-}
-
-/**
- * Legacy function - no longer used
- * @deprecated Ledger updates handled automatically by InvoiceManager
- * @param {string} supplier - Supplier name
- * @param {number} newBalance - New balance (unused)
- */
-function updateSupplierLedger(supplier, newBalance) {
-  return BalanceCalculator.updateLedger(supplier, newBalance);
-}
