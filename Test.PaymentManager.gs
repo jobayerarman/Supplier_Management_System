@@ -917,78 +917,16 @@ function testPaymentManager_GetStatistics() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION 5: INTEGRATION TESTS (READ-ONLY)
-// ═══════════════════════════════════════════════════════════════════════════
-
 /**
- * Integration Test: Cache Performance with Large Dataset
+ * BENCHMARK FUNCTIONS MIGRATED
+ * The following performance benchmark functions have been moved to Benchmark.Performance.gs:
+ * - testIntegration_CachePerformance()
+ * - documentPerformanceBaseline()
+ *
+ * See Benchmark.Performance.gs for these performance testing functions.
  */
-function testIntegration_CachePerformance() {
-  Logger.log('\n▶️ INTEGRATION TEST: Cache Performance');
-  TestUtils.resetResults();
 
-  // Setup: Create large dataset (100 payments)
-  const mockPayments = MockDataGenerator.createMultiplePayments(100);
-  const paymentData = MockDataGenerator.createPaymentLogData(mockPayments);
-
-  PaymentCache.clear();
-
-  // Test 1: Cache build time
-  const startBuild = Date.now();
-  PaymentCache.set(paymentData);
-  const buildTime = Date.now() - startBuild;
-
-  Logger.log(`  Cache build time for 100 payments: ${buildTime}ms`);
-  TestUtils.assertTrue(
-    buildTime < 1000,
-    'Cache builds in under 1 second for 100 payments'
-  );
-
-  // Test 2: Query performance (should be O(1))
-  const startQuery = Date.now();
-  for (let i = 0; i < 50; i++) {
-    PaymentManager.getHistoryForInvoice(`INV-${String(i + 1).padStart(3, '0')}`);
-  }
-  const queryTime = Date.now() - startQuery;
-  const avgQueryTime = queryTime / 50;
-
-  Logger.log(`  Average query time: ${avgQueryTime.toFixed(2)}ms`);
-  TestUtils.assertTrue(
-    avgQueryTime < 10,
-    'Average query time under 10ms (O(1) performance)'
-  );
-
-  // Test 3: Duplicate detection performance
-  const startDupe = Date.now();
-  for (let i = 0; i < 100; i++) {
-    PaymentManager.isDuplicate(`TEST-${String(i + 1).padStart(3, '0')}`);
-  }
-  const dupeTime = Date.now() - startDupe;
-  const avgDupeTime = dupeTime / 100;
-
-  Logger.log(`  Average duplicate check time: ${avgDupeTime.toFixed(2)}ms`);
-  TestUtils.assertTrue(
-    avgDupeTime < 5,
-    'Duplicate detection under 5ms (O(1) hash lookup)'
-  );
-
-  // Test 4: Statistics calculation
-  const startStats = Date.now();
-  const stats = PaymentManager.getStatistics();
-  const statsTime = Date.now() - startStats;
-
-  Logger.log(`  Statistics calculation time: ${statsTime}ms`);
-  TestUtils.assertTrue(
-    statsTime < 100,
-    'Statistics calculation under 100ms'
-  );
-  TestUtils.assertEqual(
-    stats.total,
-    100,
-    'Statistics shows correct count'
-  );
-
-  TestUtils.printSummary('Cache Performance Integration');
-}
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Integration Test: Cache Write-Through Workflow
@@ -1117,7 +1055,6 @@ function runPaymentManagerIntegrationTests() {
   Logger.log('PAYMENT MANAGER INTEGRATION TEST SUITE');
   Logger.log('█'.repeat(60));
 
-  testIntegration_CachePerformance();
   testIntegration_WriteThroughWorkflow();
 
   Logger.log('\n✓ Integration tests completed\n');
@@ -1153,77 +1090,5 @@ function runAllPaymentManagerTests() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 7: BASELINE PERFORMANCE DOCUMENTATION
+// BENCHMARK FUNCTIONS MIGRATED TO: Benchmark.Performance.gs
 // ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Document current performance baseline before refactoring
- * Run this and save output for comparison after refactoring
- */
-function documentPerformanceBaseline() {
-  Logger.log('\n' + '═'.repeat(70));
-  Logger.log('PERFORMANCE BASELINE - Pre-Refactoring');
-  Logger.log('═'.repeat(70) + '\n');
-
-  // Setup realistic test dataset
-  const mockPayments = MockDataGenerator.createMultiplePayments(1000);
-  const paymentData = MockDataGenerator.createPaymentLogData(mockPayments);
-
-  PaymentCache.clear();
-
-  // Metric 1: Cache build time
-  const t1 = Date.now();
-  PaymentCache.set(paymentData);
-  const cacheBuildTime = Date.now() - t1;
-
-  Logger.log(`Cache Build Time (1000 payments): ${cacheBuildTime}ms`);
-
-  // Metric 2: Query performance (1000 queries)
-  const t2 = Date.now();
-  for (let i = 0; i < 1000; i++) {
-    PaymentManager.getHistoryForInvoice(`INV-${String((i % 100) + 1).padStart(3, '0')}`);
-  }
-  const queryTime = Date.now() - t2;
-  Logger.log(`1000 Invoice Queries: ${queryTime}ms (avg: ${(queryTime/1000).toFixed(2)}ms)`);
-
-  // Metric 3: Duplicate detection (1000 checks)
-  const t3 = Date.now();
-  for (let i = 0; i < 1000; i++) {
-    PaymentManager.isDuplicate(`TEST-${i}`);
-  }
-  const dupeTime = Date.now() - t3;
-  Logger.log(`1000 Duplicate Checks: ${dupeTime}ms (avg: ${(dupeTime/1000).toFixed(2)}ms)`);
-
-  // Metric 4: Statistics calculation
-  const t4 = Date.now();
-  PaymentManager.getStatistics();
-  const statsTime = Date.now() - t4;
-  Logger.log(`Statistics Calculation: ${statsTime}ms`);
-
-  // Metric 5: Write-through performance (100 additions)
-  const t5 = Date.now();
-  for (let i = 0; i < 100; i++) {
-    const col = CONFIG.paymentCols;
-    const row = new Array(CONFIG.totalColumns.payment).fill('');
-    row[col.supplier] = `Supplier ${i}`;
-    row[col.invoiceNo] = `INV-${i}`;
-    row[col.amount] = i * 100;
-    row[col.sysId] = `PERF-${i}_PAY`; // Use _PAY suffix to match real system format
-    PaymentCache.addPaymentToCache(paymentData.length + i, row);
-  }
-  const writeThroughTime = Date.now() - t5;
-  Logger.log(`100 Write-Through Additions: ${writeThroughTime}ms (avg: ${(writeThroughTime/100).toFixed(2)}ms)`);
-
-  // Cache statistics
-  Logger.log(`\nCache Statistics:`);
-  Logger.log(`  Invoice Index Size: ${PaymentCache.invoiceIndex.size}`);
-  Logger.log(`  Supplier Index Size: ${PaymentCache.supplierIndex.size}`);
-  Logger.log(`  Combined Index Size: ${PaymentCache.combinedIndex.size}`);
-  Logger.log(`  Payment ID Index Size: ${PaymentCache.paymentIdIndex.size}`);
-  Logger.log(`  Data Array Length: ${PaymentCache.data.length}`);
-
-  Logger.log('\n' + '═'.repeat(70));
-  Logger.log('SAVE THIS OUTPUT FOR POST-REFACTORING COMPARISON');
-  Logger.log('Expected: All metrics should remain same or improve');
-  Logger.log('═'.repeat(70) + '\n');
-}
