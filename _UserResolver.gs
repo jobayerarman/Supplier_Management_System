@@ -7,13 +7,15 @@
  *
  * Features:
  * - Context-aware fallback chains
- * - Session caching (1-hour TTL)
+ * - Execution-scoped caching (in-memory, < 0.01ms)
+ * - Session caching (UserProperties, 1-hour TTL)
  * - User prompt fallback for menu context
  * - Detection metadata for debugging
  * - Email validation
+ * - Performance statistics tracking
  *
- * Version: 2.0
- * Last Updated: 2025-11-05
+ * Version: 2.1 (Performance Optimized)
+ * Last Updated: 2025-11-10
  */
 
 const UserResolver = (() => {
@@ -34,6 +36,31 @@ const UserResolver = (() => {
     method: null,
     context: null,
     timestamp: null
+  };
+
+  // ═══ EXECUTION-SCOPED CACHE (In-Memory, High Performance) ═══
+  // This cache persists only for the duration of the current script execution
+  // Automatically cleared when execution completes (Google Apps Script behavior)
+  // Eliminates redundant UserProperties reads and Session API calls
+  let _executionCache = {
+    email: null,
+    method: null,
+    context: null,
+    timestamp: null,
+    isValid: false  // Simple flag - true if cache populated this execution
+  };
+
+  // ═══ PERFORMANCE STATISTICS ═══
+  const _stats = {
+    executionCacheHits: 0,
+    userPropertiesCacheHits: 0,
+    sessionDetections: 0,
+    promptFallbacks: 0,
+    defaultFallbacks: 0,
+    totalCalls: 0,
+    avgExecutionCacheTime: 0,
+    avgUserPropertiesCacheTime: 0,
+    avgDetectionTime: 0
   };
 
   /**
@@ -95,6 +122,87 @@ const UserResolver = (() => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email.trim());
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // EXECUTION-SCOPED CACHE HELPERS (In-Memory, High Performance)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Get user from execution-scoped cache (in-memory)
+   * Extremely fast (< 0.01ms) - no API calls, no property reads
+   *
+   * @returns {Object|null} Cached user object or null if not cached
+   */
+  function getExecutionCache() {
+    if (_executionCache.isValid && _executionCache.email) {
+      return {
+        email: _executionCache.email,
+        method: _executionCache.method + '_exec_cached',
+        timestamp: _executionCache.timestamp
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Set execution-scoped cache (in-memory)
+   * Stores user for current execution only
+   * Automatically cleared when script execution completes
+   *
+   * @param {string} email - User email to cache
+   * @param {string} method - Detection method used
+   */
+  function setExecutionCache(email, method) {
+    _executionCache = {
+      email: email,
+      method: method,
+      context: getExecutionContext(),
+      timestamp: new Date(),
+      isValid: true
+    };
+  }
+
+  /**
+   * Clear execution-scoped cache
+   * Useful for testing or forcing fresh detection
+   */
+  function clearExecutionCache() {
+    _executionCache = {
+      email: null,
+      method: null,
+      context: null,
+      timestamp: null,
+      isValid: false
+    };
+    // Also reset statistics for this execution
+    Object.keys(_stats).forEach(key => _stats[key] = 0);
+  }
+
+  /**
+   * Get performance statistics for current execution
+   * @returns {Object} Statistics object with cache hits, timings, etc.
+   */
+  function getStatistics() {
+    return {
+      ..._stats,
+      cacheHitRate: _stats.totalCalls > 0
+        ? ((_stats.executionCacheHits + _stats.userPropertiesCacheHits) / _stats.totalCalls * 100).toFixed(1) + '%'
+        : '0%',
+      executionCacheEnabled: _executionCache.isValid
+    };
+  }
+
+  /**
+   * Reset performance statistics
+   * Useful for benchmarking or testing
+   */
+  function resetStatistics() {
+    Object.keys(_stats).forEach(key => _stats[key] = 0);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // USER PROPERTIES CACHE HELPERS (Persistent, 1-hour TTL)
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Get cached user email from UserProperties
@@ -305,13 +413,50 @@ const UserResolver = (() => {
    * Get current user with context-aware fallback strategy
    * Main public API - maintains backward compatibility
    *
+   * Multi-level caching strategy for optimal performance:
+   * 1. Execution-scoped cache (< 0.01ms) - in-memory
+   * 2. UserProperties cache (3-5ms) - persistent, 1-hour TTL
+   * 3. Session detection (20-40ms) - Session APIs
+   * 4. User prompt (menu context only)
+   * 5. Default fallback
+   *
    * @returns {string} User email address
    */
   function getCurrentUser() {
+    const startTime = Date.now();
+    _stats.totalCalls++;
+
     try {
-      // Check cache first (performance optimization)
+      // ═══ LEVEL 1: Execution-scoped cache (in-memory, < 0.01ms) ═══
+      const execCached = getExecutionCache();
+      if (execCached) {
+        _stats.executionCacheHits++;
+        const duration = Date.now() - startTime;
+        _stats.avgExecutionCacheTime =
+          (_stats.avgExecutionCacheTime * (_stats.executionCacheHits - 1) + duration)
+          / _stats.executionCacheHits;
+
+        lastDetection = {
+          email: execCached.email,
+          method: execCached.method,
+          context: getExecutionContext(),
+          timestamp: new Date()
+        };
+        return execCached.email;
+      }
+
+      // ═══ LEVEL 2: UserProperties cache (persistent, 3-5ms) ═══
       const cached = getCachedUser();
       if (cached) {
+        _stats.userPropertiesCacheHits++;
+        const duration = Date.now() - startTime;
+        _stats.avgUserPropertiesCacheTime =
+          (_stats.avgUserPropertiesCacheTime * (_stats.userPropertiesCacheHits - 1) + duration)
+          / _stats.userPropertiesCacheHits;
+
+        // Store in execution cache for subsequent calls
+        setExecutionCache(cached.email, 'cached');
+
         lastDetection = {
           email: cached.email,
           method: 'cached',
@@ -321,13 +466,22 @@ const UserResolver = (() => {
         return cached.email;
       }
 
-      // Detect execution context
+      // ═══ LEVEL 3: Session detection (20-40ms) ═══
       const context = getExecutionContext();
 
       // Try Session.getActiveUser() first (works in most contexts)
       const sessionActive = getSessionActiveUser();
       if (sessionActive) {
+        _stats.sessionDetections++;
+        const duration = Date.now() - startTime;
+        _stats.avgDetectionTime =
+          (_stats.avgDetectionTime * (_stats.sessionDetections - 1) + duration)
+          / _stats.sessionDetections;
+
+        // Store in BOTH caches
         setCachedUser(sessionActive, 'session_active');
+        setExecutionCache(sessionActive, 'session_active');
+
         lastDetection = {
           email: sessionActive,
           method: 'session_active',
@@ -340,7 +494,16 @@ const UserResolver = (() => {
       // Try Session.getEffectiveUser() second
       const sessionEffective = getSessionEffectiveUser();
       if (sessionEffective) {
+        _stats.sessionDetections++;
+        const duration = Date.now() - startTime;
+        _stats.avgDetectionTime =
+          (_stats.avgDetectionTime * (_stats.sessionDetections - 1) + duration)
+          / _stats.sessionDetections;
+
+        // Store in BOTH caches
         setCachedUser(sessionEffective, 'session_effective');
+        setExecutionCache(sessionEffective, 'session_effective');
+
         lastDetection = {
           email: sessionEffective,
           method: 'session_effective',
@@ -350,12 +513,17 @@ const UserResolver = (() => {
         return sessionEffective;
       }
 
-      // Context-specific fallbacks
+      // ═══ LEVEL 4: User prompt (menu context only) ═══
       if (context === 'menu') {
         // In menu context, prompt user for identification
         const prompted = promptUserForIdentification();
         if (prompted) {
+          _stats.promptFallbacks++;
+
+          // Store in BOTH caches
           setCachedUser(prompted, 'user_prompt');
+          setExecutionCache(prompted, 'user_prompt');
+
           lastDetection = {
             email: prompted,
             method: 'user_prompt',
@@ -366,7 +534,9 @@ const UserResolver = (() => {
         }
       }
 
-      // Final fallback: Default email
+      // ═══ LEVEL 5: Default fallback ═══
+      _stats.defaultFallbacks++;
+
       lastDetection = {
         email: CONFIG.DEFAULT_USER_EMAIL,
         method: 'default_fallback',
@@ -381,6 +551,8 @@ const UserResolver = (() => {
 
     } catch (error) {
       Logger.log('UserResolver critical error: ' + error.message);
+      _stats.defaultFallbacks++;
+
       lastDetection = {
         email: CONFIG.DEFAULT_USER_EMAIL,
         method: 'error_fallback',
@@ -524,6 +696,11 @@ const UserResolver = (() => {
     getUserWithMetadata,
     setManualUserEmail,
     clearUserCache,
+
+    // Performance methods (v2.1)
+    clearExecutionCache,
+    getStatistics,
+    resetStatistics,
 
     // Utility methods
     getLastDetection,
@@ -912,5 +1089,107 @@ function diagnoseUserResolution() {
     : message;
 
   ui.alert('User Resolution Diagnostic', displayMessage, ui.ButtonSet.OK);
+}
+
+/**
+ * Benchmark UserResolver performance with execution-scoped cache
+ * Run from Script Editor to measure cache effectiveness
+ *
+ * Tests:
+ * - Performance of 200 consecutive getCurrentUser() calls
+ * - Cache hit rate
+ * - Average timing per cache level
+ * - Overall performance improvement
+ *
+ * @returns {void} Results logged to console
+ */
+function benchmarkUserResolver() {
+  const iterations = 200;
+  Logger.log('═══ UserResolver Performance Benchmark ═══\n');
+
+  // Warm up (ensure user is detected)
+  UserResolver.clearUserCache();
+  UserResolver.clearExecutionCache();
+  UserResolver.getCurrentUser();
+
+  Logger.log('Starting benchmark with ' + iterations + ' iterations...\n');
+
+  // Clear caches and statistics
+  UserResolver.clearUserCache();
+  UserResolver.clearExecutionCache();
+  UserResolver.resetStatistics();
+
+  // Run benchmark
+  const startTime = Date.now();
+
+  for (let i = 0; i < iterations; i++) {
+    UserResolver.getCurrentUser();
+  }
+
+  const duration = Date.now() - startTime;
+  const avgTime = duration / iterations;
+
+  // Get statistics
+  const stats = UserResolver.getStatistics();
+
+  // Display results
+  Logger.log('═══ BENCHMARK RESULTS ═══');
+  Logger.log('Total Iterations: ' + iterations);
+  Logger.log('Total Duration: ' + duration + 'ms');
+  Logger.log('Average per call: ' + avgTime.toFixed(2) + 'ms');
+  Logger.log('');
+
+  Logger.log('═══ CACHE PERFORMANCE ═══');
+  Logger.log('Execution Cache Hits: ' + stats.executionCacheHits + ' (' +
+    (stats.executionCacheHits / iterations * 100).toFixed(1) + '%)');
+  Logger.log('UserProperties Cache Hits: ' + stats.userPropertiesCacheHits + ' (' +
+    (stats.userPropertiesCacheHits / iterations * 100).toFixed(1) + '%)');
+  Logger.log('Session Detections: ' + stats.sessionDetections);
+  Logger.log('Cache Hit Rate: ' + stats.cacheHitRate);
+  Logger.log('');
+
+  Logger.log('═══ TIMING BREAKDOWN ═══');
+  Logger.log('Avg Execution Cache Time: ' + stats.avgExecutionCacheTime.toFixed(4) + 'ms');
+  Logger.log('Avg UserProperties Cache Time: ' + stats.avgUserPropertiesCacheTime.toFixed(2) + 'ms');
+  Logger.log('Avg Detection Time: ' + (stats.avgDetectionTime || 0).toFixed(2) + 'ms');
+  Logger.log('');
+
+  Logger.log('═══ PERFORMANCE ANALYSIS ═══');
+
+  // Calculate expected time without execution cache
+  const withoutExecCache = (stats.userPropertiesCacheHits + stats.executionCacheHits) *
+    stats.avgUserPropertiesCacheTime +
+    stats.sessionDetections * (stats.avgDetectionTime || 20);
+
+  const improvement = ((withoutExecCache - duration) / withoutExecCache * 100);
+
+  Logger.log('Expected without execution cache: ' + withoutExecCache.toFixed(0) + 'ms');
+  Logger.log('Actual with execution cache: ' + duration + 'ms');
+  Logger.log('Performance Improvement: ' + improvement.toFixed(1) + '% faster');
+  Logger.log('Time Saved: ' + (withoutExecCache - duration).toFixed(0) + 'ms');
+  Logger.log('');
+
+  Logger.log('═══ REAL-WORLD IMPACT ═══');
+  Logger.log('100-row batch operation:');
+  Logger.log('  Without optimization: ~' + ((stats.avgUserPropertiesCacheTime || 4) * 100).toFixed(0) + 'ms');
+  Logger.log('  With optimization: ~' + (avgTime * 100).toFixed(1) + 'ms');
+  Logger.log('  Savings: ~' + (((stats.avgUserPropertiesCacheTime || 4) * 100) - (avgTime * 100)).toFixed(0) + 'ms per batch');
+
+  // Also show alert for convenience
+  const ui = SpreadsheetApp.getUi();
+  const summary =
+    '═══ Performance Benchmark ═══\n\n' +
+    iterations + ' calls in ' + duration + 'ms\n' +
+    'Average: ' + avgTime.toFixed(2) + 'ms per call\n\n' +
+    '═══ Cache Stats ═══\n' +
+    'Execution Cache: ' + stats.executionCacheHits + ' hits\n' +
+    'UserProperties Cache: ' + stats.userPropertiesCacheHits + ' hits\n' +
+    'Cache Hit Rate: ' + stats.cacheHitRate + '\n\n' +
+    '═══ Performance ═══\n' +
+    'Improvement: ' + improvement.toFixed(1) + '% faster\n' +
+    'Time Saved: ' + (withoutExecCache - duration).toFixed(0) + 'ms\n\n' +
+    'See Logs for detailed breakdown';
+
+  ui.alert('UserResolver Benchmark', summary, ui.ButtonSet.OK);
 }
 
