@@ -222,6 +222,30 @@ function validateDailySheet(sheet) {
 }
 
 /**
+ * Calculate dynamic progress update interval based on total rows
+ * Aims for ~10 progress updates regardless of batch size
+ *
+ * Strategy:
+ * - Small batches (1-50 rows): Update every 5 rows
+ * - Medium batches (51-100 rows): Update every 10 rows
+ * - Large batches (101-500 rows): Update every 50 rows
+ * - Extra large (500+ rows): Update every 100 rows
+ *
+ * @param {number} totalRows - Total number of rows to process
+ * @return {number} Interval for progress updates (how often to show toast)
+ */
+function calculateProgressInterval(totalRows) {
+  // Aim for approximately 10 updates, with min=5 and max=100
+  // Formula: interval = max(5, min(100, ceil(totalRows / 10)))
+  const targetUpdates = 10;
+  const minInterval = 5;
+  const maxInterval = 100;
+
+  const calculatedInterval = Math.ceil(totalRows / targetUpdates);
+  return Math.max(minInterval, Math.min(maxInterval, calculatedInterval));
+}
+
+/**
  * Validates rows in the specified sheet
  *
  * @param {Sheet} sheet - The sheet to validate
@@ -263,6 +287,13 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
+  // ═══ UX FEEDBACK: Show initial toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Starting validation of ${numRows} rows...`,
+    'Validating',
+    3
+  );
+
   const results = {
     total: numRows,
     valid: 0,
@@ -276,10 +307,22 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
     const allData = dataRange.getValues();
 
+    // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
+    const progressInterval = calculateProgressInterval(numRows);
+
     // Validate each row
     for (let i = 0; i < allData.length; i++) {
       const rowNum = startRow + i;
       const rowData = allData[i];
+
+      // ═══ UX FEEDBACK: Dynamic progress toast ═══
+      if ((i + 1) % progressInterval === 0) {
+        SpreadsheetApp.getActiveSpreadsheet().toast(
+          `Validated ${i + 1} of ${numRows} rows...`,
+          'Progress',
+          2
+        );
+      }
 
       // Skip empty rows (no supplier)
       if (!rowData[CONFIG.cols.supplier]) {
@@ -420,13 +463,16 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   // ═══ BATCH OPTIMIZATION: Collect suppliers for cache invalidation ═══
   const suppliersToInvalidate = new Set();
 
+  // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
+  const progressInterval = calculateProgressInterval(numRows);
+
   // Process each row
   for (let i = 0; i < allData.length; i++) {
     const rowNum = startRow + i;
     const rowData = allData[i];
 
-    // ═══ UX FEEDBACK: Progress toast every 25 rows ═══
-    if ((i + 1) % 25 === 0) {
+    // ═══ UX FEEDBACK: Dynamic progress toast ═══
+    if ((i + 1) % progressInterval === 0) {
       SpreadsheetApp.getActiveSpreadsheet().toast(
         `Processed ${i + 1} of ${numRows} rows...`,
         'Progress',
