@@ -187,7 +187,7 @@ function onEditInstallable(e) {
             paymentType,
             prevInvoice: rowValues[configCols.prevInvoice],
             notes: rowValues[configCols.notes],
-            enteredBy: UserResolver.getCurrentUser(),  // UserResolver v2.0
+            enteredBy: UserResolver.getCurrentUser(),  // UserResolver v2.1 - Get once, reuse
             timestamp: now,
             sysId: rowValues[configCols.sysId] || IDGenerator.generateUUID()
           };
@@ -239,8 +239,8 @@ function onEditInstallable(e) {
           }
 
           try {
-            // Pass pre-read data and date to avoid redundant reads
-            processPostedRowWithLock(sheet, row, rowValues, invoiceDate);
+            // Pass pre-read data, date, and enteredBy to avoid redundant reads
+            processPostedRowWithLock(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
           } finally {
             LockManager.releaseLock(lock);
           }
@@ -342,8 +342,9 @@ function onEditInstallable(e) {
  * @param {number} rowNum - Row number
  * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
  * @param {Date} invoiceDate - Invoice date (optional, will read from sheet if not provided)
+ * @param {string} enteredBy - User email (optional, will detect if not provided)
  */
-function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = null) {
+function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = null, enteredBy = null) {
   const cols = CONFIG.cols;
   const totalCols = CONFIG.totalColumns.daily;
   const colors = CONFIG.colors;
@@ -368,7 +369,9 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 
     // Use provided date or fallback to reading from sheet
     const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
-    const enteredBy = UserResolver.getCurrentUser();  // UserResolver v2.0
+
+    // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
+    const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
 
     // Build transaction context object
     const data = {
@@ -382,7 +385,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       paymentType,
       prevInvoice,
       notes: rowData[cols.notes],
-      enteredBy,
+      enteredBy: finalEnteredBy,
       timestamp: now,
       sysId
     };
@@ -441,7 +444,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 
     // ═══ 6. BATCHED WRITES (Minimize API calls) ═══
     // Write 1: Status columns (J-M: post, status, enteredBy, timestamp)
-    const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(enteredBy), timeStr]];
+    const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(finalEnteredBy), timeStr]];
     sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
 
     // Write 2: System ID if missing (N)

@@ -312,6 +312,9 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
     const progressInterval = calculateProgressInterval(numRows);
 
+    // ═══ PHASE 2 OPTIMIZATION: Get user once before loop ═══
+    const enteredBy = UserResolver.getCurrentUser();
+
     // Validate each row
     for (let i = 0; i < allData.length; i++) {
       const rowNum = startRow + i;
@@ -333,8 +336,8 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
       }
 
       try {
-        // Build validation data object
-        const data = buildDataObject(rowData, rowNum, sheetName);
+        // Build validation data object (pass enteredBy to avoid redundant calls)
+        const data = buildDataObject(rowData, rowNum, sheetName, enteredBy);
 
         // Validate
         const validation = validatePostData(data);
@@ -468,6 +471,9 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
   const progressInterval = calculateProgressInterval(numRows);
 
+  // ═══ PHASE 2 OPTIMIZATION: Get user once before loop ═══
+  const enteredBy = UserResolver.getCurrentUser();
+
   // Process each row
   for (let i = 0; i < allData.length; i++) {
     const rowNum = startRow + i;
@@ -496,8 +502,8 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
     }
 
     try {
-      // Build data object
-      const data = buildDataObject(rowData, rowNum, sheetName);
+      // Build data object (pass enteredBy to avoid redundant calls)
+      const data = buildDataObject(rowData, rowNum, sheetName, enteredBy);
 
       // Validate first
       const validation = validatePostData(data);
@@ -644,11 +650,15 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
  * @param {Array} rowData - Array of cell values
  * @param {number} rowNum - Row number
  * @param {string} sheetName - Sheet name
+ * @param {string} enteredBy - User email (optional, Phase 2 optimization - will detect if not provided)
  * @return {Object} Data object with invoiceDate field
  */
-function buildDataObject(rowData, rowNum, sheetName) {
+function buildDataObject(rowData, rowNum, sheetName, enteredBy = null) {
   // Get invoice date from daily sheet (cell A3) or construct from sheet name
   const invoiceDate = getDailySheetDate(sheetName) || new Date();
+
+  // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
+  const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
 
   return {
     supplier: rowData[CONFIG.cols.supplier],
@@ -660,8 +670,8 @@ function buildDataObject(rowData, rowNum, sheetName) {
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
     invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
-    enteredBy: UserResolver.getCurrentUser(),  // ✅ FIXED: Store full email for audit trail (split only for display)
-    timestamp: new Date(),     // Current processing time (for audit trail)
+    enteredBy: finalEnteredBy, // Phase 2: Use parameter or detect
+    timestamp: new Date(),       // Current processing time (for audit trail)
     rowNum: rowNum,
     sheetName: sheetName
   };
