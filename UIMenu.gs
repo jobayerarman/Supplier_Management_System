@@ -31,7 +31,9 @@ function onOpen() {
     .addSubMenu(ui.createMenu('👤 User Settings')
       .addItem('Set My Email', 'menuSetMyEmail')
       .addItem('Show User Info', 'menuShowUserInfo')
-      .addItem('Clear User Cache', 'menuClearUserCache'))
+      .addItem('Clear User Cache', 'menuClearUserCache')
+      .addSeparator()
+      .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
     .addToUi();
 }
 
