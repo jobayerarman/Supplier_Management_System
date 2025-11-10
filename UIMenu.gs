@@ -472,7 +472,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
           sheet,
           rowNum,
           `ERROR: ${errorMsg.substring(0, 100)}`,
-          data.enteredBy.split("@")[0],  // Display username only in sheet
+          UserResolver.extractUsername(data.enteredBy),  // Display username only
           data.timestamp,
           false,
           CONFIG.colors.error
@@ -509,7 +509,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         'POSTED',
-        data.enteredBy.split("@")[0],  // Display username only in sheet
+        UserResolver.extractUsername(data.enteredBy),  // Display username only
         data.timestamp,
         true,
         CONFIG.colors.success
@@ -538,7 +538,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        UserResolver.getCurrentUser().split("@")[0],
+        UserResolver.getUsernameOnly(),  // Get current user and extract username
         new Date(),
         false,
         CONFIG.colors.error

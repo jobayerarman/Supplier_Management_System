@@ -441,7 +441,7 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
 
     // ═══ 6. BATCHED WRITES (Minimize API calls) ═══
     // Write 1: Status columns (J-M: post, status, enteredBy, timestamp)
-    const statusUpdates = [[true, "POSTED", enteredBy.split("@")[0], timeStr]];
+    const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(enteredBy), timeStr]];
     sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
 
     // Write 2: System ID if missing (N)

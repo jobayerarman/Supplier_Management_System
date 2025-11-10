@@ -37,38 +37,48 @@ const UserResolver = (() => {
   };
 
   /**
-   * Detect execution context
+   * Detect execution context using authorization mode
+   * Uses authMode as primary detection method for reliability
    * @returns {string} Context type: 'menu', 'trigger_installable', 'trigger_simple', 'direct'
    */
   function getExecutionContext() {
     try {
-      // Check if running in a trigger by examining authorization mode
-      const authMode = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL).getAuthorizationStatus();
+      // Primary detection: Check authorization mode
+      const authInfo = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+      const authStatus = authInfo.getAuthorizationStatus();
 
-      // Try to access UI - only works in menu/direct execution, not triggers
-      try {
-        const ui = SpreadsheetApp.getUi();
-        // If we get here, it's either menu or direct execution
-        // Differentiate by checking if there's an active user
-        const user = Session.getActiveUser();
-        if (user && user.getEmail()) {
-          return 'menu'; // Menu items always have active user
-        }
-        return 'direct'; // Direct execution from script editor
-      } catch (e) {
-        // UI not available - must be trigger context
-        // Check if Session.getActiveUser() works (installable trigger)
-        try {
-          const user = Session.getActiveUser();
-          if (user && user.getEmail()) {
-            return 'trigger_installable';
-          }
-        } catch (triggerError) {
-          // Session not available - simple trigger
-        }
+      // If authorization required, it's a simple trigger (limited permissions)
+      if (authStatus === ScriptApp.AuthorizationStatus.REQUIRED) {
         return 'trigger_simple';
       }
+
+      // Authorization not required - could be installable trigger, menu, or direct
+      // Differentiate by checking UI availability and Session access
+      try {
+        const ui = SpreadsheetApp.getUi();
+        // UI available - either menu or direct execution
+
+        // Check if there's an active user with email
+        try {
+          const user = Session.getActiveUser();
+          const email = user ? user.getEmail() : null;
+          if (email && email.trim().length > 0) {
+            return 'menu'; // Menu context - has UI and active user
+          }
+        } catch (sessionError) {
+          // Session might fail even with UI - treat as direct
+        }
+
+        return 'direct'; // Has UI but no active user - direct execution from editor
+
+      } catch (uiError) {
+        // UI not available - must be trigger context
+        // Since authStatus is NOT_REQUIRED, it's an installable trigger
+        return 'trigger_installable';
+      }
+
     } catch (error) {
+      Logger.log('UserResolver getExecutionContext error: ' + error.message);
       return 'unknown';
     }
   }
@@ -88,6 +98,7 @@ const UserResolver = (() => {
 
   /**
    * Get cached user email from UserProperties
+   * Validates session token to prevent wrong user attribution in multi-user environments
    * @returns {Object|null} Cached user object or null if expired/not found
    */
   function getCachedUser() {
@@ -96,12 +107,30 @@ const UserResolver = (() => {
       const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
       const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
       const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
       const cachedEmail = userProps.getProperty(cacheKey);
       const cachedTime = userProps.getProperty(cacheTimeKey);
       const cachedMethod = userProps.getProperty(cacheMethodKey);
+      const cachedSessionToken = userProps.getProperty(cacheSessionKey);
 
       if (!cachedEmail || !cachedTime) return null;
+
+      // Validate session token to prevent cache poisoning
+      // Session.getTemporaryActiveUserKey() returns unique session identifier
+      try {
+        const currentSessionToken = Session.getTemporaryActiveUserKey();
+        if (currentSessionToken && cachedSessionToken && currentSessionToken !== cachedSessionToken) {
+          // Different session - cached data is from different user
+          Logger.log('UserResolver: Session mismatch detected, clearing cache');
+          clearCachedUser();
+          return null;
+        }
+      } catch (sessionError) {
+        // Session.getTemporaryActiveUserKey() may fail in some contexts
+        // In this case, rely on TTL-based expiration only
+        Logger.log('UserResolver: Session validation unavailable, using TTL only');
+      }
 
       // Check if cache is still valid (within TTL)
       const cacheAge = Date.now() - parseInt(cachedTime, 10);
@@ -122,7 +151,7 @@ const UserResolver = (() => {
   }
 
   /**
-   * Cache user email in UserProperties
+   * Cache user email in UserProperties with session token validation
    * @param {string} email - Email to cache
    * @param {string} method - Detection method used
    */
@@ -132,12 +161,26 @@ const UserResolver = (() => {
       const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
       const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
       const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
-      userProps.setProperties({
+      const cacheData = {
         [cacheKey]: email,
         [cacheTimeKey]: Date.now().toString(),
         [cacheMethodKey]: method
-      });
+      };
+
+      // Store session token if available (for validation on cache reads)
+      try {
+        const sessionToken = Session.getTemporaryActiveUserKey();
+        if (sessionToken) {
+          cacheData[cacheSessionKey] = sessionToken;
+        }
+      } catch (sessionError) {
+        // Session token unavailable - cache will rely on TTL only
+        Logger.log('UserResolver: Session token unavailable for cache write');
+      }
+
+      userProps.setProperties(cacheData);
     } catch (error) {
       // Cache failure is non-fatal
       Logger.log('UserResolver cache write failed: ' + error.message);
@@ -145,7 +188,7 @@ const UserResolver = (() => {
   }
 
   /**
-   * Clear cached user data
+   * Clear cached user data including session token
    */
   function clearCachedUser() {
     try {
@@ -153,10 +196,12 @@ const UserResolver = (() => {
       const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
       const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
       const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
       userProps.deleteProperty(cacheKey);
       userProps.deleteProperty(cacheTimeKey);
       userProps.deleteProperty(cacheMethodKey);
+      userProps.deleteProperty(cacheSessionKey);
     } catch (error) {
       // Non-fatal
     }
@@ -347,6 +392,32 @@ const UserResolver = (() => {
   }
 
   /**
+   * Extract username from email address (without domain)
+   * Useful when you already have an email and want just the username
+   * Example: "john.doe@company.com" → "john.doe"
+   *
+   * @param {string} email - Full email address
+   * @returns {string} Username portion of email (before @)
+   */
+  function extractUsername(email) {
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      return email; // Return as-is if no @ found
+    }
+    return email.split('@')[0];
+  }
+
+  /**
+   * Get current user's username only (without domain)
+   * Convenience method that gets current user and extracts username
+   * Example: "john.doe@company.com" → "john.doe"
+   *
+   * @returns {string} Username portion of current user's email
+   */
+  function getUsernameOnly() {
+    return extractUsername(getCurrentUser());
+  }
+
+  /**
    * Get current user with detection metadata (for debugging)
    * Returns full detection information including method and context
    *
@@ -448,6 +519,8 @@ const UserResolver = (() => {
   return {
     // Core methods
     getCurrentUser,
+    getUsernameOnly,
+    extractUsername,
     getUserWithMetadata,
     setManualUserEmail,
     clearUserCache,
