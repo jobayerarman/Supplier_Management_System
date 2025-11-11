@@ -807,6 +807,16 @@ function normalizeString(str) {
 
 /**
  * Get current user email with reliable fallback
+ *
+ * @deprecated Since UserResolver v2.0 - Use UserResolver.getCurrentUser() directly
+ * This wrapper is kept for backward compatibility with external scripts.
+ *
+ * Delegates to UserResolver v2.0 which provides:
+ * - Context-aware fallback chains (menu vs trigger)
+ * - Session caching (1-hour TTL)
+ * - User prompt fallback (menu context)
+ * - Detection metadata for debugging
+ *
  * @returns {string} User email address
  */
 function getCurrentUserEmail() {

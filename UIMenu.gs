@@ -27,6 +27,13 @@ function onOpen() {
     .addItem('Post Selected Rows', 'batchPostSelectedRows')
     .addSeparator()
     .addItem('Clear All Post Checkboxes', 'clearAllPostCheckboxes')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('👤 User Settings')
+      .addItem('Set My Email', 'menuSetMyEmail')
+      .addItem('Show User Info', 'menuShowUserInfo')
+      .addItem('Clear User Cache', 'menuClearUserCache')
+      .addSeparator()
+      .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
     .addToUi();
 }
 
@@ -217,6 +224,30 @@ function validateDailySheet(sheet) {
 }
 
 /**
+ * Calculate dynamic progress update interval based on total rows
+ * Aims for ~10 progress updates regardless of batch size
+ *
+ * Strategy:
+ * - Small batches (1-50 rows): Update every 5 rows
+ * - Medium batches (51-100 rows): Update every 10 rows
+ * - Large batches (101-500 rows): Update every 50 rows
+ * - Extra large (500+ rows): Update every 100 rows
+ *
+ * @param {number} totalRows - Total number of rows to process
+ * @return {number} Interval for progress updates (how often to show toast)
+ */
+function calculateProgressInterval(totalRows) {
+  // Aim for approximately 10 updates, with min=5 and max=100
+  // Formula: interval = max(5, min(100, ceil(totalRows / 10)))
+  const targetUpdates = 10;
+  const minInterval = 5;
+  const maxInterval = 100;
+
+  const calculatedInterval = Math.ceil(totalRows / targetUpdates);
+  return Math.max(minInterval, Math.min(maxInterval, calculatedInterval));
+}
+
+/**
  * Validates rows in the specified sheet
  *
  * @param {Sheet} sheet - The sheet to validate
@@ -258,6 +289,13 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
 
   const numRows = endRow - startRow + 1;
 
+  // ═══ UX FEEDBACK: Show initial toast ═══
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    `Starting validation of ${numRows} rows...`,
+    'Validating',
+    3
+  );
+
   const results = {
     total: numRows,
     valid: 0,
@@ -271,10 +309,25 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
     const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
     const allData = dataRange.getValues();
 
+    // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
+    const progressInterval = calculateProgressInterval(numRows);
+
+    // ═══ PHASE 2 OPTIMIZATION: Get user once before loop ═══
+    const enteredBy = UserResolver.getCurrentUser();
+
     // Validate each row
     for (let i = 0; i < allData.length; i++) {
       const rowNum = startRow + i;
       const rowData = allData[i];
+
+      // ═══ UX FEEDBACK: Dynamic progress toast ═══
+      if ((i + 1) % progressInterval === 0) {
+        SpreadsheetApp.getActiveSpreadsheet().toast(
+          `Validated ${i + 1} of ${numRows} rows...`,
+          'Progress',
+          2
+        );
+      }
 
       // Skip empty rows (no supplier)
       if (!rowData[CONFIG.cols.supplier]) {
@@ -283,8 +336,8 @@ function validateRowsInSheet(sheet, startRow = null, endRow = null) {
       }
 
       try {
-        // Build validation data object
-        const data = buildDataObject(rowData, rowNum, sheetName);
+        // Build validation data object (pass enteredBy to avoid redundant calls)
+        const data = buildDataObject(rowData, rowNum, sheetName, enteredBy);
 
         // Validate
         const validation = validatePostData(data);
@@ -415,13 +468,19 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
   // ═══ BATCH OPTIMIZATION: Collect suppliers for cache invalidation ═══
   const suppliersToInvalidate = new Set();
 
+  // ═══ UX FEEDBACK: Calculate dynamic progress interval ═══
+  const progressInterval = calculateProgressInterval(numRows);
+
+  // ═══ PHASE 2 OPTIMIZATION: Get user once before loop ═══
+  const enteredBy = UserResolver.getCurrentUser();
+
   // Process each row
   for (let i = 0; i < allData.length; i++) {
     const rowNum = startRow + i;
     const rowData = allData[i];
 
-    // ═══ UX FEEDBACK: Progress toast every 25 rows ═══
-    if ((i + 1) % 25 === 0) {
+    // ═══ UX FEEDBACK: Dynamic progress toast ═══
+    if ((i + 1) % progressInterval === 0) {
       SpreadsheetApp.getActiveSpreadsheet().toast(
         `Processed ${i + 1} of ${numRows} rows...`,
         'Progress',
@@ -443,8 +502,8 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
     }
 
     try {
-      // Build data object
-      const data = buildDataObject(rowData, rowNum, sheetName);
+      // Build data object (pass enteredBy to avoid redundant calls)
+      const data = buildDataObject(rowData, rowNum, sheetName, enteredBy);
 
       // Validate first
       const validation = validatePostData(data);
@@ -467,7 +526,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
           sheet,
           rowNum,
           `ERROR: ${errorMsg.substring(0, 100)}`,
-          data.enteredBy,
+          UserResolver.extractUsername(data.enteredBy),  // Display username only
           data.timestamp,
           false,
           CONFIG.colors.error
@@ -504,7 +563,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         'POSTED',
-        data.enteredBy,
+        UserResolver.extractUsername(data.enteredBy),  // Display username only
         data.timestamp,
         true,
         CONFIG.colors.success
@@ -533,7 +592,7 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        UserResolver.getCurrentUser().split("@")[0],
+        UserResolver.getUsernameOnly(),  // Get current user and extract username
         new Date(),
         false,
         CONFIG.colors.error
@@ -591,11 +650,15 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
  * @param {Array} rowData - Array of cell values
  * @param {number} rowNum - Row number
  * @param {string} sheetName - Sheet name
+ * @param {string} enteredBy - User email (optional, Phase 2 optimization - will detect if not provided)
  * @return {Object} Data object with invoiceDate field
  */
-function buildDataObject(rowData, rowNum, sheetName) {
+function buildDataObject(rowData, rowNum, sheetName, enteredBy = null) {
   // Get invoice date from daily sheet (cell A3) or construct from sheet name
   const invoiceDate = getDailySheetDate(sheetName) || new Date();
+
+  // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
+  const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
 
   return {
     supplier: rowData[CONFIG.cols.supplier],
@@ -607,8 +670,8 @@ function buildDataObject(rowData, rowNum, sheetName) {
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
     invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
-    enteredBy: UserResolver.getCurrentUser().split("@")[0],
-    timestamp: new Date(),     // Current processing time (for audit trail)
+    enteredBy: finalEnteredBy, // Phase 2: Use parameter or detect
+    timestamp: new Date(),       // Current processing time (for audit trail)
     rowNum: rowNum,
     sheetName: sheetName
   };
