@@ -615,7 +615,8 @@ const BalanceCalculator = {
       supplier, paymentType, receivedAmt, paymentAmt, prevInvoice
     );
 
-    const note = `${preview.note}\nTime: ${DateUtils.formatDateTime(new Date())}`;
+    // Only set note for warnings/errors, not for normal informational previews
+    const note = preview.note.includes('⚠️') ? preview.note : '';
     const bgColor = preview.note.includes('⚠️')
       ? CONFIG.colors.warning
       : CONFIG.colors.info;

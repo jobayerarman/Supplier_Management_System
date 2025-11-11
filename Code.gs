@@ -577,7 +577,6 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
     if (invoiceBalance > 0) {
       targetCell
         .setValue(invoiceBalance)
-        .setNote(`Outstanding balance of ${prevInvoice}: ${invoiceBalance}/-`)
         .setBackground(null);
       return invoiceBalance;
     } else {
