@@ -670,9 +670,10 @@ const InvoiceManager = {
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
       if (unpaidInvoices.length === 0) {
-        // No unpaid invoices found - show informative message
+        // No unpaid invoices found - show warning message
         targetCell.clearDataValidations()
           .clearContent()
+          .setNote(`No unpaid invoices found for ${supplier}.\n\nThis supplier either has no invoices or all invoices are fully paid.`)
           .setBackground(CONFIG.colors.warning);
 
         return false;
