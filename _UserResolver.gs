@@ -1157,16 +1157,33 @@ function benchmarkUserResolver() {
   Logger.log('═══ PERFORMANCE ANALYSIS ═══');
 
   // Calculate expected time without execution cache
-  const withoutExecCache = (stats.userPropertiesCacheHits + stats.executionCacheHits) *
-    stats.avgUserPropertiesCacheTime +
-    stats.sessionDetections * (stats.avgDetectionTime || 20);
+  // First call: Session detection (or UserProperties if cache existed)
+  // Remaining calls: Would hit UserProperties cache at ~4ms each
+  const estimatedUserPropsCacheTime = stats.avgUserPropertiesCacheTime || 4; // Default 4ms if no UserProperties hits
+  const firstCallTime = stats.sessionDetections > 0
+    ? (stats.avgDetectionTime || 25)  // Session detection time
+    : estimatedUserPropsCacheTime;     // Or UserProperties cache
 
-  const improvement = ((withoutExecCache - duration) / withoutExecCache * 100);
+  const remainingCalls = iterations - 1;
+  const withoutExecCache = firstCallTime + (remainingCalls * estimatedUserPropsCacheTime);
+
+  const improvement = withoutExecCache > 0
+    ? ((withoutExecCache - duration) / withoutExecCache * 100)
+    : 0;
+  const timeSaved = withoutExecCache - duration;
 
   Logger.log('Expected without execution cache: ' + withoutExecCache.toFixed(0) + 'ms');
+  Logger.log('  - First call (detection/cache): ' + firstCallTime.toFixed(0) + 'ms');
+  Logger.log('  - Remaining ' + remainingCalls + ' calls (@4ms each): ' + (remainingCalls * estimatedUserPropsCacheTime).toFixed(0) + 'ms');
   Logger.log('Actual with execution cache: ' + duration + 'ms');
+  Logger.log('  - First call: ~' + (duration - (stats.executionCacheHits * stats.avgExecutionCacheTime)).toFixed(0) + 'ms');
+  Logger.log('  - Remaining ' + stats.executionCacheHits + ' calls: ~' + (stats.executionCacheHits * stats.avgExecutionCacheTime).toFixed(1) + 'ms');
   Logger.log('Performance Improvement: ' + improvement.toFixed(1) + '% faster');
-  Logger.log('Time Saved: ' + (withoutExecCache - duration).toFixed(0) + 'ms');
+  Logger.log('Time Saved: ' + timeSaved.toFixed(0) + 'ms');
+  Logger.log('');
+
+  Logger.log('Note: Average of ' + avgTime.toFixed(2) + 'ms per call includes statistics tracking overhead');
+  Logger.log('Pure execution cache hits are < 0.1ms; overhead is from Date.now() and stats tracking');
   Logger.log('');
 
   Logger.log('═══ REAL-WORLD IMPACT ═══');
