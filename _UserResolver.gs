@@ -1210,3 +1210,100 @@ function benchmarkUserResolver() {
   ui.alert('UserResolver Benchmark', summary, ui.ButtonSet.OK);
 }
 
+/**
+ * Minimal benchmark to measure true execution cache performance
+ * WITHOUT statistics tracking overhead
+ *
+ * This is a temporary diagnostic function for performance validation.
+ * TODO: Remove before merging to main
+ *
+ * @returns {Object} Benchmark results
+ */
+function benchmarkUserResolverMinimal() {
+  Logger.log('═══ Minimal UserResolver Benchmark (No Statistics) ═══');
+  Logger.log('Testing execution cache benefit without overhead from statistics tracking\n');
+
+  const iterations = 200;
+
+  // ═══ TEST 1: WITH execution cache (normal operation) ═══
+  Logger.log('TEST 1: Measuring WITH execution cache...');
+  UserResolver.clearExecutionCache();
+  UserResolver.clearUserCache();
+
+  const startWith = Date.now();
+  for (let i = 0; i < iterations; i++) {
+    UserResolver.getCurrentUser();
+  }
+  const durationWith = Date.now() - startWith;
+  const avgWith = durationWith / iterations;
+
+  Logger.log('  Duration: ' + durationWith + 'ms');
+  Logger.log('  Average: ' + avgWith.toFixed(2) + 'ms per call\n');
+
+  // ═══ TEST 2: WITHOUT execution cache (clearing after each call) ═══
+  Logger.log('TEST 2: Measuring WITHOUT execution cache (simulated)...');
+  UserResolver.clearExecutionCache();
+  // Keep UserProperties cache to simulate realistic scenario
+
+  const startWithout = Date.now();
+  for (let i = 0; i < iterations; i++) {
+    UserResolver.getCurrentUser();
+    // Clear execution cache after each call (except last)
+    // This forces next call to hit UserProperties cache
+    if (i < iterations - 1) {
+      UserResolver.clearExecutionCache();
+    }
+  }
+  const durationWithout = Date.now() - startWithout;
+  const avgWithout = durationWithout / iterations;
+
+  Logger.log('  Duration: ' + durationWithout + 'ms');
+  Logger.log('  Average: ' + avgWithout.toFixed(2) + 'ms per call\n');
+
+  // ═══ CALCULATE IMPROVEMENT ═══
+  const timeSaved = durationWithout - durationWith;
+  const improvement = (timeSaved / durationWithout * 100);
+
+  Logger.log('═══ RESULTS ═══');
+  Logger.log('WITH execution cache: ' + durationWith + 'ms');
+  Logger.log('WITHOUT execution cache: ' + durationWithout + 'ms');
+  Logger.log('Performance Improvement: ' + improvement.toFixed(1) + '% faster');
+  Logger.log('Time Saved: ' + timeSaved + 'ms per ' + iterations + ' calls');
+  Logger.log('');
+
+  Logger.log('═══ PER-CALL BREAKDOWN ═══');
+  Logger.log('WITH exec cache: ' + avgWith.toFixed(2) + 'ms per call');
+  Logger.log('WITHOUT exec cache: ' + avgWithout.toFixed(2) + 'ms per call');
+  Logger.log('Savings per call: ' + (avgWithout - avgWith).toFixed(2) + 'ms');
+  Logger.log('');
+
+  Logger.log('═══ REAL-WORLD IMPACT ═══');
+  Logger.log('100-row batch operation:');
+  Logger.log('  WITHOUT exec cache: ~' + (avgWithout * 100).toFixed(0) + 'ms');
+  Logger.log('  WITH exec cache: ~' + (avgWith * 100).toFixed(0) + 'ms');
+  Logger.log('  Savings: ~' + ((avgWithout - avgWith) * 100).toFixed(0) + 'ms per batch');
+  Logger.log('');
+
+  // Show alert dialog
+  const ui = SpreadsheetApp.getUi();
+  const summary =
+    '═══ Minimal Benchmark Results ═══\n\n' +
+    'WITH exec cache: ' + durationWith + 'ms (' + avgWith.toFixed(2) + 'ms/call)\n' +
+    'WITHOUT exec cache: ' + durationWithout + 'ms (' + avgWithout.toFixed(2) + 'ms/call)\n\n' +
+    '═══ Performance ═══\n' +
+    'Improvement: ' + improvement.toFixed(1) + '% faster\n' +
+    'Time Saved: ' + timeSaved + 'ms per ' + iterations + ' calls\n\n' +
+    '═══ Batch Impact ═══\n' +
+    '100 rows: ~' + ((avgWithout - avgWith) * 100).toFixed(0) + 'ms faster\n\n' +
+    'See Logs for complete breakdown';
+
+  ui.alert('Minimal Benchmark', summary, ui.ButtonSet.OK);
+
+  return {
+    withCache: durationWith,
+    withoutCache: durationWithout,
+    improvement: improvement,
+    timeSaved: timeSaved
+  };
+}
+
