@@ -252,7 +252,7 @@ function onEditInstallable(e) {
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
           if (editedValue && String(editedValue).trim()) {
-            InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
+            InvoiceManager.buildDuePaymentDropdown(sheet, row, editedValue, paymentType);
           }
           updateBalance = false;
         } else {
@@ -272,7 +272,7 @@ function onEditInstallable(e) {
         } else if (paymentType === 'Due') {
           const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
           if (currentSupplier && String(currentSupplier).trim()) {
-            InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
+            InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
           }
           updateBalance = false;
         } else {
@@ -663,7 +663,7 @@ function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
   const supplier = rowData[CONFIG.cols.supplier];
   const paymentType = rowData[CONFIG.cols.paymentType];
 
-  return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+  return InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
 }
 
 /**
