@@ -24,6 +24,42 @@
  */
 const InvoiceManager = {
 
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 1: CONSTANTS & CONFIGURATION
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  CONSTANTS: {
+    // Formula templates (with {row} placeholder for substitution)
+    FORMULA: {
+      TOTAL_PAID: `=IF(C{row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C{row}, PaymentLog!B:B,B{row}),0))`,
+      BALANCE_DUE: `=IF(D{row}="","",D{row}-E{row})`,
+      STATUS: `=IFS(F{row}=0,"Paid",F{row}=D{row},"Unpaid",F{row}<D{row},"Partial")`,
+      DAYS_OUTSTANDING: `=IF(F{row}=0,0,TODAY()-A{row})`,
+    },
+
+    // Invoice status values
+    STATUS: {
+      PAID: 'Paid',
+      UNPAID: 'Unpaid',
+      PARTIAL: 'Partial',
+    },
+
+    // Payment types
+    PAYMENT_TYPE: {
+      DUE: 'Due',
+      REGULAR: 'Regular',
+      PARTIAL: 'Partial',
+    },
+
+    // Balance thresholds and defaults
+    BALANCE_THRESHOLD: 0.01,  // $0.01 threshold for considering invoice fully paid
+    DEFAULT_ORIGIN_DAY: 'IMPORT',  // Default sheet origin for batch imports
+  },
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 2: PUBLIC API - CORE OPERATIONS
+  // ═════════════════════════════════════════════════════════════════════════════
+
   /**
    * OPTIMIZED: InvoiceManager.processOptimized()
    * Returns invoiceId immediately for payment processing
@@ -31,7 +67,7 @@ const InvoiceManager = {
   processOptimized: function(data) {
     try {
       // Skip for Due payments without invoice
-      if (data.paymentType === 'Due' && !data.invoiceNo) {
+      if (data.paymentType === this.CONSTANTS.PAYMENT_TYPE.DUE && !data.invoiceNo) {
         return { success: true, action: 'none', invoiceId: null };
       }
 
@@ -91,28 +127,18 @@ const InvoiceManager = {
       const formattedDate = DateUtils.formatDate(invoiceDate);
       const invoiceId = IDGenerator.generateInvoiceId(sysId);
 
-      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid, F=balanceDue, G=status, H=paidDate, I=daysOutstanding
-      const E = `=IF(C${newRow}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${newRow}, PaymentLog!B:B,B${newRow}),0))`;  // Total Paid
-      const F = `=IF(D${newRow}="","",D${newRow}-E${newRow})`;  // Balance Due
-      const G = `=IFS(F${newRow}=0,"Paid",F${newRow}=D${newRow},"Unpaid",F${newRow}<D${newRow},"Partial")`;  // Status
-      const I = `=IF(F${newRow}=0,0,TODAY()-A${newRow})`;  // Days Outstanding
-
-      // Build new invoice row WITH formulas included
-      const newRowData = [
-        invoiceDate,      // A - invoiceDate
-        supplier,         // B - supplier
-        invoiceNo,        // C - invoiceNo
-        receivedAmt,      // D - totalAmount
-        E,                // E - totalPaid (formula)
-        F,                // F - balanceDue (formula)
-        G,                // G - status (formula)
-        '',               // H - paidDate
-        I,                // I - daysOutstanding (formula)
-        sheetName,        // J - originDay
-        data.enteredBy || UserResolver.getCurrentUser(),  // K - enteredBy (NEW)
-        timestamp,        // L - timestamp
-        invoiceId         // M - sysId
-      ];
+      // Build new invoice row WITH formulas included (using helper function)
+      const newRowData = this._buildInvoiceRowData({
+        invoiceDate: invoiceDate,
+        supplier: supplier,
+        invoiceNo: invoiceNo,
+        receivedAmt: receivedAmt,
+        rowNum: newRow,
+        sheetName: sheetName,
+        enteredBy: data.enteredBy || UserResolver.getCurrentUser(),
+        timestamp: timestamp,
+        invoiceId: invoiceId,
+      });
 
       // ═══ WRITE TO SHEET ═══
       invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
@@ -185,7 +211,60 @@ const InvoiceManager = {
     }
   },
 
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 3: INTERNAL HELPERS - DATA BUILDING
+  // ═════════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Build invoice formulas for a specific row
+   * Replaces {row} placeholder with actual row number in formula templates
+   *
+   * @param {number} rowNum - Row number to generate formulas for
+   * @returns {Object} Object with formula properties (totalPaid, balanceDue, status, daysOutstanding)
+   */
+  _buildInvoiceFormulas: function(rowNum) {
+    return {
+      totalPaid: this.CONSTANTS.FORMULA.TOTAL_PAID.replace(/{row}/g, rowNum),
+      balanceDue: this.CONSTANTS.FORMULA.BALANCE_DUE.replace(/{row}/g, rowNum),
+      status: this.CONSTANTS.FORMULA.STATUS.replace(/{row}/g, rowNum),
+      daysOutstanding: this.CONSTANTS.FORMULA.DAYS_OUTSTANDING.replace(/{row}/g, rowNum),
+    };
+  },
+
+  /**
+   * Build complete invoice row data array
+   * Creates the full row of data and formulas for insertion into InvoiceDatabase
+   *
+   * @param {Object} invoice - Invoice data object with properties:
+   *   - invoiceDate: Invoice date
+   *   - supplier: Supplier name
+   *   - invoiceNo: Invoice number
+   *   - receivedAmt: Received amount
+   *   - rowNum: Target row number (for formula generation)
+   *   - sheetName: Origin sheet name
+   *   - enteredBy: User who entered the invoice
+   *   - timestamp: Timestamp of entry
+   *   - invoiceId: Invoice system ID
+   * @returns {Array} Complete row array for setValues()
+   */
+  _buildInvoiceRowData: function(invoice) {
+    const formulas = this._buildInvoiceFormulas(invoice.rowNum);
+    return [
+      invoice.invoiceDate,                                    // A - invoiceDate
+      invoice.supplier,                                       // B - supplier
+      invoice.invoiceNo,                                      // C - invoiceNo
+      invoice.receivedAmt,                                    // D - totalAmount
+      formulas.totalPaid,                                     // E - totalPaid (formula)
+      formulas.balanceDue,                                    // F - balanceDue (formula)
+      formulas.status,                                        // G - status (formula)
+      '',                                                      // H - paidDate (empty at creation)
+      formulas.daysOutstanding,                               // I - daysOutstanding (formula)
+      invoice.sheetName,                                      // J - originDay
+      invoice.enteredBy,                                      // K - enteredBy
+      invoice.timestamp,                                      // L - timestamp
+      invoice.invoiceId,                                      // M - sysId
+    ];
+  },
 
   /**
    * Set formulas for an invoice row in a non-destructive way.
@@ -327,7 +406,7 @@ const InvoiceManager = {
           const balanceDue = totalAmount - totalPaid;
 
           // Active partition contains unpaid/partial by definition
-          if (balanceDue > 0.01) {
+          if (balanceDue > this.CONSTANTS.BALANCE_THRESHOLD) {
             unpaidInvoices.push({
               invoiceNo,
               rowIndex: i,
@@ -468,8 +547,8 @@ const InvoiceManager = {
         const status = row[col.status];
         const balanceDue = Number(row[col.balanceDue]) || 0;
 
-        if (StringUtils.equals(status, 'Unpaid')) unpaid++;
-        else if (StringUtils.equals(status, 'Partial')) partial++;
+        if (StringUtils.equals(status, this.CONSTANTS.STATUS.UNPAID)) unpaid++;
+        else if (StringUtils.equals(status, this.CONSTANTS.STATUS.PARTIAL)) partial++;
 
         totalOutstanding += balanceDue;
       }
@@ -514,7 +593,7 @@ const InvoiceManager = {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
     // Clear dropdown if not "Due" or missing supplier
-    if (paymentType !== "Due" || StringUtils.isEmpty(supplier)) {
+    if (paymentType !== this.CONSTANTS.PAYMENT_TYPE.DUE || StringUtils.isEmpty(supplier)) {
       try {
         targetCell.clearDataValidations().clearNote().clearContent().setBackground(null);
       } catch (e) {
@@ -668,23 +747,20 @@ const InvoiceManager = {
           }
 
           const invoiceDate = data.invoiceDate || data.timestamp;
+          const invoiceId = IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID());
 
-          // Build the full row with data and formulas
-          const newInvoiceRow = [
-            invoiceDate,                                                                                                                                    // A - invoiceDate
-            data.supplier,                                                                                                                                  // B - supplier
-            data.invoiceNo,                                                                                                                                 // C - invoiceNo
-            data.receivedAmt,                                                                                                                               // D - totalAmount
-            `=IF(C${currentRowNum}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${currentRowNum}, PaymentLog!B:B,B${currentRowNum}),0))`,           // E - totalPaid (formula)
-            `=IF(D${currentRowNum}="","", D${currentRowNum} - E${currentRowNum})`,                                                                          // F - balanceDue (formula)
-            `=IFS(F${currentRowNum}=0,"Paid", F${currentRowNum}=D${currentRowNum},"Unpaid", F${currentRowNum}<D${currentRowNum},"Partial")`,                // G - status (formula)
-            '',                                                                                                                                             // H - paidDate
-            `=IF(F${currentRowNum}=0, 0, TODAY() - A${currentRowNum})`,                                                                                     // I - daysOutstanding (formula)
-            data.sheetName || 'IMPORT',                                                                                                                     // J - originDay
-            data.enteredBy || UserResolver.getCurrentUser(),                                                                                                // K - enteredBy (NEW)
-            data.timestamp,                                                                                                                                 // L - timestamp
-            IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID())                                                                         // M - sysId
-          ];
+          // Build the full row with data and formulas (using helper function)
+          const newInvoiceRow = this._buildInvoiceRowData({
+            invoiceDate: invoiceDate,
+            supplier: data.supplier,
+            invoiceNo: data.invoiceNo,
+            receivedAmt: data.receivedAmt,
+            rowNum: currentRowNum,
+            sheetName: data.sheetName || this.CONSTANTS.DEFAULT_ORIGIN_DAY,
+            enteredBy: data.enteredBy || UserResolver.getCurrentUser(),
+            timestamp: data.timestamp,
+            invoiceId: invoiceId,
+          });
 
           newRowsData.push(newInvoiceRow);
           created++;
