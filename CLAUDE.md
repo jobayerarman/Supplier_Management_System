@@ -785,7 +785,6 @@ When working with this codebase:
 - Find invoice: `findInvoice(supplier, invoiceNo)` - cached O(1) lookup
 - Get unpaid: `getUnpaidForSupplier(supplier)` - for Due payment dropdowns
 - Build dropdown: `buildDuePaymentDropdown(sheet, row, supplier, paymentType)`
-- Batch create: `batchCreateInvoices(invoiceDataArray)` - for bulk imports
 - Repair formulas: `repairAllFormulas()` - maintenance function
 
 ### PaymentManager.gs

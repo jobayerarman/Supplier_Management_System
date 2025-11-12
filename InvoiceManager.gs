@@ -23,7 +23,6 @@
  *    - getInvoiceStatistics(): Invoice summary statistics
  *
  * 3. BATCH & UTILITY OPERATIONS
- *    - batchCreateInvoices(invoiceDataArray): Bulk invoice creation with error tracking
  *    - buildDuePaymentDropdown(sheet, row, supplier, paymentType): UI dropdown for Due payments
  *    - repairAllFormulas(): Maintenance - refresh all invoice formulas
  *    - applyInvoiceFormulas(sheet, row): Apply formula set to specific row
@@ -100,14 +99,6 @@
  * // Get unpaid invoices for payment dropdown
  * const unpaidInvoices = InvoiceManager.getUnpaidForSupplier("Acme Corp");
  * // Returns: [{invoiceNo: "INV-001", balance: 950}, ...]
- *
- * // Batch create multiple invoices
- * const invoices = [
- *   {supplier: "Acme", invoiceNo: "INV-001", receivedAmt: 1000, ...},
- *   {supplier: "Acme", invoiceNo: "INV-002", receivedAmt: 2000, ...}
- * ];
- * const batchResult = InvoiceManager.batchCreateInvoices(invoices);
- * console.log(`Created: ${batchResult.created}, Failed: ${batchResult.failed}`);
  *
  * // Update invoice amount (only writes if amount changed)
  * const updateResult = InvoiceManager.updateInvoiceIfChanged(invoice, {
@@ -494,63 +485,6 @@ const InvoiceManager = {
     ];
   },
 
-  /**
-   * Build batch invoice rows with duplicate checking
-   * Pure function for constructing new invoice rows from data array
-   *
-   * @param {Array} invoiceDataArray - Array of raw invoice data objects
-   * @param {number} startRow - Starting row number for new invoices
-   * @returns {Object} { newRowsData: Array, errors: Array, created: number, failed: number }
-   */
-  _buildBatchInvoiceRows: function(invoiceDataArray, startRow) {
-    const newRowsData = [];
-    const errors = [];
-    let created = 0;
-    let failed = 0;
-
-    // Pre-populate cache to optimize duplicate checking
-    CacheManager.getInvoiceData();
-
-    for (let i = 0; i < invoiceDataArray.length; i++) {
-      const data = invoiceDataArray[i];
-      const currentRowNum = startRow + i;
-
-      try {
-        // Check for duplicates using cached data
-        const exists = this.findInvoice(data.supplier, data.invoiceNo);
-        if (exists) {
-          errors.push(`Row ${i + 1}: Invoice ${data.invoiceNo} for ${data.supplier} already exists.`);
-          failed++;
-          continue;
-        }
-
-        // Build new invoice row with formulas
-        const invoiceDate = data.invoiceDate || data.timestamp;
-        const invoiceId = IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID());
-
-        const newInvoiceRow = this._buildInvoiceRowData({
-          invoiceDate: invoiceDate,
-          supplier: data.supplier,
-          invoiceNo: data.invoiceNo,
-          receivedAmt: data.receivedAmt,
-          rowNum: currentRowNum,
-          sheetName: data.sheetName || this.CONSTANTS.DEFAULT_ORIGIN_DAY,
-          enteredBy: data.enteredBy || UserResolver.getCurrentUser(),
-          timestamp: data.timestamp,
-          invoiceId: invoiceId,
-        });
-
-        newRowsData.push(newInvoiceRow);
-        created++;
-
-      } catch (error) {
-        errors.push(`Row ${i + 1} (${data.invoiceNo}): ${error.message}`);
-        failed++;
-      }
-    }
-
-    return { newRowsData, errors, created, failed };
-  },
 
   // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 6: INTERNAL HELPERS - UTILITIES
@@ -1080,57 +1014,6 @@ const InvoiceManager = {
     }
   },
 
-  /**
-  * Batch create multiple invoices (for bulk import)
-  * NEW: Optimized for mass data entry
-  * 
-  * @param {Array} invoiceDataArray - Array of invoice data objects
-  * @returns {Object} Result summary
-  */
-  batchCreateInvoices: function (invoiceDataArray) {
-    if (!invoiceDataArray || invoiceDataArray.length === 0) {
-      return { success: true, created: 0, failed: 0, errors: [] };
-    }
-
-    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    if (!lock) {
-      return { success: false, error: 'Unable to acquire lock for batch creation' };
-    }
-
-    try {
-      // Get target sheet and determine where new rows will start
-      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-      const lastRow = invoiceSh.getLastRow();
-      const startRow = lastRow + 1;
-
-      // Build all invoice rows with duplicate checking (delegates to helper)
-      const { newRowsData, errors, created, failed } =
-        this._buildBatchInvoiceRows(invoiceDataArray, startRow);
-
-      // Batch write all new rows at once
-      if (newRowsData.length > 0) {
-        invoiceSh.getRange(startRow, 1, newRowsData.length, newRowsData[0].length)
-          .setValues(newRowsData);
-      }
-
-      // Clear cache after all operations are complete
-      CacheManager.invalidate('create');
-
-      return {
-        success: true,
-        created: created,
-        failed: failed,
-        errors: errors,
-        message: `Created ${created} invoice(s), ${failed} failed.`
-      };
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.batchCreateInvoices', error.toString());
-      return { success: false, error: error.toString() };
-    } finally {
-      LockManager.releaseLock(lock);
-    }
-  },
 
   // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 7: RESULT BUILDERS (Immutable Constructors)
