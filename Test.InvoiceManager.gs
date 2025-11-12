@@ -835,10 +835,10 @@ function testSetFormulas() {
     const testSheet = SpreadsheetApp.getActiveSheet();
     const rowNum = 100; // Test row
 
-    // setFormulas should not throw error
-    InvoiceManager.setFormulas(testSheet, rowNum);
+    // applyInvoiceFormulas should not throw error
+    InvoiceManager.applyInvoiceFormulas(testSheet, rowNum);
 
-    InvoiceTestUtils.assertTrue(true, 'setFormulas should complete without error');
+    InvoiceTestUtils.assertTrue(true, 'applyInvoiceFormulas should complete without error');
 
   } catch (error) {
     InvoiceTestUtils.assertTrue(false, `Unexpected error: ${error.toString()}`);
