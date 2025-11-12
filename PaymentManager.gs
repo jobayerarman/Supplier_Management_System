@@ -625,7 +625,7 @@ const PaymentManager = {
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
     try {
       // ═══ STEP 1: FIND INVOICE ═══
-      const invoice = cachedInvoice || InvoiceManager.find(supplier, invoiceNo);
+      const invoice = cachedInvoice || InvoiceManager.findInvoice(supplier, invoiceNo);
 
       if (!invoice) {
         const result = this._buildInvoiceNotFoundResult(invoiceNo, supplier);
@@ -821,7 +821,7 @@ const PaymentManager = {
   /**
    * Helper: Calculate balance information from invoice data
    * @private
-   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @returns {BalanceInfo} Balance information object
    */
   _calculateBalanceInfo: function(invoice) {
@@ -841,7 +841,7 @@ const PaymentManager = {
   /**
    * Helper: Check if paid date is already set on invoice
    * @private
-   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @returns {boolean} True if paid date is already set
    */
   _isPaidDateAlreadySet: function(invoice) {
@@ -854,7 +854,7 @@ const PaymentManager = {
    * ✓ REFACTORED: Uses _withLock wrapper for standardized lock handling
    *
    * @private
-   * @param {Object} invoice - Invoice object from InvoiceManager.find()
+   * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @param {Date} paidDate - Date to set as paid date
    * @throws {Error} If unable to acquire lock
    */
@@ -907,7 +907,7 @@ const PaymentManager = {
 
     // Fetch cached invoice to pass to paid date workflow
     // This eliminates redundant sheet read in _updateInvoicePaidDate
-    return InvoiceManager.find(supplier, targetInvoice);
+    return InvoiceManager.findInvoice(supplier, targetInvoice);
   },
 
   /**

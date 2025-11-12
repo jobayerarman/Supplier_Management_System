@@ -161,7 +161,7 @@ function testMasterDatabaseWrites() {
       sysId: `test_${Date.now()}`
     };
 
-    const invoiceResult = InvoiceManager.create(testData);
+    const invoiceResult = InvoiceManager.createInvoice(testData);
 
     if (invoiceResult.success) {
       Logger.log(`✅ Invoice created successfully at row ${invoiceResult.row}`);

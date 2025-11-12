@@ -373,7 +373,7 @@ const InvoiceManager = {
       return { success: true, action: 'created', invoiceId, row: newRow };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.create',
+      AuditLogger.logError('InvoiceManager.createInvoice',
         `Failed to create invoice ${data.invoiceNo}: ${error.toString()}`);
       return {success: false, error: error.toString()};
 
@@ -734,7 +734,7 @@ const InvoiceManager = {
       };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.find', `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
+      AuditLogger.logError('InvoiceManager.findInvoice', `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
       return null;
     }
   },
@@ -1234,38 +1234,48 @@ const InvoiceManager = {
 // ==================== BACKWARD COMPATIBILITY ====================
 
 /**
- * Backward compatibility wrapper functions
+ * Backward compatibility wrapper functions (DEPRECATED)
+ * All functions below delegate to their new counterparts.
+ * New code should call the new function names directly on InvoiceManager module.
+ * These wrappers are maintained for external script compatibility only.
  */
 
-// Backward compatibility wrappers - OLD NAMES → NEW NAMES
+// DEPRECATED: Use InvoiceManager.createInvoice() instead
 function create(data) {
   return InvoiceManager.createInvoice(data);
 }
 
+// DEPRECATED: Use InvoiceManager.findInvoice() instead
 function find(supplier, invoiceNo) {
   return InvoiceManager.findInvoice(supplier, invoiceNo);
 }
 
+// DEPRECATED: Use InvoiceManager.applyInvoiceFormulas() instead
 function setFormulas(sheet, row) {
   return InvoiceManager.applyInvoiceFormulas(sheet, row);
 }
 
+// DEPRECATED: Use InvoiceManager.getInvoicesForSupplier() instead
 function getAllForSupplier(supplier, includePaid) {
   return InvoiceManager.getInvoicesForSupplier(supplier, includePaid);
 }
 
+// DEPRECATED: Use InvoiceManager.getInvoiceStatistics() instead
 function getStatistics() {
   return InvoiceManager.getInvoiceStatistics();
 }
 
+// DEPRECATED: Use InvoiceManager.buildDuePaymentDropdown() instead
 function buildUnpaidDropdown(sheet, row, supplier, paymentType) {
   return InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
 }
 
+// DEPRECATED: Use InvoiceManager.batchCreateInvoices() instead
 function batchCreate(invoiceDataArray) {
   return InvoiceManager.batchCreateInvoices(invoiceDataArray);
 }
 
+// DEPRECATED: Use InvoiceManager.updateInvoiceIfChanged() instead
 function updateOptimized(existingInvoice, data) {
   return InvoiceManager.updateInvoiceIfChanged(existingInvoice, data);
 }

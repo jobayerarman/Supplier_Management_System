@@ -722,12 +722,12 @@ function testCachePerformance() {
 
     // Test 1: Cold start (cache miss)
     audit.start("Cold Start (Cache Miss)");
-    const invoice1 = InvoiceManager.find('HEALTHCARE', '9252142078');
+    const invoice1 = InvoiceManager.findInvoice('HEALTHCARE', '9252142078');
     audit.end("Cold Start (Cache Miss)");
 
     // Test 2: Warm cache (cache hit)
     audit.start("Warm Cache (Cache Hit)");
-    const invoice2 = InvoiceManager.find('HEALTHCARE', '9252142078');
+    const invoice2 = InvoiceManager.findInvoice('HEALTHCARE', '9252142078');
     audit.end("Warm Cache (Cache Hit)");
 
     // Test 3: Multiple queries on same cache
@@ -980,7 +980,7 @@ function testConditionalCacheStrategy() {
     };
 
     // Write invoice
-    const createResult = InvoiceManager.create(testData);
+    const createResult = InvoiceManager.createInvoice(testData);
 
     if (!createResult.success) {
       throw new Error(`Failed to create test invoice: ${createResult.error}`);
