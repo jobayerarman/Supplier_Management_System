@@ -723,8 +723,8 @@ const InvoiceManager = {
       AuditLogger.logError('InvoiceManager.findInvoice', `Failed to find invoice ${invoiceNo} for ${supplier}: ${error.toString()}`);
       return null;
     }
-  /**
-   * PERFORMANCE FIX #2: Partition-aware consumer implementation
+  },
+
   /**
    * Get unpaid invoices for supplier using active partition (partition-aware optimization)
    *
