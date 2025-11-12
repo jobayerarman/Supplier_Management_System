@@ -212,7 +212,7 @@ const InvoiceManager = {
   },
 
   // ═════════════════════════════════════════════════════════════════════════════
-  // SECTION 3: INTERNAL HELPERS - DATA BUILDING
+  // SECTION 5: INTERNAL HELPERS - DATA BUILDING
   // ═════════════════════════════════════════════════════════════════════════════
 
   /**
@@ -266,6 +266,48 @@ const InvoiceManager = {
     ];
   },
 
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 6: INTERNAL HELPERS - UTILITIES
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Higher-order function: Execute operation with lock management
+   * Wraps operation with lock acquisition, execution, and guaranteed cleanup
+   *
+   * Reduces boilerplate by ~50% compared to inline lock management
+   * Guarantees lock release even on error via finally block
+   *
+   * @param {Function} operation - Synchronous function to execute under lock
+   *                                Should return result object with {success, ...}
+   * @param {Object} context - Operation context (optional)
+   *   - operationType: {string} Name of operation for error messages
+   *   - errorHandler: {Function} Custom error handler (receives error, returns result)
+   * @returns {Object} Result from operation or error result if lock acquisition fails
+   */
+  _withLock: function(operation, context = {}) {
+    // Acquire lock before executing operation
+    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      // Lock acquisition failed - use error builder
+      return this._buildLockError(context.operationType || 'invoice operation');
+    }
+
+    try {
+      // Execute the business logic operation
+      // Operation should handle its own try/catch if needed
+      return operation();
+    } catch (error) {
+      // Use custom error handler if provided, otherwise use generic builder
+      if (context.errorHandler) {
+        return context.errorHandler(error);
+      }
+      return this._buildGenericError(context.operationType || 'operation', error);
+    } finally {
+      // CRITICAL: Always release lock, even on error
+      LockManager.releaseLock(lock);
+    }
+  },
+
   /**
    * Set formulas for an invoice row in a non-destructive way.
    * This function now only targets the specific formula columns.
@@ -301,6 +343,10 @@ const InvoiceManager = {
       throw error;
     }
   },
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 3: PUBLIC API - QUERIES & ANALYSIS
+  // ═════════════════════════════════════════════════════════════════════════════
 
   /**
    * Find invoice record by supplier and invoice number (cached lookup)
@@ -573,6 +619,10 @@ const InvoiceManager = {
     }
   },
 
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 4: PUBLIC API - BATCH & UTILITY OPERATIONS
+  // ═════════════════════════════════════════════════════════════════════════════
+
   /**
    * OPTIMIZED: Reduced Spreadsheet API calls by 25-50%
    * - Early exit: 2 calls (was 3) - removed clearNote()
@@ -794,10 +844,112 @@ const InvoiceManager = {
     } finally {
       LockManager.releaseLock(lock);
     }
+  },
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 7: RESULT BUILDERS (Immutable Constructors)
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Build successful invoice creation result
+   * Guaranteed complete result object for all creation scenarios
+   *
+   * @param {string} invoiceId - Generated invoice ID (sysId)
+   * @param {number} row - Row number where invoice was created
+   * @param {string} action - Action performed (default: 'created')
+   * @returns {Object} Complete result object with success, action, invoiceId, row, timestamp
+   */
+  _buildCreationResult: function(invoiceId, row, action = 'created') {
+    return {
+      success: true,
+      action: action,
+      invoiceId: invoiceId,
+      row: row,
+      timestamp: new Date(),
+    };
+  },
+
+  /**
+   * Build successful invoice update result
+   * Guaranteed complete result object for all update scenarios
+   *
+   * @param {number} row - Row number of updated invoice
+   * @param {string} action - Action performed (e.g., 'updated', 'no_change')
+   * @returns {Object} Complete result object with success, action, row, timestamp
+   */
+  _buildUpdateResult: function(row, action = 'updated') {
+    return {
+      success: true,
+      action: action,
+      row: row,
+      timestamp: new Date(),
+    };
+  },
+
+  /**
+   * Build error result for duplicate invoice
+   * Returned when attempting to create invoice that already exists
+   *
+   * @param {string} invoiceNo - Invoice number of duplicate
+   * @param {number} existingRow - Row number of existing invoice
+   * @returns {Object} Complete error object with success: false
+   */
+  _buildDuplicateError: function(invoiceNo, existingRow) {
+    return {
+      success: false,
+      error: `Invoice ${invoiceNo} already exists at row ${existingRow}`,
+      existingRow: existingRow,
+      timestamp: new Date(),
+    };
+  },
+
+  /**
+   * Build error result for lock acquisition failure
+   * Returned when unable to acquire lock for critical operation
+   *
+   * @param {string} operation - Name of operation that failed (e.g., 'invoice creation')
+   * @returns {Object} Complete error object with success: false
+   */
+  _buildLockError: function(operation) {
+    return {
+      success: false,
+      error: `Unable to acquire lock for ${operation}`,
+      timestamp: new Date(),
+    };
+  },
+
+  /**
+   * Build error result for validation failure
+   * Returned when invoice data fails validation
+   *
+   * @param {string} invoiceNo - Invoice number that failed validation
+   * @param {string} reason - Reason for validation failure
+   * @returns {Object} Complete error object with success: false
+   */
+  _buildValidationError: function(invoiceNo, reason) {
+    return {
+      success: false,
+      error: `Validation failed for invoice ${invoiceNo}: ${reason}`,
+      timestamp: new Date(),
+    };
+  },
+
+  /**
+   * Build generic error result
+   * Returned for any operation error not covered by specific error builders
+   *
+   * @param {string} operation - Name of operation that failed
+   * @param {Error} error - Error object or error message
+   * @returns {Object} Complete error object with success: false
+   */
+  _buildGenericError: function(operation, error) {
+    return {
+      success: false,
+      error: `${operation} failed: ${error.toString ? error.toString() : String(error)}`,
+      timestamp: new Date(),
+    };
   }
 };
-
-
 
 // ==================== BACKWARD COMPATIBILITY ====================
 
