@@ -716,11 +716,11 @@ function testProcessInvoice_Optimized() {
 
   try {
     const data = InvoiceTestData.createMockInvoiceData({
-      invoiceNo: `INV-PROC-OPT-${Date.now()}`
+      invoiceNo: `INV-CREATE-OR-UPDATE-${Date.now()}`
     });
-    const result = InvoiceManager.processOptimized(data);
+    const result = InvoiceManager.createOrUpdateInvoice(data);
 
-    InvoiceTestUtils.assertTrue(result.success, 'Optimized process should succeed');
+    InvoiceTestUtils.assertTrue(result.success, 'Create or update should succeed');
     InvoiceTestUtils.assertNotNull(result.invoiceId, 'Should return invoiceId immediately');
 
   } catch (error) {

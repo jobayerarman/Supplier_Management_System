@@ -405,8 +405,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     }
 
     // ═══ 3. PROCESS INVOICE & PAYMENT (Before any sheet writes) ═══
-    // Process invoice first
-    const invoiceResult = InvoiceManager.processOptimized(data);
+    // Process invoice first (create if new, update if exists)
+    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
     if (!invoiceResult.success) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
       // Clear balance cell with error indicator (consistent error state)

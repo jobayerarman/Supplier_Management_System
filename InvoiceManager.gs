@@ -14,7 +14,7 @@
  * 1. CORE OPERATIONS
  *    - createInvoice(data): Create new supplier invoice with automatic formulas
  *    - updateInvoiceIfChanged(existingInvoice, data): Conditional update on amount change
- *    - processOptimized(data): Process raw invoice data (delegates to createInvoice or updateInvoiceIfChanged)
+ *    - createOrUpdateInvoice(data): Create or update invoice (UPSERT - delegates to createInvoice or updateInvoiceIfChanged)
  *
  * 2. QUERIES & LOOKUPS
  *    - findInvoice(supplier, invoiceNo): O(1) cached lookup by supplier + invoice number
@@ -283,10 +283,16 @@ const InvoiceManager = {
   // ═════════════════════════════════════════════════════════════════════════════
 
   /**
-   * OPTIMIZED: InvoiceManager.processOptimized()
-   * Returns invoiceId immediately for payment processing
+   * Create or update invoice based on existence (UPSERT pattern)
+   *
+   * Returns invoiceId immediately for payment processing.
+   * If invoice exists, updates it conditionally (only if amount changed).
+   * If invoice doesn't exist, creates it.
+   *
+   * @param {Object} data - Transaction data with supplier, invoiceNo, receivedAmt, etc.
+   * @returns {Object} Result with success flag and invoiceId
    */
-  processOptimized: function(data) {
+  createOrUpdateInvoice: function(data) {
     try {
       // Skip for Due payments without invoice
       if (data.paymentType === this.CONSTANTS.PAYMENT_TYPE.DUE && !data.invoiceNo) {
@@ -295,14 +301,14 @@ const InvoiceManager = {
 
       // Check existence using cached data
       const existingInvoice = data.invoiceNo ? this.findInvoice(data.supplier, data.invoiceNo) : null;
-      
+
       if (existingInvoice) {
         // Update if needed
         const result = this.updateInvoiceIfChanged(existingInvoice, data);
-        const invoiceId = existingInvoice.data[CONFIG.invoiceCols.sysId] || 
+        const invoiceId = existingInvoice.data[CONFIG.invoiceCols.sysId] ||
                           IDGenerator.generateInvoiceId(data.sysId);
-        return { 
-          ...result, 
+        return {
+          ...result,
           invoiceId: invoiceId
         };
       } else {
@@ -311,7 +317,7 @@ const InvoiceManager = {
       }
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.processOptimized', error.toString());
+      AuditLogger.logError('InvoiceManager.createOrUpdateInvoice', error.toString());
       return { success: false, error: `Invoice processing failed: ${error.message}` };
     }
   },

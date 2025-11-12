@@ -4,7 +4,7 @@
  * Handles all payment operations including paid date updates
  *
  * REFACTORED FOR SINGLE RESPONSIBILITY:
- * - processOptimized: Records payment + conditionally triggers status update
+ * - processPayment: Records payment + conditionally triggers status update
  * - _updateInvoicePaidDate: All-in-one handler for paid status workflow
  * - Clean separation of concerns with comprehensive result objects
  *

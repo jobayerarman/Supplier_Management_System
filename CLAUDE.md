@@ -134,7 +134,7 @@ User selects menu option (e.g., "Batch Post All Valid Rows")
   → Loop through rows:
     → buildDataObject()
     → validatePostData()
-    → InvoiceManager.processOptimized()
+    → InvoiceManager.createOrUpdateInvoice()
     → PaymentManager.processPayment()
     → setBatchPostStatus()
   → showValidationResults()
@@ -442,8 +442,8 @@ const { email, method, context } = UserResolver.getUserWithMetadata();
 // ✅ GOOD: Read once, pass through pipeline
 const rowData = sheet.getRange(row, 1, 1, totalCols).getValues()[0];
 validatePostData(data);
-InvoiceManager.processOptimized(data);
-PaymentManager.processPayment(data, invoiceId);
+const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
+PaymentManager.processPayment(data, invoiceResult.invoiceId);
 BalanceCalculator.updateBalanceCell(sheet, row, true, rowData);
 ```
 
@@ -483,10 +483,10 @@ for (let i = 0; i < allData.length; i++) {
 ```
 
 ### 6. Optimized Functions
-Optimized functions accept pre-read data:
-- `InvoiceManager.processOptimized(data)`
-- `PaymentManager.processPayment(data, invoiceId)`
-- `InvoiceManager.updateOptimized(existingInvoice, data)`
+Functions accepting pre-read data for efficient pipeline processing:
+- `InvoiceManager.createOrUpdateInvoice(data)` - Create or update invoice (UPSERT pattern)
+- `PaymentManager.processPayment(data, invoiceId)` - Record payment transaction
+- `InvoiceManager.updateInvoiceIfChanged(existingInvoice, data)` - Conditional update
 
 ## Configuration
 
@@ -779,13 +779,13 @@ When working with this codebase:
 - Cache features: TTL-based expiration, write-through support, dual indexing, incremental updates (250x faster), cache partitioning (70-90% active cache reduction)
 
 ### InvoiceManager.gs
-- Process invoice: `processOptimized(data)` - returns invoiceId immediately
-- Create invoice: `create(data)` - with write-through cache
-- Update invoice: `updateOptimized(existingInvoice, data)` - conditional write
-- Find invoice: `find(supplier, invoiceNo)` - cached O(1) lookup
+- Create or update invoice: `createOrUpdateInvoice(data)` - UPSERT pattern, returns invoiceId immediately
+- Create invoice: `createInvoice(data)` - with write-through cache
+- Update invoice: `updateInvoiceIfChanged(existingInvoice, data)` - conditional write
+- Find invoice: `findInvoice(supplier, invoiceNo)` - cached O(1) lookup
 - Get unpaid: `getUnpaidForSupplier(supplier)` - for Due payment dropdowns
-- Build dropdown: `buildUnpaidDropdown(sheet, row, supplier, paymentType)`
-- Batch create: `batchCreate(invoiceDataArray)` - for bulk imports
+- Build dropdown: `buildDuePaymentDropdown(sheet, row, supplier, paymentType)`
+- Batch create: `batchCreateInvoices(invoiceDataArray)` - for bulk imports
 - Repair formulas: `repairAllFormulas()` - maintenance function
 
 ### PaymentManager.gs
