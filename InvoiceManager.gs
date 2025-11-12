@@ -23,32 +23,6 @@
  * Handles creation, updates, and processing of supplier invoices
  */
 const InvoiceManager = {
-  /**
-   * Process invoice (create or update based on existence)
-   * 
-   * @param {Object} data - Transaction data
-   * @returns {Object} Result with success flag and details
-   */
-  process: function (data) {
-    try {
-      // Skip creation for "Due" payments with no invoice number
-      if (data.paymentType === 'Due' && !data.invoiceNo) {
-        return { success: true, action: 'none' };
-      }
-
-      // Check if invoice already exists
-      const existingInvoice = data.invoiceNo ? this.find(data.supplier, data.invoiceNo) : null;
-      return existingInvoice ? this.update(existingInvoice, data) : this.create(data, existingInvoice);
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.process',
-        `Failed to process invoice for ${data.supplier}: ${error.toString()}`);
-      return {
-        success: false,
-        error: `Invoice processing failed: ${error.message}`
-      };
-    }
-  },
 
   /**
    * OPTIMIZED: InvoiceManager.processOptimized()
@@ -160,64 +134,6 @@ const InvoiceManager = {
     }
   },
 
-  /**
-   * Update existing invoice
-   * OPTIMIZED: Batch updates in single operation
-   * 
-   * @param {Object} existingInvoice - Existing invoice record {row, data}
-   * @param {Object} data - Transaction data
-   * @returns {Object} Result with success flag
-   */
-  update: function (existingInvoice, data) {
-    try {
-      if (!existingInvoice) return { success: false, error: 'Invoice not found' };
-      const col = CONFIG.invoiceCols;
-
-      // Use Master Database if in master mode, otherwise use local sheet
-      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-      const rowNum = existingInvoice.row;
-
-      const oldTotal = Number(existingInvoice.data[col.totalAmount]) || 0;
-      const oldOrigin = String(existingInvoice.data[col.originDay]);
-      
-      // Check if updates are needed
-      const amountChanged = Number(data.receivedAmt) !== oldTotal;
-      const originChanged = (String(data.sheetName) !== oldOrigin);
-      
-      if (!amountChanged && !originChanged) {
-        return { success: true, action: 'no_change', row: rowNum };
-      }
-      
-      // Perform only necessary writes in one batch
-      const updates = [];
-      if (amountChanged) {
-        updates.push({ col: col.totalAmount + 1, val: data.receivedAmt });
-      }
-      if (originChanged) {
-        updates.push({ col: col.originDay + 1, val: data.sheetName });
-      }
-
-      if (updates.length) {
-        const range = invoiceSh.getRange(rowNum, 1, 1, CONFIG.totalColumns.invoice);
-        const values = range.getValues()[0];
-        updates.forEach(u => (values[u.col - 1] = u.val));
-        range.setValues([values]);
-      }
-
-      // Cache invalidation only if numeric data changed
-      if (amountChanged) {
-        const invoiceNo = existingInvoice.data[col.invoiceNo];
-        CacheManager.invalidate('updateAmount', data.supplier, invoiceNo);
-      }
-
-      return { success: true, action: 'updated', row: rowNum };
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.update',
-        `Failed to update invoice: ${error.toString()}`);
-      return { success: false, error: error.toString() };
-    }
-  },
 
   /**
    * OPTIMIZED: InvoiceManager.updateOptimized()
@@ -269,66 +185,7 @@ const InvoiceManager = {
     }
   },
 
-  /**
-   * Update paid date when invoice is fully paid
-   * Called after payment processing
-   * @param {string} invoiceNo - Invoice number
-   * @param {string} supplier - Supplier name
-   * @param {Date} paymentDate - Date of final payment
-   */
-  updatePaidDate: function (invoiceNo, supplier, paymentDate) {
-    try {
-      const invoice = this.find(supplier, invoiceNo);
-      const col = CONFIG.invoiceCols;
-      if (!invoice) return;
 
-      // Use Master Database if in master mode, otherwise use local sheet
-      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
-      const currentPaidDate = invoice.data[col.paidDate];
-
-      // If balance is zero and paid date is empty, set it
-      if (balanceDue === 0 && !currentPaidDate) {
-        invoiceSh.getRange(invoice.row, col.paidDate + 1)
-          .setValue(paymentDate);
-
-        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
-          `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
-
-        CacheManager.clear();
-      }
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.updatePaidDate',
-        `Failed to update paid date: ${error.toString()}`);
-    }
-  },
-
-  /**
-   * OPTIMIZED: InvoiceManager.updatePaidDateOptimized()
-   * Only writes if balance is zero and date is empty
-   */
-  updatePaidDateOptimized: function(invoiceNo, supplier, paymentDate) {
-    try {
-      const invoice = this.find(supplier, invoiceNo);
-      if (!invoice) return;
-
-      const col = CONFIG.invoiceCols;
-      const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
-      const currentPaidDate = invoice.data[col.paidDate];
-
-      // Only write if conditions met
-      if (balanceDue === 0 && !currentPaidDate) {
-        // Use Master Database if in master mode, otherwise use local sheet
-        const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-        invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paymentDate);
-
-        AuditLogger.log('INVOICE_FULLY_PAID', { invoiceNo, supplier },
-          `Invoice fully paid on ${DateUtils.formatDate(paymentDate)}`);
-      }
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.updatePaidDateOptimized', error.toString());
-    }
-  },
 
   /**
    * Set formulas for an invoice row in a non-destructive way.
@@ -871,9 +728,6 @@ const InvoiceManager = {
 /**
  * Backward compatibility wrapper functions
  */
-function processInvoice(data) {
-  return InvoiceManager.process(data);
-}
 
 function createNewInvoice(data) {
   return InvoiceManager.create(data);
@@ -883,9 +737,6 @@ function batchCreateInvoices(invoiceDataArray) {
   return InvoiceManager.batchCreate(invoiceDataArray);
 }
 
-function updateExistingInvoice(existingInvoice, data) {
-  return InvoiceManager.update(existingInvoice, data);
-}
 
 function findInvoiceRecord(supplier, invoiceNo) {
   return InvoiceManager.find(supplier, invoiceNo);
