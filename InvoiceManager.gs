@@ -266,6 +266,64 @@ const InvoiceManager = {
     ];
   },
 
+  /**
+   * Build batch invoice rows with duplicate checking
+   * Pure function for constructing new invoice rows from data array
+   *
+   * @param {Array} invoiceDataArray - Array of raw invoice data objects
+   * @param {number} startRow - Starting row number for new invoices
+   * @returns {Object} { newRowsData: Array, errors: Array, created: number, failed: number }
+   */
+  _buildBatchInvoiceRows: function(invoiceDataArray, startRow) {
+    const newRowsData = [];
+    const errors = [];
+    let created = 0;
+    let failed = 0;
+
+    // Pre-populate cache to optimize duplicate checking
+    CacheManager.getInvoiceData();
+
+    for (let i = 0; i < invoiceDataArray.length; i++) {
+      const data = invoiceDataArray[i];
+      const currentRowNum = startRow + i;
+
+      try {
+        // Check for duplicates using cached data
+        const exists = this.find(data.supplier, data.invoiceNo);
+        if (exists) {
+          errors.push(`Row ${i + 1}: Invoice ${data.invoiceNo} for ${data.supplier} already exists.`);
+          failed++;
+          continue;
+        }
+
+        // Build new invoice row with formulas
+        const invoiceDate = data.invoiceDate || data.timestamp;
+        const invoiceId = IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID());
+
+        const newInvoiceRow = this._buildInvoiceRowData({
+          invoiceDate: invoiceDate,
+          supplier: data.supplier,
+          invoiceNo: data.invoiceNo,
+          receivedAmt: data.receivedAmt,
+          rowNum: currentRowNum,
+          sheetName: data.sheetName || this.CONSTANTS.DEFAULT_ORIGIN_DAY,
+          enteredBy: data.enteredBy || UserResolver.getCurrentUser(),
+          timestamp: data.timestamp,
+          invoiceId: invoiceId,
+        });
+
+        newRowsData.push(newInvoiceRow);
+        created++;
+
+      } catch (error) {
+        errors.push(`Row ${i + 1} (${data.invoiceNo}): ${error.message}`);
+        failed++;
+      }
+    }
+
+    return { newRowsData, errors, created, failed };
+  },
+
   // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 6: INTERNAL HELPERS - UTILITIES
   // ═════════════════════════════════════════════════════════════════════════════
@@ -341,6 +399,71 @@ const InvoiceManager = {
       logSystemError('InvoiceManager.setFormulas',
         `Failed to set formulas for row ${row}: ${error.toString()}`);
       throw error;
+    }
+  },
+
+  /**
+   * Validate dropdown request parameters
+   * Pure function for request validation logic
+   *
+   * @param {string} paymentType - Payment type to check
+   * @param {string} supplier - Supplier name to check
+   * @returns {Object} Validation result: {valid: boolean, reason?: string}
+   */
+  _validateDropdownRequest: function(paymentType, supplier) {
+    if (paymentType !== this.CONSTANTS.PAYMENT_TYPE.DUE) {
+      return { valid: false, reason: 'Not a Due payment type' };
+    }
+    if (StringUtils.isEmpty(supplier)) {
+      return { valid: false, reason: 'Supplier is empty' };
+    }
+    return { valid: true };
+  },
+
+  /**
+   * Build data validation rule for dropdown
+   * Pure function for UI rule creation
+   *
+   * @param {Array} invoiceNumbers - List of invoice numbers
+   * @returns {Object} SpreadsheetApp DataValidation rule
+   */
+  _buildDropdownRule: function(invoiceNumbers) {
+    return SpreadsheetApp.newDataValidation()
+      .requireValueInList(invoiceNumbers, true)
+      .setAllowInvalid(true)
+      .build();
+  },
+
+  /**
+   * Apply dropdown to cell with proper ordering
+   * Pure function for cell update logic (critical fix: set dropdown FIRST)
+   *
+   * @param {Object} targetCell - GoogleAppsScript Range object
+   * @param {Array} invoiceNumbers - List of valid invoice numbers
+   * @returns {boolean} Success flag
+   */
+  _applyDropdownToCell: function(targetCell, invoiceNumbers) {
+    try {
+      const rule = this._buildDropdownRule(invoiceNumbers);
+      const currentValue = targetCell.getValue();
+      const isValidValue = invoiceNumbers.includes(String(currentValue));
+
+      // CRITICAL FIX: Set dropdown FIRST, then clear content
+      // This prevents the clearContent() edit event from interfering with the dropdown
+      targetCell
+        .setDataValidation(rule)
+        .setBackground(CONFIG.colors.info);
+
+      // Clear content and note ONLY if current value is invalid or empty
+      if (!isValidValue || !currentValue) {
+        targetCell.clearContent().clearNote();
+      } else {
+        targetCell.clearNote();
+      }
+      return true;
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager._applyDropdownToCell', error.toString());
+      return false;
     }
   },
 
@@ -642,8 +765,9 @@ const InvoiceManager = {
   buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
-    // Clear dropdown if not "Due" or missing supplier
-    if (paymentType !== this.CONSTANTS.PAYMENT_TYPE.DUE || StringUtils.isEmpty(supplier)) {
+    // Validate request parameters
+    const validation = this._validateDropdownRequest(paymentType, supplier);
+    if (!validation.valid) {
       try {
         targetCell.clearDataValidations().clearNote().clearContent().setBackground(null);
       } catch (e) {
@@ -653,6 +777,7 @@ const InvoiceManager = {
     }
 
     try {
+      // Query unpaid invoices for this supplier
       const unpaidInvoices = this.getUnpaidForSupplier(supplier);
 
       if (unpaidInvoices.length === 0) {
@@ -661,35 +786,12 @@ const InvoiceManager = {
           .clearContent()
           .setNote(`No unpaid invoices found for ${supplier}.\n\nThis supplier either has no invoices or all invoices are fully paid.`)
           .setBackground(CONFIG.colors.warning);
-
         return false;
       }
 
+      // Extract invoice numbers and apply dropdown
       const invoiceNumbers = unpaidInvoices.map(inv => inv.invoiceNo);
-      const rule = SpreadsheetApp.newDataValidation()
-        .requireValueInList(invoiceNumbers, true)
-        .setAllowInvalid(true)
-        .build();
-
-      // CRITICAL FIX: Set dropdown FIRST, then clear content
-      // This prevents the clearContent() edit event from interfering with the dropdown
-      // Old order: clearContent → setDataValidation (dropdown could be cleared by cascade events)
-      // New order: setDataValidation → clearContent (dropdown already set when cascade fires)
-      const currentValue = targetCell.getValue();
-      const isValidValue = invoiceNumbers.includes(String(currentValue));
-
-      // Set dropdown and background first (no edit event triggered)
-      targetCell
-        .setDataValidation(rule)
-        .setBackground(CONFIG.colors.info);
-
-      // Clear content and note ONLY if current value is invalid or empty
-      if (!isValidValue || !currentValue) {
-        targetCell.clearContent().clearNote();
-      } else {
-        targetCell.clearNote();
-      }
-      return true;
+      return this._applyDropdownToCell(targetCell, invoiceNumbers);
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', error.toString());
@@ -697,7 +799,6 @@ const InvoiceManager = {
         .clearContent()
         .setNote('Error loading invoices - please contact administrator')
         .setBackground(CONFIG.colors.error);
-
       return false;
     }
   },
@@ -769,57 +870,14 @@ const InvoiceManager = {
     }
 
     try {
-      // Use Master Database if in master mode, otherwise use local sheet
+      // Get target sheet and determine where new rows will start
       const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const lastRow = invoiceSh.getLastRow();
       const startRow = lastRow + 1;
 
-      const newRowsData = [];
-      const errors = [];
-      let created = 0;
-      let failed = 0;
-
-      // Pre-check all duplicates in memory to avoid multiple `find` calls if possible
-      // This is an optimization for larger datasets.
-      CacheManager.getInvoiceData(); // Ensures cache is populated
-
-      for (let i = 0; i < invoiceDataArray.length; i++) {
-        const data = invoiceDataArray[i];
-        const currentRowNum = startRow + i;
-
-        try {
-          // Check for duplicates using the now-cached data
-          const exists = this.find(data.supplier, data.invoiceNo);
-          if (exists) {
-            errors.push(`Row ${i + 1}: Invoice ${data.invoiceNo} for ${data.supplier} already exists.`);
-            failed++;
-            continue;
-          }
-
-          const invoiceDate = data.invoiceDate || data.timestamp;
-          const invoiceId = IDGenerator.generateInvoiceId(data.sysId || IDGenerator.generateUUID());
-
-          // Build the full row with data and formulas (using helper function)
-          const newInvoiceRow = this._buildInvoiceRowData({
-            invoiceDate: invoiceDate,
-            supplier: data.supplier,
-            invoiceNo: data.invoiceNo,
-            receivedAmt: data.receivedAmt,
-            rowNum: currentRowNum,
-            sheetName: data.sheetName || this.CONSTANTS.DEFAULT_ORIGIN_DAY,
-            enteredBy: data.enteredBy || UserResolver.getCurrentUser(),
-            timestamp: data.timestamp,
-            invoiceId: invoiceId,
-          });
-
-          newRowsData.push(newInvoiceRow);
-          created++;
-
-        } catch (error) {
-          errors.push(`Row ${i + 1} (${data.invoiceNo}): ${error.message}`);
-          failed++;
-        }
-      }
+      // Build all invoice rows with duplicate checking (delegates to helper)
+      const { newRowsData, errors, created, failed } =
+        this._buildBatchInvoiceRows(invoiceDataArray, startRow);
 
       // Batch write all new rows at once
       if (newRowsData.length > 0) {
