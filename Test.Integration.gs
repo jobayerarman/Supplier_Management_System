@@ -333,11 +333,10 @@ function testCacheInvalidation() {
     const cached1 = CacheManager.get();
     audit.end("Initial Cache Load");
 
-    // updatePaidDate should NOT invalidate
-    audit.start("Test Selective Preservation");
-    InvoiceManager.updatePaidDate('TEST-001', 'TestSupplier', new Date());
-    const cached2 = CacheManager.get();
-    audit.end("Test Selective Preservation");
+    // NOTE: updatePaidDate() was removed in InvoiceManager v3.0 refactoring
+    // This function no longer exists in the module. Cache invalidation behavior
+    // is now handled by updateInvoiceIfChanged() and payment processing workflows.
+    // The selective cache preservation feature was consolidated into other operations.
 
     // create should invalidate
     audit.start("Test Invalidation on Create");

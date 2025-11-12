@@ -369,7 +369,7 @@ function testInvoiceUpdate_AmountChange() {
       supplier: supplier,
       receivedAmt: 2000
     });
-    const result = InvoiceManager.update(existingInvoice, updateData);
+    const result = InvoiceManager.updateInvoiceIfChanged(existingInvoice, updateData);
 
     InvoiceTestUtils.assertTrue(result.success, 'Update should succeed');
     InvoiceTestUtils.assertEqual(result.action, 'updated', 'Action should be "updated"');
@@ -396,7 +396,7 @@ function testInvoiceUpdate_NoChanges() {
       sheetName: existingInvoice.data[CONFIG.invoiceCols.originDay]
     });
 
-    const result = InvoiceManager.update(existingInvoice, data);
+    const result = InvoiceManager.updateInvoiceIfChanged(existingInvoice, data);
     InvoiceTestUtils.assertTrue(result.success, 'Update should succeed');
     InvoiceTestUtils.assertEqual(result.action, 'no_change', 'Action should be "no_change"');
 
