@@ -252,7 +252,7 @@ function onEditInstallable(e) {
         // Only build dropdown for Due payment type
         if (paymentType === 'Due') {
           if (editedValue && String(editedValue).trim()) {
-            InvoiceManager.buildUnpaidDropdown(sheet, row, editedValue, paymentType);
+            InvoiceManager.buildDuePaymentDropdown(sheet, row, editedValue, paymentType);
           }
           updateBalance = false;
         } else {
@@ -272,7 +272,7 @@ function onEditInstallable(e) {
         } else if (paymentType === 'Due') {
           const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
           if (currentSupplier && String(currentSupplier).trim()) {
-            InvoiceManager.buildUnpaidDropdown(sheet, row, currentSupplier, paymentType);
+            InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
           }
           updateBalance = false;
         } else {
@@ -405,8 +405,8 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     }
 
     // ═══ 3. PROCESS INVOICE & PAYMENT (Before any sheet writes) ═══
-    // Process invoice first
-    const invoiceResult = InvoiceManager.processOptimized(data);
+    // Process invoice first (create if new, update if exists)
+    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
     if (!invoiceResult.success) {
       setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
       // Clear balance cell with error indicator (consistent error state)
@@ -663,7 +663,7 @@ function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
   const supplier = rowData[CONFIG.cols.supplier];
   const paymentType = rowData[CONFIG.cols.paymentType];
 
-  return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+  return InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
 }
 
 /**

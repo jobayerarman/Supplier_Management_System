@@ -179,7 +179,7 @@ function testInvoiceCreate_Success() {
 
   try {
     const data = InvoiceTestData.createMockInvoiceData();
-    const result = InvoiceManager.create(data);
+    const result = InvoiceManager.createInvoice(data);
 
     InvoiceTestUtils.assertTrue(result.success, 'Creation should succeed');
     InvoiceTestUtils.assertNotNull(result.invoiceId, 'Should return invoiceId');
@@ -206,11 +206,11 @@ function testInvoiceCreate_DuplicatePrevention() {
     });
 
     // First create
-    const result1 = InvoiceManager.create(data);
+    const result1 = InvoiceManager.createInvoice(data);
     InvoiceTestUtils.assertTrue(result1.success, 'First creation should succeed');
 
     // Second create (duplicate)
-    const result2 = InvoiceManager.create(data);
+    const result2 = InvoiceManager.createInvoice(data);
     InvoiceTestUtils.assertFalse(result2.success, 'Duplicate creation should fail');
     InvoiceTestUtils.assertTrue(
       result2.error.includes('already exists'),
@@ -244,11 +244,11 @@ function testInvoiceCreate_CacheWriteThrough() {
     CacheManager.clear();
 
     // Create invoice
-    const result = InvoiceManager.create(data);
+    const result = InvoiceManager.createInvoice(data);
     InvoiceTestUtils.assertTrue(result.success, 'Creation should succeed');
 
     // Verify in cache
-    const found = InvoiceManager.find(supplier, invoiceNo);
+    const found = InvoiceManager.findInvoice(supplier, invoiceNo);
     InvoiceTestUtils.assertNotNull(found, 'Invoice should be findable in cache');
     InvoiceTestUtils.assertEqual(found.data[CONFIG.invoiceCols.invoiceNo], invoiceNo,
       'Cached invoice number should match');
@@ -280,10 +280,10 @@ function testInvoiceFind_ExistingInvoice() {
       supplier: supplier,
       invoiceNo: invoiceNo
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Find it
-    const found = InvoiceManager.find(supplier, invoiceNo);
+    const found = InvoiceManager.findInvoice(supplier, invoiceNo);
     InvoiceTestUtils.assertNotNull(found, 'Should find existing invoice');
     InvoiceTestUtils.assertTrue(found.row > 0, 'Should return row number');
     InvoiceTestUtils.assertNotNull(found.data, 'Should return invoice data');
@@ -305,7 +305,7 @@ function testInvoiceFind_NonExistentInvoice() {
   InvoiceTestUtils.resetResults();
 
   try {
-    const found = InvoiceManager.find('NONEXISTENT_SUPPLIER', 'NONEXISTENT_INV');
+    const found = InvoiceManager.findInvoice('NONEXISTENT_SUPPLIER', 'NONEXISTENT_INV');
     InvoiceTestUtils.assertTrue(found === null, 'Should return null for non-existent invoice');
 
   } catch (error) {
@@ -323,11 +323,11 @@ function testInvoiceFind_EmptyParameters() {
   InvoiceTestUtils.resetResults();
 
   try {
-    InvoiceTestUtils.assertTrue(InvoiceManager.find('', 'INV-001') === null,
+    InvoiceTestUtils.assertTrue(InvoiceManager.findInvoice('', 'INV-001') === null,
       'Should return null for empty supplier');
-    InvoiceTestUtils.assertTrue(InvoiceManager.find('SUPPLIER', '') === null,
+    InvoiceTestUtils.assertTrue(InvoiceManager.findInvoice('SUPPLIER', '') === null,
       'Should return null for empty invoiceNo');
-    InvoiceTestUtils.assertTrue(InvoiceManager.find('', '') === null,
+    InvoiceTestUtils.assertTrue(InvoiceManager.findInvoice('', '') === null,
       'Should return null for both empty');
 
   } catch (error) {
@@ -358,10 +358,10 @@ function testInvoiceUpdate_AmountChange() {
       invoiceNo: invoiceNo,
       receivedAmt: 1000
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Find it
-    const existingInvoice = InvoiceManager.find(supplier, invoiceNo);
+    const existingInvoice = InvoiceManager.findInvoice(supplier, invoiceNo);
     InvoiceTestUtils.assertNotNull(existingInvoice, 'Invoice should exist');
 
     // Update with new amount
@@ -369,7 +369,7 @@ function testInvoiceUpdate_AmountChange() {
       supplier: supplier,
       receivedAmt: 2000
     });
-    const result = InvoiceManager.update(existingInvoice, updateData);
+    const result = InvoiceManager.updateInvoiceIfChanged(existingInvoice, updateData);
 
     InvoiceTestUtils.assertTrue(result.success, 'Update should succeed');
     InvoiceTestUtils.assertEqual(result.action, 'updated', 'Action should be "updated"');
@@ -396,7 +396,7 @@ function testInvoiceUpdate_NoChanges() {
       sheetName: existingInvoice.data[CONFIG.invoiceCols.originDay]
     });
 
-    const result = InvoiceManager.update(existingInvoice, data);
+    const result = InvoiceManager.updateInvoiceIfChanged(existingInvoice, data);
     InvoiceTestUtils.assertTrue(result.success, 'Update should succeed');
     InvoiceTestUtils.assertEqual(result.action, 'no_change', 'Action should be "no_change"');
 
@@ -421,7 +421,7 @@ function testInvoiceUpdate_Optimized() {
       sheetName: existingInvoice.data[CONFIG.invoiceCols.originDay]
     });
 
-    const result = InvoiceManager.updateOptimized(existingInvoice, data);
+    const result = InvoiceManager.updateInvoiceIfChanged(existingInvoice, data);
     InvoiceTestUtils.assertTrue(result.success, 'Optimized update should succeed');
     InvoiceTestUtils.assertTrue(['updated', 'no_change'].includes(result.action),
       'Action should be updated or no_change');
@@ -454,7 +454,7 @@ function testInvoiceGetUnpaid_PartitionAware() {
         invoiceNo: `INV-UNPAID-${i}`,
         receivedAmt: i * 1000
       });
-      InvoiceManager.create(data);
+      InvoiceManager.createInvoice(data);
     }
 
     // Get unpaid invoices
@@ -509,10 +509,10 @@ function testInvoiceGetAll_IncludePaid() {
       supplier: supplier,
       invoiceNo: `INV-ALL-${Date.now()}`
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Get all
-    const invoices = InvoiceManager.getAllForSupplier(supplier, true);
+    const invoices = InvoiceManager.getInvoicesForSupplier(supplier, true);
     InvoiceTestUtils.assertTrue(Array.isArray(invoices), 'Should return array');
     InvoiceTestUtils.assertTrue(invoices.length >= 1, 'Should return all invoices');
 
@@ -543,7 +543,7 @@ function testInvoiceGetStatistics() {
   InvoiceTestUtils.resetResults();
 
   try {
-    const stats = InvoiceManager.getStatistics();
+    const stats = InvoiceManager.getInvoiceStatistics();
     InvoiceTestUtils.assertNotNull(stats, 'Should return statistics object');
     InvoiceTestUtils.assertTrue(typeof stats.total === 'number', 'Should have total count');
     InvoiceTestUtils.assertTrue(typeof stats.unpaid === 'number', 'Should have unpaid count');
@@ -564,86 +564,6 @@ function testInvoiceGetStatistics() {
   InvoiceTestUtils.printSummary('Invoice Statistics');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 6: BATCH OPERATIONS TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Test: Batch create multiple invoices
- */
-function testBatchCreate_Success() {
-  Logger.log('\n▶️ TEST: Batch create multiple invoices');
-  InvoiceTestUtils.resetResults();
-
-  try {
-    const invoiceArray = InvoiceTestData.createMultipleMockInvoices(3);
-    const result = InvoiceManager.batchCreate(invoiceArray);
-
-    InvoiceTestUtils.assertTrue(result.success, 'Batch create should succeed');
-    InvoiceTestUtils.assertTrue(result.created > 0, 'Should create invoices');
-    InvoiceTestUtils.assertEqual(result.created + result.failed, 3,
-      'Created + Failed should equal total');
-
-  } catch (error) {
-    InvoiceTestUtils.assertTrue(false, `Unexpected error: ${error.toString()}`);
-  }
-
-  InvoiceTestUtils.printSummary('Batch Create - Success');
-}
-
-/**
- * Test: Batch create with duplicates
- */
-function testBatchCreate_DuplicateHandling() {
-  Logger.log('\n▶️ TEST: Batch create with duplicate handling');
-  InvoiceTestUtils.resetResults();
-
-  try {
-    const invoiceNo = `INV-BATCH-DUP-${Date.now()}`;
-    const invoiceArray = [
-      InvoiceTestData.createMockInvoiceData({
-        invoiceNo: invoiceNo,
-        supplier: 'BATCH_SUPPLIER'
-      }),
-      InvoiceTestData.createMockInvoiceData({
-        invoiceNo: invoiceNo, // Duplicate
-        supplier: 'BATCH_SUPPLIER'
-      })
-    ];
-
-    const result = InvoiceManager.batchCreate(invoiceArray);
-    InvoiceTestUtils.assertTrue(result.success, 'Batch should complete');
-    InvoiceTestUtils.assertTrue(result.failed > 0, 'Should fail duplicate');
-    InvoiceTestUtils.assertTrue(result.errors.length > 0, 'Should have error messages');
-
-  } catch (error) {
-    InvoiceTestUtils.assertTrue(false, `Unexpected error: ${error.toString()}`);
-  }
-
-  InvoiceTestUtils.printSummary('Batch Create - Duplicate Handling');
-}
-
-/**
- * Test: Batch create with empty array
- */
-function testBatchCreate_EmptyArray() {
-  Logger.log('\n▶️ TEST: Batch create with empty array');
-  InvoiceTestUtils.resetResults();
-
-  try {
-    const result = InvoiceManager.batchCreate([]);
-    InvoiceTestUtils.assertTrue(result.success, 'Should succeed with empty array');
-    InvoiceTestUtils.assertEqual(result.created, 0, 'Should create 0 invoices');
-
-  } catch (error) {
-    InvoiceTestUtils.assertTrue(false, `Unexpected error: ${error.toString()}`);
-  }
-
-  InvoiceTestUtils.printSummary('Batch Create - Empty Array');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 7: PROCESS FUNCTION TESTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -716,11 +636,11 @@ function testProcessInvoice_Optimized() {
 
   try {
     const data = InvoiceTestData.createMockInvoiceData({
-      invoiceNo: `INV-PROC-OPT-${Date.now()}`
+      invoiceNo: `INV-CREATE-OR-UPDATE-${Date.now()}`
     });
-    const result = InvoiceManager.processOptimized(data);
+    const result = InvoiceManager.createOrUpdateInvoice(data);
 
-    InvoiceTestUtils.assertTrue(result.success, 'Optimized process should succeed');
+    InvoiceTestUtils.assertTrue(result.success, 'Create or update should succeed');
     InvoiceTestUtils.assertNotNull(result.invoiceId, 'Should return invoiceId immediately');
 
   } catch (error) {
@@ -774,7 +694,7 @@ function testUpdatePaidDate() {
       supplier: supplier,
       invoiceNo: invoiceNo
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Test updatePaidDate (will only update if balance = 0, which requires payment)
     const paymentDate = new Date();
@@ -805,7 +725,7 @@ function testUpdatePaidDateOptimized() {
       supplier: supplier,
       invoiceNo: invoiceNo
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Test optimized version
     const paymentDate = new Date();
@@ -835,10 +755,10 @@ function testSetFormulas() {
     const testSheet = SpreadsheetApp.getActiveSheet();
     const rowNum = 100; // Test row
 
-    // setFormulas should not throw error
-    InvoiceManager.setFormulas(testSheet, rowNum);
+    // applyInvoiceFormulas should not throw error
+    InvoiceManager.applyInvoiceFormulas(testSheet, rowNum);
 
-    InvoiceTestUtils.assertTrue(true, 'setFormulas should complete without error');
+    InvoiceTestUtils.assertTrue(true, 'applyInvoiceFormulas should complete without error');
 
   } catch (error) {
     InvoiceTestUtils.assertTrue(false, `Unexpected error: ${error.toString()}`);
@@ -888,11 +808,11 @@ function testBuildUnpaidDropdown_DuePayment() {
       supplier: supplier,
       invoiceNo: `INV-DROPDOWN-${Date.now()}`
     });
-    InvoiceManager.create(data);
+    InvoiceManager.createInvoice(data);
 
     // Build dropdown
     const testSheet = SpreadsheetApp.getActiveSheet();
-    const result = InvoiceManager.buildUnpaidDropdown(testSheet, 50, supplier, 'Due');
+    const result = InvoiceManager.buildDuePaymentDropdown(testSheet, 50, supplier, 'Due');
 
     InvoiceTestUtils.assertTrue(typeof result === 'boolean', 'Should return boolean');
 
@@ -912,7 +832,7 @@ function testBuildUnpaidDropdown_ClearForNonDue() {
 
   try {
     const testSheet = SpreadsheetApp.getActiveSheet();
-    const result = InvoiceManager.buildUnpaidDropdown(testSheet, 50, 'SUPPLIER', 'Regular');
+    const result = InvoiceManager.buildDuePaymentDropdown(testSheet, 50, 'SUPPLIER', 'Regular');
 
     InvoiceTestUtils.assertTrue(result === false, 'Should return false for non-Due payment');
 

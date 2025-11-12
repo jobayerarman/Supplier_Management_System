@@ -543,8 +543,8 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
       }
 
-      // Process invoice
-      const invoiceResult = InvoiceManager.processOptimized(data);
+      // Process invoice (create if new, update if exists)
+      const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
       data.invoiceId = invoiceResult.invoiceId;
 
       // Process payment if applicable

@@ -311,7 +311,7 @@ const BalanceCalculator = {
     }
 
     try {
-      const invoice = InvoiceManager.find(supplier, invoiceNo);
+      const invoice = InvoiceManager.findInvoice(supplier, invoiceNo);
       if (!invoice) {
         return 0;
       }
