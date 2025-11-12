@@ -72,11 +72,11 @@ const InvoiceManager = {
       }
 
       // Check existence using cached data
-      const existingInvoice = data.invoiceNo ? this.find(data.supplier, data.invoiceNo) : null;
+      const existingInvoice = data.invoiceNo ? this.findInvoice(data.supplier, data.invoiceNo) : null;
       
       if (existingInvoice) {
         // Update if needed
-        const result = this.updateOptimized(existingInvoice, data);
+        const result = this.updateInvoiceIfChanged(existingInvoice, data);
         const invoiceId = existingInvoice.data[CONFIG.invoiceCols.sysId] || 
                           IDGenerator.generateInvoiceId(data.sysId);
         return { 
@@ -85,7 +85,7 @@ const InvoiceManager = {
         };
       } else {
         // Create new
-        return this.create(data);
+        return this.createInvoice(data);
       }
 
     } catch (error) {
@@ -101,7 +101,7 @@ const InvoiceManager = {
    * @param {Object} invoice - Pre-checked invoice (optional)
    * @returns {Object} Result with success flag and invoice details
    */
-  create: function (data, invoice = null) {
+  createInvoice: function (data, invoice = null) {
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
       return { success: false, error: 'Unable to acquire lock for invoice creation' };
@@ -111,7 +111,7 @@ const InvoiceManager = {
       const { supplier, invoiceNo, sheetName, sysId, receivedAmt, timestamp } = data;
 
       // Double-check invoice doesn't exist (atomic check with lock)
-      const existingInvoice = invoice || this.find(supplier, invoiceNo);
+      const existingInvoice = invoice || this.findInvoice(supplier, invoiceNo);
 
       if (existingInvoice) {
         const msg = `Invoice ${invoiceNo} already exists at row ${existingInvoice.row}`;
@@ -162,10 +162,10 @@ const InvoiceManager = {
 
 
   /**
-   * OPTIMIZED: InvoiceManager.updateOptimized()
+   * OPTIMIZED: InvoiceManager.updateInvoiceIfChanged()
    * Only writes if data actually changed
    */
-  updateOptimized: function(existingInvoice, data) {
+  updateInvoiceIfChanged: function(existingInvoice, data) {
     try {
       const col = CONFIG.invoiceCols;
       const rowNum = existingInvoice.row;
@@ -206,7 +206,7 @@ const InvoiceManager = {
       return { success: true, action: 'updated', row: rowNum };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.updateOptimized', error.toString());
+      AuditLogger.logError('InvoiceManager.updateInvoiceIfChanged', error.toString());
       return { success: false, error: error.toString() };
     }
   },
@@ -289,7 +289,7 @@ const InvoiceManager = {
 
       try {
         // Check for duplicates using cached data
-        const exists = this.find(data.supplier, data.invoiceNo);
+        const exists = this.findInvoice(data.supplier, data.invoiceNo);
         if (exists) {
           errors.push(`Row ${i + 1}: Invoice ${data.invoiceNo} for ${data.supplier} already exists.`);
           failed++;
@@ -374,7 +374,7 @@ const InvoiceManager = {
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
    * @param {number} row - Row number to apply formulas to
    */
-  setFormulas: function (sheet, row) {
+  applyInvoiceFormulas: function (sheet, row) {
     try {
       const col = CONFIG.invoiceCols;
 
@@ -396,7 +396,7 @@ const InvoiceManager = {
         .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
 
     } catch (error) {
-      logSystemError('InvoiceManager.setFormulas',
+      logSystemError('InvoiceManager.applyInvoiceFormulas',
         `Failed to set formulas for row ${row}: ${error.toString()}`);
       throw error;
     }
@@ -480,7 +480,7 @@ const InvoiceManager = {
    * @param {string} invoiceNo - Invoice number
    * @returns {{row:number,data:Array,partition:string}|null}
    */
-  find: function (supplier, invoiceNo) {
+  findInvoice: function (supplier, invoiceNo) {
     if (StringUtils.isEmpty(supplier) || StringUtils.isEmpty(invoiceNo)) {
       return null;
     }
@@ -605,7 +605,7 @@ const InvoiceManager = {
    * @param {boolean} includePaid - Include paid invoices (default true)
    * @returns {Array<Object>} Array of invoice objects
    */
-  getAllForSupplier: function (supplier, includePaid = true) {
+  getInvoicesForSupplier: function (supplier, includePaid = true) {
     if (StringUtils.isEmpty(supplier)) {
       return [];
     }
@@ -674,7 +674,7 @@ const InvoiceManager = {
       return invoices;
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getAllForSupplier',
+      AuditLogger.logError('InvoiceManager.getInvoicesForSupplier',
         `Failed to get invoices for ${supplier}: ${error.toString()}`);
       return [];
     }
@@ -686,7 +686,7 @@ const InvoiceManager = {
    * 
    * @returns {Object} Statistics summary
    */
-  getStatistics: function () {
+  getInvoiceStatistics: function () {
     try {
       // Use partition-aware data
       const cacheData = CacheManager.getInvoiceData();
@@ -736,7 +736,7 @@ const InvoiceManager = {
       };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.getStatistics',
+      AuditLogger.logError('InvoiceManager.getInvoiceStatistics',
         `Failed to get statistics: ${error.toString()}`);
       return null;
     }
@@ -762,7 +762,7 @@ const InvoiceManager = {
    * @param {string} paymentType - Payment type
    * @returns {boolean} Success flag
    */
-  buildUnpaidDropdown: function (sheet, row, supplier, paymentType) {
+  buildDuePaymentDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
     // Validate request parameters
@@ -771,7 +771,7 @@ const InvoiceManager = {
       try {
         targetCell.clearDataValidations().clearNote().clearContent().setBackground(null);
       } catch (e) {
-        AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', `Failed to clear: ${e.toString()}`);
+        AuditLogger.logError('InvoiceManager.buildDuePaymentDropdown', `Failed to clear: ${e.toString()}`);
       }
       return false;
     }
@@ -794,7 +794,7 @@ const InvoiceManager = {
       return this._applyDropdownToCell(targetCell, invoiceNumbers);
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.buildUnpaidDropdown', error.toString());
+      AuditLogger.logError('InvoiceManager.buildDuePaymentDropdown', error.toString());
       targetCell.clearDataValidations()
         .clearContent()
         .setNote('Error loading invoices - please contact administrator')
@@ -837,7 +837,7 @@ const InvoiceManager = {
 
       // Repair in batch
       for (const rowNum of rowsToRepair) {
-        this.setFormulas(invoiceSh, rowNum);
+        this.applyInvoiceFormulas(invoiceSh, rowNum);
         repairedCount++;
       }
 
@@ -859,7 +859,7 @@ const InvoiceManager = {
   * @param {Array} invoiceDataArray - Array of invoice data objects
   * @returns {Object} Result summary
   */
-  batchCreate: function (invoiceDataArray) {
+  batchCreateInvoices: function (invoiceDataArray) {
     if (!invoiceDataArray || invoiceDataArray.length === 0) {
       return { success: true, created: 0, failed: 0, errors: [] };
     }
@@ -897,7 +897,7 @@ const InvoiceManager = {
       };
 
     } catch (error) {
-      AuditLogger.logError('InvoiceManager.batchCreate', error.toString());
+      AuditLogger.logError('InvoiceManager.batchCreateInvoices', error.toString());
       return { success: false, error: error.toString() };
     } finally {
       LockManager.releaseLock(lock);
@@ -1015,37 +1015,37 @@ const InvoiceManager = {
  * Backward compatibility wrapper functions
  */
 
-function createNewInvoice(data) {
-  return InvoiceManager.create(data);
+// Backward compatibility wrappers - OLD NAMES → NEW NAMES
+function create(data) {
+  return InvoiceManager.createInvoice(data);
 }
 
-function batchCreateInvoices(invoiceDataArray) {
-  return InvoiceManager.batchCreate(invoiceDataArray);
+function find(supplier, invoiceNo) {
+  return InvoiceManager.findInvoice(supplier, invoiceNo);
 }
 
-
-function findInvoiceRecord(supplier, invoiceNo) {
-  return InvoiceManager.find(supplier, invoiceNo);
+function setFormulas(sheet, row) {
+  return InvoiceManager.applyInvoiceFormulas(sheet, row);
 }
 
-function setInvoiceFormulas(sheet, row) {
-  return InvoiceManager.setFormulas(sheet, row);
+function getAllForSupplier(supplier, includePaid) {
+  return InvoiceManager.getInvoicesForSupplier(supplier, includePaid);
 }
 
-function getUnpaidInvoicesForSupplier(supplier) {
-  return InvoiceManager.getUnpaidForSupplier(supplier);
-}
-
-function getAllInvoicesForSupplier(supplier, includePaid) {
-  return InvoiceManager.getAllForSupplier(supplier, includePaid);
-}
-
-function getInvoiceStatistics() {
-  return InvoiceManager.getStatistics();
+function getStatistics() {
+  return InvoiceManager.getInvoiceStatistics();
 }
 
 function buildUnpaidDropdown(sheet, row, supplier, paymentType) {
-  return InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType);
+  return InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
+}
+
+function batchCreate(invoiceDataArray) {
+  return InvoiceManager.batchCreateInvoices(invoiceDataArray);
+}
+
+function updateOptimized(existingInvoice, data) {
+  return InvoiceManager.updateInvoiceIfChanged(existingInvoice, data);
 }
 
 function repairAllInvoiceFormulas() {
