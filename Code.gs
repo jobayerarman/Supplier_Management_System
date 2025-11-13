@@ -16,12 +16,12 @@
  *    - triggerSetup/teardown functions for Master Database mode support
  *
  * 2. FIELD AUTO-POPULATION
- *    - autoPopulatePaymentFields(): Copy Invoice No/Received Amt to payment fields
- *    - autoPopulateDuePaymentAmount(): Fetch outstanding balance for Due payments
+ *    - populatePaymentFields(): Copy Invoice No/Received Amt to payment fields
+ *    - populateDuePaymentAmount(): Fetch outstanding balance for Due payments
  *    - clearPaymentFieldsForTypeChange(): Clear irrelevant fields when type changes
  *
  * 3. TRANSACTION PROCESSING
- *    - processPostedRowWithLock(): Main workflow orchestration for posted rows
+ *    - processPostedRow(): Main workflow orchestration for posted rows
  *    - Validates, creates invoices, records payments, updates balances
  *    - Manages lock acquisition and error handling
  *
@@ -414,7 +414,7 @@ function onEditInstallable(e) {
 
           try {
             // Pass pre-read data, date, and enteredBy to avoid redundant reads
-            processPostedRowWithLock(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
+            processPostedRow(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
           } finally {
             LockManager.releaseLock(lock);
           }
@@ -448,7 +448,7 @@ function onEditInstallable(e) {
         // Then: Auto-populate fields for new payment type
         if (['Regular', 'Partial'].includes(paymentType)) {
           // Regular/Partial: Copy Invoice No → Prev Invoice, Received Amt → Payment Amt
-          const populatedValues = autoPopulatePaymentFields(sheet, row, paymentType, rowValues);
+          const populatedValues = populatePaymentFields(sheet, row, paymentType, rowValues);
           rowValues[configCols.paymentAmt] = populatedValues.paymentAmt;
           rowValues[configCols.prevInvoice] = populatedValues.prevInvoice;
           updateBalance = true;
@@ -472,7 +472,7 @@ function onEditInstallable(e) {
       case configCols.prevInvoice + 1:
         // For Due payments: Look up balance of selected invoice
         if ((paymentType === 'Due') && supplier && editedValue) {
-          const populatedAmount = autoPopulateDuePaymentAmount(sheet, row, supplier, editedValue);
+          const populatedAmount = populateDuePaymentAmount(sheet, row, supplier, editedValue);
           rowValues[configCols.paymentAmt] = populatedAmount;
         }
         updateBalance = true;
@@ -523,7 +523,7 @@ function onEditInstallable(e) {
  */
 
 /**
- * Process Posted Row with Lock - Full Transaction Workflow
+ * Process Posted Row - Full Transaction Workflow
  *
  * Orchestrates the complete transaction workflow for a posted row:
  *   1. Validates post data (early exit if invalid - no lock acquired)
@@ -573,7 +573,7 @@ function onEditInstallable(e) {
  *
  * @throws Errors caught and logged to AuditLog sheet
  */
-function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = null, enteredBy = null) {
+function processPostedRow(sheet, rowNum, rowData = null, invoiceDate = null, enteredBy = null) {
   const cols = CONFIG.cols;
   const totalCols = CONFIG.totalColumns.daily;
   const colors = CONFIG.colors;
@@ -798,10 +798,10 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
 }
 
 /**
- * Auto-Populate Due Payment Amount
+ * Populate Due Payment Amount
  *
  * Fills payment amount with the outstanding balance of selected invoice
- * for Due payment type. Automatically looks up invoice balance and validates
+ * for Due payment type. Looks up invoice balance and validates
  * that the invoice exists and has outstanding balance.
  *
  * OPERATIONS:
@@ -822,10 +822,10 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
  * @returns {number|string} Outstanding balance if found and > 0, empty string otherwise
  *
  * @example
- * const amount = autoPopulateDuePaymentAmount(sheet, 10, "Acme Corp", "INV-001");
+ * const amount = populateDuePaymentAmount(sheet, 10, "Acme Corp", "INV-001");
  * // Sets payment amount to balance due, returns the amount
  */
-function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
+function populateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
   try {
     if (!prevInvoice || !String(prevInvoice).trim()) {
       return '';
@@ -861,9 +861,9 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
 }
 
 /**
- * Auto-Populate Payment Fields
+ * Populate Payment Fields
  *
- * Auto-fills payment fields for Regular and Partial payment types.
+ * Fills payment fields for Regular and Partial payment types.
  * Copies Invoice No to Previous Invoice and Received Amount to Payment Amount.
  *
  * OPERATIONS:
@@ -886,10 +886,10 @@ function autoPopulateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
  *   - prevInvoice: Invoice number that was set
  *
  * @example
- * const result = autoPopulatePaymentFields(sheet, 10, 'Regular', rowData);
+ * const result = populatePaymentFields(sheet, 10, 'Regular', rowData);
  * // {paymentAmt: 1500, prevInvoice: 'INV-001'}
  */
-function autoPopulatePaymentFields(sheet, row, paymentType, rowData) {
+function populatePaymentFields(sheet, row, paymentType, rowData) {
   try {
     const invoiceNo = rowData[CONFIG.cols.invoiceNo];
     const receivedAmt = rowData[CONFIG.cols.receivedAmt];
