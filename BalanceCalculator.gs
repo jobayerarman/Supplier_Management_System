@@ -299,7 +299,7 @@ const BalanceCalculator = {
   },
 
   /**
-   * Get balance due for a specific invoice
+   * Get balance due for a specific invoice (accounting for applied credits)
    *
    * @param {string} invoiceNo - Invoice number
    * @param {string} supplier - Supplier name
@@ -315,10 +315,34 @@ const BalanceCalculator = {
       if (!invoice) {
         return 0;
       }
+
+      // Balance = (Total Paid - Total Amount) - Applied Credits
+      // The formula in InvoiceDatabase now includes applied credits
       return Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
     } catch (error) {
       logSystemError('BalanceCalculator.getInvoiceOutstanding',
         `Failed to get invoice outstanding: ${error.toString()}`);
+      return 0;
+    }
+  },
+
+  /**
+   * Get total applied credits for an invoice
+   * Used for audit and reporting purposes
+   *
+   * @param {string} invoiceNo - Invoice number
+   * @returns {number} Total applied credits or 0 if none found
+   */
+  getAppliedCreditsForInvoice: function(invoiceNo) {
+    if (StringUtils.isEmpty(invoiceNo)) {
+      return 0;
+    }
+
+    try {
+      return CreditNoteManager.getTotalAppliedCreditsForInvoice(invoiceNo);
+    } catch (error) {
+      logSystemError('BalanceCalculator.getAppliedCreditsForInvoice',
+        `Failed to get applied credits: ${error.toString()}`);
       return 0;
     }
   },

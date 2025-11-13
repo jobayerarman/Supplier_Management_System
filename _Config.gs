@@ -35,6 +35,7 @@ const CONFIG = {
                 '21','22','23','24','25','26','27','28','29','30','31'],
   invoiceSheet: 'InvoiceDatabase',
   paymentSheet: 'PaymentLog',
+  creditNoteSheet: 'CreditNoteDatabase',
   supplierLedger: 'SupplierLedger',
   auditSheet: 'AuditLog',
   supplierList: 'SupplierList',
@@ -56,6 +57,7 @@ const CONFIG = {
     sheets: {
       invoice: 'InvoiceDatabase',
       payment: 'PaymentLog',
+      creditNote: 'CreditNoteDatabase',
       audit: 'AuditLog',
       supplier: 'SupplierDatabase'
     },
@@ -64,6 +66,7 @@ const CONFIG = {
     importRanges: {
       invoice: 'A:M',      // All invoice columns
       payment: 'A:L',      // All payment columns
+      creditNote: 'A:M',   // All credit note columns
       audit: 'A:G',        // All audit columns
       supplier: 'A:D'      // All supplier columns
     }
@@ -136,7 +139,24 @@ const CONFIG = {
     sysId: 10,          // K
     invoiceId: 11       // L
   },
-  
+
+  // Credit note sheet column mappings (0-based indices)
+  creditNoteCols: {
+    creditDate: 0,      // A - actual credit note date
+    supplier: 1,        // B
+    creditNo: 2,        // C - system generated
+    creditAmount: 3,    // D - credit amount (always positive)
+    refInvoiceNo: 4,    // E - reference invoice number
+    reason: 5,          // F - reason for credit (return/shortage/damage/pricing/other)
+    appliedAmount: 6,   // G - amount applied to reduce invoice
+    remainingCredit: 7, // H - unused credit amount (D - G)
+    status: 8,          // I - Active/Applied/Expired
+    originDay: 9,       // J - which daily sheet it came from
+    enteredBy: 10,      // K
+    timestamp: 11,      // L
+    sysId: 12           // M
+  },
+
   // Ledger sheet column mappings (0-based indices)
   ledgerCols: {
     supplier: 0,        // A
@@ -165,9 +185,10 @@ const CONFIG = {
     CACHE_TTL_MS: 60000,
     LOCK_TIMEOUT_MS: 30000,
     MAX_INVOICE_NO_LENGTH: 50,
-    SUPPORTED_PAYMENT_TYPES: ['Unpaid', 'Regular', 'Partial', 'Due'],
+    SUPPORTED_PAYMENT_TYPES: ['Unpaid', 'Regular', 'Partial', 'Due', 'Credit'],
     SUPPORTED_PAYMENT_METHODS: ['Cash', 'Check', 'Bank Transfer', 'None'],
-    DEFAULT_PAYMENT_METHOD: 'Cash'
+    DEFAULT_PAYMENT_METHOD: 'Cash',
+    SUPPORTED_CREDIT_REASONS: ['Return', 'Shortage', 'Damage', 'Pricing Error', 'Other']
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -191,6 +212,7 @@ const CONFIG = {
     daily: 14,          // A through N
     invoice: 13,        // A through M (added enteredBy column)
     payment: 12,        // A through L
+    creditNote: 13,     // A through M
     ledger: 4,          // A through D
     audit: 7            // A through G
   },
@@ -226,6 +248,7 @@ const CONFIG = {
       const requiredSheets = [
         this.invoiceSheet,
         this.paymentSheet,
+        this.creditNoteSheet,
         this.supplierLedger,
         this.auditSheet,
         this.supplierList
@@ -397,6 +420,7 @@ const CONFIG = {
       sheets: {
         invoice: this.invoiceSheet,
         payment: this.paymentSheet,
+        creditNote: this.creditNoteSheet,
         ledger: this.supplierLedger,
         audit: this.auditSheet,
         supplierList: this.supplierList,
@@ -406,6 +430,7 @@ const CONFIG = {
         daily: this.cols,
         invoice: this.invoiceCols,
         payment: this.paymentCols,
+        creditNote: this.creditNoteCols,
         ledger: this.ledgerCols,
         audit: this.auditCols
       },
@@ -438,6 +463,7 @@ const CONFIG = {
     summary.push('Required Sheets:');
     summary.push(`  - Invoice: ${this.invoiceSheet}`);
     summary.push(`  - Payment: ${this.paymentSheet}`);
+    summary.push(`  - Credit Notes: ${this.creditNoteSheet}`);
     summary.push(`  - Ledger: ${this.supplierLedger}`);
     summary.push(`  - Audit: ${this.auditSheet}`);
     summary.push(`  - Supplier List: ${this.supplierList}`);

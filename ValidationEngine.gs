@@ -114,9 +114,16 @@ function validatePaymentTypeRules(data) {
         errors.push(...dueValidation.errors);
       }
       break;
-      
+
+    case 'Credit':
+      const creditValidation = validateCreditPayment(data);
+      if (!creditValidation.valid) {
+        errors.push(...creditValidation.errors);
+      }
+      break;
+
     default:
-      errors.push(`Invalid payment type: "${data.paymentType}". Must be Unpaid, Regular, Partial, or Due`);
+      errors.push(`Invalid payment type: "${data.paymentType}". Must be Unpaid, Regular, Partial, Due, or Credit`);
   }
 
   return errors.length > 0 
@@ -169,6 +176,71 @@ function validateDuePayment(data) {
 }
 
 /**
+ * Validate Credit payment specific requirements
+ * Credit notes are used to reduce invoice amounts for returns, shortages, damage, pricing errors, etc.
+ * In the daily sheet: Invoice No = reference invoice, Received Amt = credit amount, Notes = reason
+ *
+ * @param {Object} data - Transaction data
+ * @returns {Object} Validation result
+ */
+function validateCreditPayment(data) {
+  const errors = [];
+
+  // Invoice number (reference invoice being credited)
+  if (!data.invoiceNo) {
+    errors.push('Invoice number (reference invoice) is required for Credit payment');
+  }
+
+  // Payment amount must be 0 (credit is stored in receivedAmt)
+  if (data.paymentAmt !== 0) {
+    errors.push('Payment amount must be 0 for Credit payment');
+  }
+
+  // Credit amount (stored in receivedAmt field)
+  const creditAmt = data.receivedAmt || 0;
+  if (creditAmt <= 0) {
+    errors.push('Credit amount must be greater than 0 for Credit payment');
+  }
+
+  // Reason (stored in notes field)
+  if (!data.notes || data.notes.toString().trim() === '') {
+    errors.push('Reason for credit is required for Credit payment');
+  }
+
+  // Validate reason is one of the supported reasons
+  const reason = (data.notes || '').toString().trim();
+  if (reason && !CONFIG.rules.SUPPORTED_CREDIT_REASONS.includes(reason)) {
+    // Note: Only warn, don't block - allow free-form reasons
+    // errors.push(`Reason "${reason}" is not standard. Use: ${CONFIG.rules.SUPPORTED_CREDIT_REASONS.join(', ')}`);
+  }
+
+  // Check if referenced invoice exists
+  if (data.invoiceNo) {
+    try {
+      const invoice = InvoiceManager.findInvoice(data.supplier, data.invoiceNo);
+      if (!invoice) {
+        errors.push(`Reference invoice "${data.invoiceNo}" not found for supplier "${data.supplier}"`);
+      } else {
+        // Allow credit up to the total invoice amount
+        // Credits can be applied to already-paid invoices for refunds/adjustments
+        const totalAmount = Number(invoice.data[CONFIG.invoiceCols.totalAmount]) || 0;
+        if (creditAmt > totalAmount) {
+          errors.push(`Credit amount (${creditAmt}) cannot exceed invoice total (${totalAmount})`);
+        }
+      }
+    } catch (error) {
+      logSystemError('validateCreditPayment',
+        `Error validating reference invoice: ${error.toString()}`);
+      errors.push('Unable to verify reference invoice - system error');
+    }
+  }
+
+  return errors.length > 0
+    ? { valid: false, errors: errors }
+    : { valid: true };
+}
+
+/**
  * Validate business logic rules
  * @param {Object} data - Transaction data
  * @returns {Object} Validation result
@@ -176,8 +248,8 @@ function validateDuePayment(data) {
 function validateBusinessLogic(data) {
   const errors = [];
   
-  // Check for duplicate invoice (only for new invoices, not Due payments)
-  if (data.invoiceNo && data.paymentType !== 'Due') {
+  // Check for duplicate invoice (only for new invoices, not Due or Credit payments)
+  if (data.invoiceNo && data.paymentType !== 'Due' && data.paymentType !== 'Credit') {
     try {
       const existing = InvoiceManager.findInvoice(data.supplier, data.invoiceNo);
       if (existing) {

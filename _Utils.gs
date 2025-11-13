@@ -644,6 +644,16 @@ function shouldProcessPayment(data) {
 }
 
 /**
+ * Check if credit note should be created for this transaction
+ * Credit notes are created for Credit payment type
+ * @param {Object} data - Transaction data
+ * @returns {boolean} True if credit note should be created
+ */
+function shouldProcessCredit(data) {
+  return data && data.paymentType === 'Credit';
+}
+
+/**
  * Check for duplicate payment by system ID
  * @param {string} sysId - System ID to check
  * @returns {boolean} True if duplicate exists

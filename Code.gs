@@ -431,6 +431,37 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
       }
     }
 
+    // Process credit note if applicable (for Credit payment type)
+    if (shouldProcessCredit(data)) {
+      const creditResult = CreditNoteManager.createCreditNote({
+        supplier: data.supplier,
+        creditAmount: data.receivedAmt,  // Credit amount stored in receivedAmt
+        refInvoiceNo: data.invoiceNo,   // Reference invoice in invoiceNo
+        reason: data.notes,              // Reason in notes field
+        creditDate: data.invoiceDate,
+        originDay: data.sheetName,
+        enteredBy: data.enteredBy
+      });
+
+      if (!creditResult.success) {
+        setBatchPostStatus(sheet, rowNum, `ERROR: ${creditResult.message}`, "SYSTEM", timeStr, false, colors.error);
+        // Clear balance cell with error indicator
+        sheet.getRange(rowNum, cols.balance + 1)
+          .clearContent()
+          .setNote(`⚠️ Credit note creation failed\n${creditResult.message}`)
+          .setBackground(colors.error);
+        return;
+      }
+
+      // Log successful credit creation
+      AuditLogger.log('CREDIT_NOTE_POSTED', {
+        creditNo: creditResult.creditNo,
+        supplier: data.supplier,
+        amount: data.receivedAmt,
+        refInvoice: data.invoiceNo
+      }, `Credit note ${creditResult.creditNo} posted successfully`);
+    }
+
     // ═══ 4. UPDATE BALANCE CELL ═══
     // Use updateBalanceCell with afterPost=true to get correct balance
     // This reads the current outstanding (which already reflects the payment)
@@ -517,6 +548,15 @@ function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
         break;
 
       case 'Due':
+        paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+        clearedFields = ['paymentAmt'];
+        clearedValues = {
+          paymentAmt: oldPaymentAmt || '(empty)'
+        };
+        break;
+
+      case 'Credit':
+        // For Credit: keep invoiceNo (reference invoice) clear paymentAmt
         paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
         clearedFields = ['paymentAmt'];
         clearedValues = {
