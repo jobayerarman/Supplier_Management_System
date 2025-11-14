@@ -778,52 +778,7 @@ const Code = {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 4: BACKWARD COMPATIBILITY WRAPPERS
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * Global functions that delegate to Code module for backward compatibility
- */
-
-function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
-  Code.clearPaymentFieldsForTypeChange(sheet, row, newPaymentType);
-}
-
-function populateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
-  return Code.populateDuePaymentAmount(sheet, row, supplier, prevInvoice);
-}
-
-function populatePaymentFields(sheet, row, paymentType, rowData) {
-  return Code.populatePaymentFields(sheet, row, paymentType, rowData);
-}
-
-function processPostedRow(sheet, rowNum, rowData, invoiceDate, enteredBy) {
-  Code.processPostedRow(sheet, rowNum, rowData, invoiceDate, enteredBy);
-}
-
-/**
- * Build Previous Invoice Dropdown
- *
- * Wrapper for InvoiceManager.buildDuePaymentDropdown().
- *
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
- * @param {number} row - Row number (1-based)
- * @param {Array} rowData - Pre-read row values (optional)
- * @returns {void} Updates sheet with dropdown
- */
-function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
-  if (!rowData) {
-    rowData = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
-  }
-
-  const supplier = rowData[CONFIG.cols.supplier];
-  const paymentType = rowData[CONFIG.cols.paymentType];
-
-  return InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
-}
-
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 5: TRIGGER SETUP/TEARDOWN
+ * SECTION 4: TRIGGER SETUP/TEARDOWN
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
