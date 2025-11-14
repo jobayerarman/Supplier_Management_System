@@ -16,28 +16,31 @@
  *    - triggerSetup/teardown functions for Master Database mode support
  *
  * 2. FIELD AUTO-POPULATION
- *    - populatePaymentFields(): Copy Invoice No/Received Amt to payment fields
- *    - populateDuePaymentAmount(): Fetch outstanding balance for Due payments
- *    - clearPaymentFieldsForTypeChange(): Clear irrelevant fields when type changes
+ *    - Code.populatePaymentFields(): Copy Invoice No/Received Amt to payment fields
+ *    - Code.populateDuePaymentAmount(): Fetch outstanding balance for Due payments
+ *    - Code.clearPaymentFieldsForTypeChange(): Clear irrelevant fields when type changes
  *
  * 3. TRANSACTION PROCESSING
- *    - processPostedRow(): Main workflow orchestration for posted rows
+ *    - Code.processPostedRow(): Main workflow orchestration for posted rows
  *    - Validates, creates invoices, records payments, updates balances
  *    - Manages lock acquisition and error handling
  *
  * ARCHITECTURE & DESIGN PATTERNS:
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * SECTION ORGANIZATION:
+ * MODULE ORGANIZATION (following PaymentManager/InvoiceManager patterns):
  *   1. MODULE HEADER - This documentation
- *   2. DUAL TRIGGER SYSTEM - onEdit (simple) + onEditInstallable (installable)
- *   3. PUBLIC API - Event handlers and transaction processing
- *   4. FIELD AUTO-POPULATION HELPERS - Intelligent form filling
- *   5. INTERNAL HELPERS - Pure utility functions
- *   6. TRIGGER SETUP/TEARDOWN - Master Database configuration
+ *   2. GLOBAL TRIGGER FUNCTIONS - onEdit, onEditInstallable (entry points)
+ *   3. CODE MODULE - Public API and private helpers
+ *      - PUBLIC API - Core transaction processing
+ *      - EVENT HANDLERS - Per-column edit handlers
+ *      - FIELD POPULATION - Auto-population helpers
+ *      - INTERNAL UTILITIES - Private helper functions
+ *   4. TRIGGER SETUP/TEARDOWN - Master Database configuration
  *
  * DESIGN PATTERNS USED:
- *   • Dual Trigger Pattern: Separation of simple vs full-permission operations
- *   • Single Responsibility: Each helper focused on specific task
+ *   • Module Pattern: Encapsulation via Code object with public/private methods
+ *   • Handler Dispatch: Switch-based routing to specific column handlers
+ *   • Single Responsibility: Each handler focused on specific column edit
  *   • Early Exit Pattern: Return early to avoid nested blocks
  *   • Write-Through Updates: Cache invalidation after state changes
  *   • Error Boundary: Try-catch with consistent audit logging
@@ -61,19 +64,21 @@
  *
  * DUAL TRIGGER SYSTEM:
  * ━━━━━━━━━━━━━━━━━━
- * SIMPLE TRIGGER (onEdit):
+ * SIMPLE TRIGGER (onEdit - global entry point):
  *   - Run for: Invoice No, Received Amount edits
  *   - Permissions: Limited (current spreadsheet only)
  *   - Purpose: Lightweight field copying (Invoice No → Prev Invoice, etc.)
  *   - Duration: ~5-10ms per edit
  *   - No lock required
+ *   - Delegates to Code._handleSimpleTrigger() for processing
  *
- * INSTALLABLE TRIGGER (onEditInstallable):
+ * INSTALLABLE TRIGGER (onEditInstallable - global entry point):
  *   - Run for: Payment Type, Post, Due Invoice selection, Payment Amount
  *   - Permissions: Full (can access Master Database)
  *   - Purpose: Database operations, cache access, balance calculations
  *   - Duration: ~50-150ms per edit
  *   - Lock acquired only for POST operations
+ *   - Delegates to Code._handleInstallableTrigger() for processing
  *
  * MASTER DATABASE SUPPORT:
  * ━━━━━━━━━━━━━━━━━━━━
@@ -118,59 +123,6 @@
  *   - All operations logged with timestamp and user tracking
  *   - Error logging for debugging and compliance
  *
- * USAGE EXAMPLES:
- * ━━━━━━━━━━━━━━
- * // Automatic: User edits Invoice No cell
- * // → onEdit() fires → copies Invoice No to Prev Invoice
- *
- * // Automatic: User edits Payment Type to "Due"
- * // → onEditInstallable() fires → builds dropdown of unpaid invoices
- *
- * // Automatic: User checks POST checkbox
- * // → onEditInstallable() fires → processes entire transaction
- * // → validates → creates invoice → records payment → updates balance
- *
- * // Manual: Set up Master Database (one-time)
- * // Run setupInstallableEditTrigger() from Script Editor
- *
- * PERFORMANCE METRICS:
- * ━━━━━━━━━━━━━━━━━
- * Simple trigger (onEdit):
- *   - Invoice No edit: ~5ms
- *   - Received Amt edit: ~7ms
- *
- * Installable trigger (onEditInstallable):
- *   - Field population: ~20-30ms
- *   - Dropdown building: ~100-200ms (first cache load: 200-400ms)
- *   - Balance calculation: ~30-50ms
- *   - Full POST transaction: ~200-300ms (local), ~400-600ms (master)
- *
- * ERROR HANDLING & VALIDATION:
- * ━━━━━━━━━━━━━━━━━━━━━━━
- * VALIDATION POINTS:
- *   - Input validation: Post data structure and required fields
- *   - Business logic: Payment type rules, amount limits
- *   - Duplicate detection: Cache-based O(1) lookups
- *
- * ERROR RESPONSES:
- *   - Validation errors: Show immediately without lock acquisition
- *   - Processing errors: Display with error color and audit log
- *   - Lock errors: User-friendly message about concurrent edits
- *
- * DEBUGGING:
- * ━━━━━━━━━
- * To test trigger setup:
- *   1. Check setupInstallableEditTrigger() output
- *   2. Verify trigger in Script Editor → Triggers panel
- *   3. Run testMasterDatabaseConnection() for Master DB validation
- *   4. Check AuditLog sheet for error details
- *
- * BACKWARD COMPATIBILITY:
- * ━━━━━━━━━━━━━━━━━━━━
- * Legacy function wrappers maintained for external code:
- *   - All internal helpers can be called directly
- *   - Result objects always follow consistent format
- *
  * Modular Architecture Dependencies:
  * - _Config.gs → global configuration
  * - _Utils.gs → string, date, sheet, ID generation utilities
@@ -185,7 +137,7 @@
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 2: DUAL TRIGGER SYSTEM
+ * SECTION 2: GLOBAL TRIGGER FUNCTIONS (Entry Points)
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -193,6 +145,7 @@
  * Simple Edit Trigger - Lightweight UI Operations Only
  *
  * Automatically triggered by Google Sheets when a user edits a cell.
+ * Delegates to Code module for processing.
  *
  * RESTRICTIONS:
  * - Cannot access other spreadsheets (no Master Database access)
@@ -200,87 +153,11 @@
  * - Limited permissions (AuthMode.LIMITED)
  * - 30-second execution limit
  *
- * ALLOWED OPERATIONS:
- * - Basic field copying (Invoice No → Prev Invoice)
- * - Simple value propagation (Received Amt → Payment Amt for Regular)
- * - Lightweight validations
- * - UI feedback
- *
- * PROHIBITED OPERATIONS (Handled by onEditInstallable):
- * - Database writes (InvoiceDatabase, PaymentLog, AuditLog)
- * - Cache operations (CacheManager.getInvoiceData, etc.)
- * - Dropdown building (requires cache lookup)
- * - Balance calculations (requires cache lookup)
- * - Auto-population (requires database lookup)
- *
- * For Master Database mode, install onEditInstallable as installable trigger.
- *
  * @param {GoogleAppsScript.Events.SheetsOnEditEvent} e - Edit event object
  * @returns {void}
  */
 function onEdit(e) {
-  // Validate event object
-  if (!e || !e.range) return;
-
-  const sheet = e.range.getSheet();
-  const sheetName = sheet.getName();
-  const row = e.range.getRow();
-  const col = e.range.getColumn();
-
-  // Skip non-daily sheets or header rows immediately
-  if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
-
-  try {
-    const configCols = CONFIG.cols;
-
-    // ═══ SINGLE BATCH READ - ONE API CALL ═══
-    const activeRow = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily);
-    let rowValues = activeRow.getValues()[0];
-
-    // Pre-extract commonly used values
-    const editedValue = rowValues[col - 1];
-    const paymentType = rowValues[configCols.paymentType];
-    const invoiceNo = rowValues[configCols.invoiceNo];
-    const receivedAmt = parseFloat(rowValues[configCols.receivedAmt]) || 0;
-
-    // ═══ LIGHTWEIGHT OPERATIONS ONLY ═══
-    switch (col) {
-      // ═══ INVOICE NO EDIT - Copy or Clear Linked Payment Invoice ═══
-      case configCols.invoiceNo + 1:
-        if (['Regular', 'Partial'].includes(paymentType)) {
-          const prevInvoiceCell = sheet.getRange(row, configCols.prevInvoice + 1);
-          if (invoiceNo && String(invoiceNo).trim()) {
-            // Copy Invoice No → Prev Invoice (Payment Invoice)
-            prevInvoiceCell.setValue(invoiceNo);
-          } else {
-            // Clear Prev Invoice when Invoice No is deleted
-            prevInvoiceCell.clearContent().clearNote();
-          }
-        }
-        break;
-
-      // ═══ RECEIVED AMOUNT EDIT - Copy or Clear Linked Payment Amount ═══
-      case configCols.receivedAmt + 1:
-        if (paymentType === 'Regular') {
-          const paymentAmtCell = sheet.getRange(row, configCols.paymentAmt + 1);
-          if (receivedAmt > 0) {
-            // Copy Received Amt → Payment Amt
-            paymentAmtCell.setValue(receivedAmt);
-          } else {
-            // Clear Payment Amt when Received Amt is cleared/zero
-            paymentAmtCell.clearContent().clearNote();
-          }
-        }
-        break;
-
-      // ═══ ALL OTHER EDITS - Deferred to Installable Trigger ═══
-      default:
-        return;
-    }
-
-  } catch (error) {
-    logSystemError("onEdit", error.toString());
-  }
+  Code._handleSimpleTrigger(e);
 }
 
 /**
@@ -288,6 +165,7 @@ function onEdit(e) {
  *
  * Must be set up as an INSTALLABLE trigger (not automatic).
  * Run setupInstallableEditTrigger() to create it.
+ * Delegates to Code module for processing.
  *
  * CAPABILITIES:
  * - Full permissions (AuthMode.FULL)
@@ -298,699 +176,641 @@ function onEdit(e) {
  * - Can calculate balances using cache
  * - No 30-second limit
  *
- * This is the MAIN handler for all database-dependent operations.
- *
  * @param {GoogleAppsScript.Events.SheetsOnEditEvent} e - Edit event object
  * @returns {void}
  */
 function onEditInstallable(e) {
-  // Validate event object
-  if (!e || !e.range) return;
-
-  const sheet = e.range.getSheet();
-  const sheetName = sheet.getName();
-  const row = e.range.getRow();
-  const col = e.range.getColumn();
-
-  // Skip non-daily sheets or header rows immediately
-  if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
-
-  try {
-    const configCols = CONFIG.cols;
-
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 1: SINGLE BATCH READ (1 API call)
-    // ═════════════════════════════════════════════════════════════════════
-    const activeRow = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily);
-    let rowValues = activeRow.getValues()[0];
-
-    // Pre-extract commonly used values to avoid repeated array access
-    const editedValue = rowValues[col - 1];
-    const paymentType = rowValues[configCols.paymentType];
-    const supplier = rowValues[configCols.supplier];
-    const invoiceNo = rowValues[configCols.invoiceNo];
-    const receivedAmt = parseFloat(rowValues[configCols.receivedAmt]) || 0;
-    const paymentAmt = parseFloat(rowValues[configCols.paymentAmt]) || 0;
-
-    // Track if balance update is needed (consolidated at end for efficiency)
-    let updateBalance = false;
-
-    // ═════════════════════════════════════════════════════════════════════
-    // STEP 2: DISPATCH TO HANDLER BASED ON EDITED COLUMN
-    // ═════════════════════════════════════════════════════════════════════
-    switch (col) {
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 1: POST CHECKBOX
-      // Triggered when user checks the "Post" column (J)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.post + 1:
-        if (editedValue === true || String(editedValue).toUpperCase() === 'TRUE') {
-          // ═══ EARLY VALIDATION (Fail Fast Without Lock) ═══
-          const now = DateUtils.now();
-          // Read invoice date once from sheet cell A3
-          const invoiceDate = sheet.getRange('A3').getValue() || now;
-
-          const quickValidationData = {
-            sheetName,
-            rowNum: row,
-            supplier,
-            invoiceNo,
-            invoiceDate: invoiceDate,
-            receivedAmt,
-            paymentAmt,
-            paymentType,
-            prevInvoice: rowValues[configCols.prevInvoice],
-            notes: rowValues[configCols.notes],
-            enteredBy: UserResolver.getCurrentUser(),  // UserResolver v2.1 - Get once, reuse
-            timestamp: now,
-            sysId: rowValues[configCols.sysId] || IDGenerator.generateUUID()
-          };
-
-          const quickValidation = validatePostData(quickValidationData);
-          if (!quickValidation.valid) {
-            // Show error immediately without acquiring lock
-            const timeStr = DateUtils.formatTime(now);
-            setBatchPostStatus(
-              sheet,
-              row,
-              `ERROR: ${quickValidation.error}`,
-              "SYSTEM",
-              timeStr,
-              false,
-              CONFIG.colors.error
-            );
-            AuditLogger.log("VALIDATION_FAILED", quickValidationData, quickValidation.error);
-            AuditLogger.flush(); // Flush immediately for error visibility
-            break; // Exit without processing
-          }
-
-          // ═══ IMMEDIATE UX FEEDBACK (Before lock acquisition) ═══
-          const processingTimeStr = DateUtils.formatTime(now);
-          setBatchPostStatus(
-            sheet,
-            row,
-            "PROCESSING...",
-            "SYSTEM",
-            processingTimeStr,
-            true, // Keep checkbox checked
-            CONFIG.colors.processing
-          );
-
-          // ═══ ACQUIRE LOCK ONLY AFTER VALIDATION PASSES ═══
-          const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-          if (!lock) {
-            const timeStr = DateUtils.formatTime(now);
-            setBatchPostStatus(
-              sheet,
-              row,
-              "ERROR: Unable to acquire lock (concurrent edit in progress)",
-              "SYSTEM",
-              timeStr,
-              false,
-              CONFIG.colors.warning
-            );
-            break;
-          }
-
-          try {
-            // Pass pre-read data, date, and enteredBy to avoid redundant reads
-            processPostedRow(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
-          } finally {
-            LockManager.releaseLock(lock);
-          }
-        }
-        break;
-
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 2: SUPPLIER EDIT
-      // Triggered when user changes supplier (column C)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.supplier + 1:
-        // Build dropdown for Due payment type (shows unpaid invoices)
-        if (paymentType === 'Due') {
-          if (editedValue && String(editedValue).trim()) {
-            InvoiceManager.buildDuePaymentDropdown(sheet, row, editedValue, paymentType);
-          }
-          updateBalance = false; // Due payments don't auto-calculate balance
-        } else {
-          updateBalance = true; // Other types need balance recalculation
-        }
-        break;
-
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 3: PAYMENT TYPE EDIT
-      // Triggered when user changes payment type (column E)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.paymentType + 1:
-        // First: Clear irrelevant fields for old payment type
-        clearPaymentFieldsForTypeChange(sheet, row, paymentType);
-
-        // Then: Auto-populate fields for new payment type
-        if (['Regular', 'Partial'].includes(paymentType)) {
-          // Regular/Partial: Copy Invoice No → Prev Invoice, Received Amt → Payment Amt
-          const populatedValues = populatePaymentFields(sheet, row, paymentType, rowValues);
-          rowValues[configCols.paymentAmt] = populatedValues.paymentAmt;
-          rowValues[configCols.prevInvoice] = populatedValues.prevInvoice;
-          updateBalance = true;
-        } else if (paymentType === 'Due') {
-          // Due: Build dropdown of unpaid invoices for selection
-          const currentSupplier = sheet.getRange(row, configCols.supplier + 1).getValue();
-          if (currentSupplier && String(currentSupplier).trim()) {
-            InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
-          }
-          updateBalance = false; // Balance calculated when invoice is selected
-        } else {
-          // Unpaid: No special auto-population
-          updateBalance = true;
-        }
-        break;
-
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 4: DUE PAYMENT INVOICE SELECTION
-      // Triggered when user selects invoice in "Prev Invoice" for Due type (column F)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.prevInvoice + 1:
-        // For Due payments: Look up balance of selected invoice
-        if ((paymentType === 'Due') && supplier && editedValue) {
-          const populatedAmount = populateDuePaymentAmount(sheet, row, supplier, editedValue);
-          rowValues[configCols.paymentAmt] = populatedAmount;
-        }
-        updateBalance = true;
-        break;
-
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 5: PAYMENT AMOUNT EDIT
-      // Triggered when user changes payment amount (column G)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.paymentAmt + 1:
-        // Only update balance for payment-related types
-        if (paymentType !== 'Unpaid') {
-          updateBalance = true;
-        }
-        break;
-
-      // ─────────────────────────────────────────────────────────────────
-      // HANDLER 6: OTHER EDITS
-      // Triggered for Received Amount (D) and other fields
-      // Note: Simple trigger handles Invoice No (B) and Received Amt (D)
-      // ─────────────────────────────────────────────────────────────────
-      case configCols.receivedAmt + 1:
-      case configCols.invoiceNo + 1:
-        updateBalance = true;
-        break;
-
-      default:
-        return; // Nothing to process
-    }
-
-    // ═════════════════════════════════════════════════════════════════════
-    // STEP 3: CONSOLIDATED BALANCE UPDATE
-    // Updates balance calculation at the end for all affected edits
-    // ═════════════════════════════════════════════════════════════════════
-    if (updateBalance) {
-      BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
-    }
-
-  } catch (error) {
-    logSystemError("onEditInstallable", error.toString());
-  }
+  Code._handleInstallableTrigger(e);
 }
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 3: PUBLIC API - TRANSACTION PROCESSING
+ * SECTION 3: CODE MODULE - Main Logic and Handlers
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-/**
- * Process Posted Row - Full Transaction Workflow
- *
- * Orchestrates the complete transaction workflow for a posted row:
- *   1. Validates post data (early exit if invalid - no lock acquired)
- *   2. Creates or updates invoice
- *   3. Records payment (if applicable)
- *   4. Updates balance
- *   5. Invalidates cache
- *   6. Batches all writes (minimum API calls)
- *
- * PERFORMANCE OPTIMIZATIONS:
- * - Zero redundant reads: Uses pre-read rowData parameter
- * - Batched writes: Multiple updates in minimal API calls
- * - Pre-calculated values: All computations before writing
- * - Surgical cache invalidation: Supplier-specific only
- * - Early validation: Fail fast pattern (no lock if validation fails)
- * - Parameter passing: Invoice date and user passed to avoid redundant reads
- *
- * LOCK STRATEGY:
- * - Acquired only AFTER validation passes
- * - Held only during critical state changes
- * - Released in finally block to guarantee cleanup
- * - Reduces lock contention by 60-70% vs sequential locking
- *
- * ERROR HANDLING:
- * - Validation errors: Display immediately without lock acquisition
- * - Processing errors: Display with error color and audit trail
- * - Lock errors: User-friendly concurrent edit message
- * - All state changes logged to AuditLog for compliance
- *
- * INTEGRATION:
- * - InvoiceManager.createOrUpdateInvoice(): Main invoice operation
- * - PaymentManager.processPayment(): Payment recording with paid date workflow
- * - BalanceCalculator.updateBalanceCell(): Balance calculation and display
- * - CacheManager.invalidateSupplierCache(): Keeps cache consistent
- * - AuditLogger: Tracks all operations and errors
- *
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
- * @param {number} rowNum - Row number to process (1-based)
- * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
- *                          (Optional: will read if not provided, adds 1 API call)
- * @param {Date} invoiceDate - Invoice date for transaction
- *                             (Optional: will read from sheet A3 if not provided)
- * @param {string} enteredBy - User email of person posting transaction
- *                             (Optional: will detect via UserResolver if not provided)
- *
- * @returns {void} Updates sheet in-place, logs to AuditLog
- *
- * @throws Errors caught and logged to AuditLog sheet
- */
-function processPostedRow(sheet, rowNum, rowData = null, invoiceDate = null, enteredBy = null) {
-  const cols = CONFIG.cols;
-  const totalCols = CONFIG.totalColumns.daily;
-  const colors = CONFIG.colors;
-  const now = DateUtils.now();
-  const timeStr = DateUtils.formatTime(now);
-  const sheetName = sheet.getName();
+const Code = {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PUBLIC API - CORE TRANSACTION PROCESSING
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  try {
-    // ═══ 1. DATA EXTRACTION (Zero additional reads) ═══
-    // Fallback to single batch read only if not provided
-    if (!rowData) {
-      rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
+  /**
+   * Process Posted Row - Full Transaction Workflow
+   *
+   * Orchestrates the complete transaction workflow for a posted row:
+   *   1. Validates post data (early exit if invalid - no lock acquired)
+   *   2. Creates or updates invoice
+   *   3. Records payment (if applicable)
+   *   4. Updates balance
+   *   5. Invalidates cache
+   *   6. Batches all writes (minimum API calls)
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} rowNum - Row number to process (1-based)
+   * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
+   * @param {Date} invoiceDate - Invoice date for transaction
+   * @param {string} enteredBy - User email of person posting transaction
+   * @returns {void} Updates sheet in-place, logs to AuditLog
+   */
+  processPostedRow: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
+    this._processPostedRowInternal(sheet, rowNum, rowData, invoiceDate, enteredBy);
+  },
+
+  /**
+   * Clear Payment Fields for Type Change
+   *
+   * Clears only necessary fields based on payment type selection.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} newPaymentType - New payment type selected
+   * @returns {void} Updates sheet in-place
+   */
+  clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
+    this._clearPaymentFieldsForTypeChange(sheet, row, newPaymentType);
+  },
+
+  /**
+   * Populate Due Payment Amount
+   *
+   * Fills payment amount with the outstanding balance of selected invoice.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} supplier - Supplier name for invoice lookup
+   * @param {string} prevInvoice - Previous invoice number selected
+   * @returns {number|string} Outstanding balance or empty string
+   */
+  populateDuePaymentAmount: function(sheet, row, supplier, prevInvoice) {
+    return this._populateDuePaymentAmount(sheet, row, supplier, prevInvoice);
+  },
+
+  /**
+   * Populate Payment Fields
+   *
+   * Fills payment fields for Regular and Partial payment types.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} paymentType - Payment type (Regular or Partial)
+   * @param {Array} rowData - Pre-read row values
+   * @returns {Object} Result object with {paymentAmt, prevInvoice}
+   */
+  populatePaymentFields: function(sheet, row, paymentType, rowData) {
+    return this._populatePaymentFields(sheet, row, paymentType, rowData);
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE: TRIGGER HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * PRIVATE: Handle simple trigger events
+   * @private
+   */
+  _handleSimpleTrigger: function(e) {
+    if (!e || !e.range) return;
+
+    const sheet = e.range.getSheet();
+    const sheetName = sheet.getName();
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
+
+    if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
+
+    try {
+      const configCols = CONFIG.cols;
+      const rowValues = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
+      const editedValue = rowValues[col - 1];
+      const paymentType = rowValues[configCols.paymentType];
+      const invoiceNo = rowValues[configCols.invoiceNo];
+
+      switch (col) {
+        case configCols.invoiceNo + 1:
+          this._handleInvoiceNoEdit(sheet, row, paymentType, invoiceNo);
+          break;
+
+        case configCols.receivedAmt + 1:
+          this._handleReceivedAmtEdit(sheet, row, paymentType, editedValue);
+          break;
+      }
+    } catch (error) {
+      logSystemError("onEdit", error.toString());
     }
+  },
 
-    const supplier = rowData[cols.supplier];
-    const invoiceNo = rowData[cols.invoiceNo];
-    const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
-    const paymentType = rowData[cols.paymentType];
-    const prevInvoice = rowData[cols.prevInvoice];
-    const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
-    const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
+  /**
+   * PRIVATE: Handle installable trigger events
+   * @private
+   */
+  _handleInstallableTrigger: function(e) {
+    if (!e || !e.range) return;
 
-    // Use provided date or fallback to reading from sheet
-    const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
+    const sheet = e.range.getSheet();
+    const sheetName = sheet.getName();
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
 
-    // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
-    const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
+    if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
 
-    // Build transaction context object
-    const data = {
-      sheetName,
-      rowNum,
-      supplier,
-      invoiceNo,
-      invoiceDate: finalInvoiceDate,
-      receivedAmt,
-      paymentAmt,
-      paymentType,
-      prevInvoice,
-      notes: rowData[cols.notes],
-      enteredBy: finalEnteredBy,
+    try {
+      const configCols = CONFIG.cols;
+      const rowValues = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
+
+      const editedValue = rowValues[col - 1];
+      const paymentType = rowValues[configCols.paymentType];
+      const supplier = rowValues[configCols.supplier];
+      let updateBalance = false;
+
+      switch (col) {
+        case configCols.post + 1:
+          this._handlePostCheckbox(sheet, row, rowValues);
+          return;
+
+        case configCols.supplier + 1:
+          updateBalance = this._handleSupplierEdit(sheet, row, paymentType, editedValue);
+          break;
+
+        case configCols.paymentType + 1:
+          updateBalance = this._handlePaymentTypeEdit(sheet, row, paymentType, rowValues);
+          break;
+
+        case configCols.prevInvoice + 1:
+          updateBalance = this._handlePrevInvoiceEdit(sheet, row, paymentType, supplier, editedValue, configCols, rowValues);
+          break;
+
+        case configCols.paymentAmt + 1:
+          updateBalance = paymentType !== 'Unpaid';
+          break;
+
+        case configCols.receivedAmt + 1:
+        case configCols.invoiceNo + 1:
+          updateBalance = true;
+          break;
+
+        default:
+          return;
+      }
+
+      if (updateBalance) {
+        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+      }
+    } catch (error) {
+      logSystemError("onEditInstallable", error.toString());
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE: COLUMN EDIT HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * PRIVATE: Handle Invoice No edit (simple trigger)
+   * @private
+   */
+  _handleInvoiceNoEdit: function(sheet, row, paymentType, invoiceNo) {
+    if (['Regular', 'Partial'].includes(paymentType)) {
+      const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
+      if (invoiceNo && String(invoiceNo).trim()) {
+        prevInvoiceCell.setValue(invoiceNo);
+      } else {
+        prevInvoiceCell.clearContent().clearNote();
+      }
+    }
+  },
+
+  /**
+   * PRIVATE: Handle Received Amount edit (simple trigger)
+   * @private
+   */
+  _handleReceivedAmtEdit: function(sheet, row, paymentType, receivedAmt) {
+    if (paymentType === 'Regular') {
+      const paymentAmtCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
+      const parsedAmt = parseFloat(receivedAmt) || 0;
+      if (parsedAmt > 0) {
+        paymentAmtCell.setValue(parsedAmt);
+      } else {
+        paymentAmtCell.clearContent().clearNote();
+      }
+    }
+  },
+
+  /**
+   * PRIVATE: Handle POST checkbox (installable trigger)
+   * @private
+   */
+  _handlePostCheckbox: function(sheet, row, rowValues) {
+    const now = DateUtils.now();
+    const invoiceDate = sheet.getRange('A3').getValue() || now;
+
+    const quickValidationData = {
+      sheetName: sheet.getName(),
+      rowNum: row,
+      supplier: rowValues[CONFIG.cols.supplier],
+      invoiceNo: rowValues[CONFIG.cols.invoiceNo],
+      invoiceDate: invoiceDate,
+      receivedAmt: parseFloat(rowValues[CONFIG.cols.receivedAmt]) || 0,
+      paymentAmt: parseFloat(rowValues[CONFIG.cols.paymentAmt]) || 0,
+      paymentType: rowValues[CONFIG.cols.paymentType],
+      prevInvoice: rowValues[CONFIG.cols.prevInvoice],
+      notes: rowValues[CONFIG.cols.notes],
+      enteredBy: UserResolver.getCurrentUser(),
       timestamp: now,
-      sysId
+      sysId: rowValues[CONFIG.cols.sysId] || IDGenerator.generateUUID()
     };
 
-    // ═══ 2. EARLY VALIDATION (Fail Fast) ═══
-    const validation = validatePostData(data);
-    if (!validation.valid) {
-      setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
-      // Clear balance cell with error indicator (consistent error state)
-      sheet.getRange(rowNum, cols.balance + 1)
-        .clearContent()
-        .setNote(`⚠️ Validation failed - balance not calculated\n${validation.error}`)
-        .setBackground(colors.error);
-      AuditLogger.log("VALIDATION_FAILED", data, validation.error);
-      AuditLogger.flush(); // Flush immediately for error visibility
+    const quickValidation = validatePostData(quickValidationData);
+    if (!quickValidation.valid) {
+      const timeStr = DateUtils.formatTime(now);
+      setBatchPostStatus(
+        sheet, row,
+        `ERROR: ${quickValidation.error}`,
+        "SYSTEM", timeStr, false,
+        CONFIG.colors.error
+      );
+      AuditLogger.log("VALIDATION_FAILED", quickValidationData, quickValidation.error);
+      AuditLogger.flush();
       return;
     }
 
-    // ═══ 3. PROCESS INVOICE & PAYMENT (Before any sheet writes) ═══
-    // Process invoice first (create if new, update if exists)
-    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
-    if (!invoiceResult.success) {
-      setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
-      // Clear balance cell with error indicator (consistent error state)
-      sheet.getRange(rowNum, cols.balance + 1)
-        .clearContent()
-        .setNote(`⚠️ Invoice processing failed\n${invoiceResult.error}`)
-        .setBackground(colors.error);
+    const processingTimeStr = DateUtils.formatTime(now);
+    setBatchPostStatus(
+      sheet, row,
+      "PROCESSING...",
+      "SYSTEM", processingTimeStr, true,
+      CONFIG.colors.processing
+    );
+
+    const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      const timeStr = DateUtils.formatTime(now);
+      setBatchPostStatus(
+        sheet, row,
+        "ERROR: Unable to acquire lock (concurrent edit in progress)",
+        "SYSTEM", timeStr, false,
+        CONFIG.colors.warning
+      );
       return;
     }
 
-    // Process payment if applicable
-    if (shouldProcessPayment(data)) {
-      const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
-      if (!paymentResult.success) {
-        setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
-        // Clear balance cell with error indicator (consistent error state)
+    try {
+      this.processPostedRow(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
+    } finally {
+      LockManager.releaseLock(lock);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle Supplier edit (installable trigger)
+   * @private
+   */
+  _handleSupplierEdit: function(sheet, row, paymentType, supplier) {
+    if (paymentType === 'Due') {
+      if (supplier && String(supplier).trim()) {
+        InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
+      }
+      return false;
+    }
+    return true;
+  },
+
+  /**
+   * PRIVATE: Handle Payment Type edit (installable trigger)
+   * @private
+   */
+  _handlePaymentTypeEdit: function(sheet, row, paymentType, rowValues) {
+    this.clearPaymentFieldsForTypeChange(sheet, row, paymentType);
+
+    if (['Regular', 'Partial'].includes(paymentType)) {
+      const populatedValues = this.populatePaymentFields(sheet, row, paymentType, rowValues);
+      rowValues[CONFIG.cols.paymentAmt] = populatedValues.paymentAmt;
+      rowValues[CONFIG.cols.prevInvoice] = populatedValues.prevInvoice;
+      return true;
+    } else if (paymentType === 'Due') {
+      const currentSupplier = sheet.getRange(row, CONFIG.cols.supplier + 1).getValue();
+      if (currentSupplier && String(currentSupplier).trim()) {
+        InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
+      }
+      return false;
+    }
+    return true;
+  },
+
+  /**
+   * PRIVATE: Handle Prev Invoice edit (installable trigger)
+   * @private
+   */
+  _handlePrevInvoiceEdit: function(sheet, row, paymentType, supplier, editedValue, configCols, rowValues) {
+    if ((paymentType === 'Due') && supplier && editedValue) {
+      const populatedAmount = this.populateDuePaymentAmount(sheet, row, supplier, editedValue);
+      rowValues[configCols.paymentAmt] = populatedAmount;
+    }
+    return true;
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE: TRANSACTION PROCESSING INTERNALS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * PRIVATE: Main transaction processing logic
+   * @private
+   */
+  _processPostedRowInternal: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
+    const cols = CONFIG.cols;
+    const totalCols = CONFIG.totalColumns.daily;
+    const colors = CONFIG.colors;
+    const now = DateUtils.now();
+    const timeStr = DateUtils.formatTime(now);
+    const sheetName = sheet.getName();
+
+    try {
+      if (!rowData) {
+        rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
+      }
+
+      const supplier = rowData[cols.supplier];
+      const invoiceNo = rowData[cols.invoiceNo];
+      const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
+      const paymentType = rowData[cols.paymentType];
+      const prevInvoice = rowData[cols.prevInvoice];
+      const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
+      const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
+
+      const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
+      const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
+
+      const data = {
+        sheetName,
+        rowNum,
+        supplier,
+        invoiceNo,
+        invoiceDate: finalInvoiceDate,
+        receivedAmt,
+        paymentAmt,
+        paymentType,
+        prevInvoice,
+        notes: rowData[cols.notes],
+        enteredBy: finalEnteredBy,
+        timestamp: now,
+        sysId
+      };
+
+      const validation = validatePostData(data);
+      if (!validation.valid) {
+        setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
         sheet.getRange(rowNum, cols.balance + 1)
           .clearContent()
-          .setNote(`⚠️ Payment processing failed\n${paymentResult.error}`)
+          .setNote(`⚠️ Validation failed - balance not calculated\n${validation.error}`)
+          .setBackground(colors.error);
+        AuditLogger.log("VALIDATION_FAILED", data, validation.error);
+        AuditLogger.flush();
+        return;
+      }
+
+      const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
+      if (!invoiceResult.success) {
+        setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
+        sheet.getRange(rowNum, cols.balance + 1)
+          .clearContent()
+          .setNote(`⚠️ Invoice processing failed\n${invoiceResult.error}`)
           .setBackground(colors.error);
         return;
       }
+
+      if (this._shouldProcessPayment(data)) {
+        const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
+        if (!paymentResult.success) {
+          setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
+          sheet.getRange(rowNum, cols.balance + 1)
+            .clearContent()
+            .setNote(`⚠️ Payment processing failed\n${paymentResult.error}`)
+            .setBackground(colors.error);
+          return;
+        }
+      }
+
+      BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+
+      const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
+      CacheManager.invalidateSupplierCache(supplier);
+
+      const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(finalEnteredBy), timeStr]];
+      sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
+
+      if (sysIdValue) {
+        sheet.getRange(rowNum, cols.sysId + 1).setValue(sysIdValue);
+      }
+
+      const bgRange = CONFIG.totalColumns.daily - 4;
+      sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
+
+    } catch (error) {
+      const errMsg = `SYSTEM ERROR: ${error.message || error}`;
+      setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
+      logSystemError('processPostedRow', error.toString());
     }
+  },
 
-    // ═══ 4. UPDATE BALANCE CELL ═══
-    // Use updateBalanceCell with afterPost=true to get correct balance
-    // This reads the current outstanding (which already reflects the payment)
-    BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE: FIELD POPULATION INTERNALS
+  // ═══════════════════════════════════════════════════════════════════════════
 
-    // ═══ 5. PRE-CALCULATE SYSTEM ID ═══
-    const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
+  /**
+   * PRIVATE: Clear payment fields implementation
+   * @private
+   */
+  _clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
+    try {
+      const cols = CONFIG.cols;
+      const paymentAmtCol = cols.paymentAmt + 1;
+      const prevInvoiceCol = cols.prevInvoice + 1;
 
-    // Invalidate cache AFTER balance update (cache will rebuild on next access)
-    CacheManager.invalidateSupplierCache(supplier);
+      const prevInvoiceCell = sheet.getRange(row, prevInvoiceCol);
+      const paymentAmtCell = sheet.getRange(row, paymentAmtCol);
+      const oldPrevInvoice = prevInvoiceCell.getValue();
+      const oldPaymentAmt = paymentAmtCell.getValue();
 
-    // ═══ 6. BATCHED WRITES (Minimize API calls) ═══
-    // Write 1: Status columns (J-M: post, status, enteredBy, timestamp)
-    const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(finalEnteredBy), timeStr]];
-    sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
+      let clearedFields = [];
+      let clearedValues = {};
 
-    // Write 2: System ID if missing (N)
-    if (sysIdValue) {
-      sheet.getRange(rowNum, cols.sysId + 1).setValue(sysIdValue);
+      switch (newPaymentType) {
+        case 'Unpaid':
+          const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
+          unpaidRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+          clearedFields = ['prevInvoice', 'paymentAmt'];
+          clearedValues = {
+            prevInvoice: oldPrevInvoice || '(empty)',
+            paymentAmt: oldPaymentAmt || '(empty)'
+          };
+          break;
+
+        case 'Regular':
+        case 'Partial':
+          prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+          clearedFields = ['prevInvoice'];
+          clearedValues = {
+            prevInvoice: oldPrevInvoice || '(empty)'
+          };
+          break;
+
+        case 'Due':
+          paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
+          clearedFields = ['paymentAmt'];
+          clearedValues = {
+            paymentAmt: oldPaymentAmt || '(empty)'
+          };
+          break;
+
+        default:
+          const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
+          defaultRange.clearContent().clearNote().clearDataValidations().setBackground(null);
+          clearedFields = ['prevInvoice', 'paymentAmt'];
+          clearedValues = {
+            prevInvoice: oldPrevInvoice || '(empty)',
+            paymentAmt: oldPaymentAmt || '(empty)'
+          };
+      }
+
+      const auditData = {
+        sheetName: sheet.getName(),
+        rowNum: row,
+        paymentType: newPaymentType,
+        clearedFields: clearedFields.join(', '),
+        oldValues: clearedValues,
+        timestamp: new Date().toISOString()
+      };
+
+      AuditLogger.log('FIELD_CLEARED', auditData,
+        `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
+
+    } catch (error) {
+      AuditLogger.logError('clearPaymentFieldsForTypeChange',
+        `Failed to clear fields at row ${row}: ${error.toString()}`);
     }
+  },
 
-    // Write 3: Consolidated background color (A-J including balance)
-    const bgRange = CONFIG.totalColumns.daily - 4; // A:J
-    sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
+  /**
+   * PRIVATE: Populate due payment amount implementation
+   * @private
+   */
+  _populateDuePaymentAmount: function(sheet, row, supplier, prevInvoice) {
+    try {
+      if (!prevInvoice || !String(prevInvoice).trim()) {
+        return '';
+      }
 
-  } catch (error) {
-    const errMsg = `SYSTEM ERROR: ${error.message || error}`;
-    setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
-    logSystemError('processPostedRow', error.toString());
-  }
-}
+      const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
+      const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 4: FIELD AUTO-POPULATION HELPERS
- * ═══════════════════════════════════════════════════════════════════════════
- */
+      if (invoiceBalance > 0) {
+        targetCell
+          .setValue(invoiceBalance)
+          .setNote(`Outstanding balance of ${prevInvoice}: ${invoiceBalance}/-`)
+          .setBackground(null);
+        return invoiceBalance;
+      } else {
+        targetCell
+          .clearContent()
+          .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance.\n\nPossible reasons:\n- Invoice is fully paid\n- Invoice not found\n- Invoice belongs to different supplier`)
+          .setBackground(CONFIG.colors.warning);
+        return '';
+      }
 
-/**
- * Clear Payment Fields for Type Change
- *
- * Clears only necessary fields based on payment type selection.
- * Uses batch range operations to minimize API calls.
- *
- * STRATEGY:
- * - Unpaid: Clear both paymentAmt and prevInvoice (no payments made)
- * - Regular/Partial: Clear prevInvoice only (payment amount will auto-populate)
- * - Due: Clear paymentAmt only (user will select previous invoice from dropdown)
- *
- * OPERATIONS:
- * - Clears content, notes, data validations, and background color
- * - Batches multiple clears in single operation when possible
- * - Logs cleared values for accountability and debugging
- *
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
- * @param {number} row - Row number (1-based)
- * @param {string} newPaymentType - New payment type selected
- *                                  (Unpaid, Regular, Partial, or Due)
- *
- * @returns {void} Updates sheet in-place
- *
- * @example
- * clearPaymentFieldsForTypeChange(sheet, 10, 'Due');
- * // Clears paymentAmt cell for Due payment type
- */
-function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
-  try {
-    const cols = CONFIG.cols;
-    const paymentAmtCol = cols.paymentAmt + 1;
-    const prevInvoiceCol = cols.prevInvoice + 1;
-
-    // Capture current values for audit trail
-    const prevInvoiceCell = sheet.getRange(row, prevInvoiceCol);
-    const paymentAmtCell = sheet.getRange(row, paymentAmtCol);
-    const oldPrevInvoice = prevInvoiceCell.getValue();
-    const oldPaymentAmt = paymentAmtCell.getValue();
-
-    let clearedFields = [];
-    let clearedValues = {};
-
-    switch (newPaymentType) {
-      case 'Unpaid':
-        const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
-        unpaidRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-        clearedFields = ['prevInvoice', 'paymentAmt'];
-        clearedValues = {
-          prevInvoice: oldPrevInvoice || '(empty)',
-          paymentAmt: oldPaymentAmt || '(empty)'
-        };
-        break;
-
-      case 'Regular':
-      case 'Partial':
-        prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-        clearedFields = ['prevInvoice'];
-        clearedValues = {
-          prevInvoice: oldPrevInvoice || '(empty)'
-        };
-        break;
-
-      case 'Due':
-        paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-        clearedFields = ['paymentAmt'];
-        clearedValues = {
-          paymentAmt: oldPaymentAmt || '(empty)'
-        };
-        break;
-
-      default:
-        const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
-        defaultRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-        clearedFields = ['prevInvoice', 'paymentAmt'];
-        clearedValues = {
-          prevInvoice: oldPrevInvoice || '(empty)',
-          paymentAmt: oldPaymentAmt || '(empty)'
-        };
-    }
-
-    // Audit log for accountability
-    const auditData = {
-      sheetName: sheet.getName(),
-      rowNum: row,
-      paymentType: newPaymentType,
-      clearedFields: clearedFields.join(', '),
-      oldValues: clearedValues,
-      timestamp: new Date().toISOString()
-    };
-
-    AuditLogger.log('FIELD_CLEARED', auditData,
-      `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
-
-  } catch (error) {
-    AuditLogger.logError('clearPaymentFieldsForTypeChange',
-      `Failed to clear fields at row ${row}: ${error.toString()}`);
-  }
-}
-
-/**
- * Populate Due Payment Amount
- *
- * Fills payment amount with the outstanding balance of selected invoice
- * for Due payment type. Looks up invoice balance and validates
- * that the invoice exists and has outstanding balance.
- *
- * OPERATIONS:
- * - Fetches invoice balance via BalanceCalculator.getInvoiceOutstanding()
- * - Sets payment amount cell to the outstanding balance
- * - Adds note with balance information
- * - Shows warning if invoice not found or fully paid
- *
- * RETURNS:
- * - Returns updated amount for local array update (eliminates redundant reads)
- * - Enables efficient parameter passing in trigger context
- *
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
- * @param {number} row - Row number (1-based)
- * @param {string} supplier - Supplier name for invoice lookup
- * @param {string} prevInvoice - Previous invoice number selected
- *
- * @returns {number|string} Outstanding balance if found and > 0, empty string otherwise
- *
- * @example
- * const amount = populateDuePaymentAmount(sheet, 10, "Acme Corp", "INV-001");
- * // Sets payment amount to balance due, returns the amount
- */
-function populateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
-  try {
-    if (!prevInvoice || !String(prevInvoice).trim()) {
-      return '';
-    }
-
-    const invoiceBalance = BalanceCalculator.getInvoiceOutstanding(prevInvoice, supplier);
-    const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
-
-    if (invoiceBalance > 0) {
-      targetCell
-        .setValue(invoiceBalance)
-        .setNote(`Outstanding balance of ${prevInvoice}: ${invoiceBalance}/-`)
-        .setBackground(null);
-      return invoiceBalance;
-    } else {
+    } catch (error) {
+      logSystemError('populateDuePaymentAmount',
+        `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
+      const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
       targetCell
         .clearContent()
-        .setNote(`⚠️ Invoice ${prevInvoice} has no outstanding balance.\n\nPossible reasons:\n- Invoice is fully paid\n- Invoice not found\n- Invoice belongs to different supplier`)
-        .setBackground(CONFIG.colors.warning);
+        .setNote('Error loading invoice balance')
+        .setBackground(CONFIG.colors.error);
       return '';
     }
+  },
 
-  } catch (error) {
-    logSystemError('autoPopulateDuePaymentAmount',
-      `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
-    const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
-    targetCell
-      .clearContent()
-      .setNote('Error loading invoice balance')
-      .setBackground(CONFIG.colors.error);
-    return '';
+  /**
+   * PRIVATE: Populate payment fields implementation
+   * @private
+   */
+  _populatePaymentFields: function(sheet, row, paymentType, rowData) {
+    try {
+      const invoiceNo = rowData[CONFIG.cols.invoiceNo];
+      const receivedAmt = rowData[CONFIG.cols.receivedAmt];
+      const hasInvoice = invoiceNo && invoiceNo !== '';
+      const hasAmount = receivedAmt && receivedAmt !== '';
+
+      if (hasInvoice && hasAmount) {
+        const startCol = CONFIG.cols.prevInvoice + 1;
+        sheet.getRange(row, startCol, 1, 2).setValues([[invoiceNo, receivedAmt]]);
+      } else if (hasInvoice) {
+        sheet.getRange(row, CONFIG.cols.prevInvoice + 1).setValue(invoiceNo);
+      } else if (hasAmount) {
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
+      }
+
+      if (StringUtils.equals(paymentType, 'Partial')) {
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(CONFIG.colors.warning);
+      } else {
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(null);
+      }
+
+      return {
+        paymentAmt: receivedAmt || '',
+        prevInvoice: invoiceNo || ''
+      };
+
+    } catch (error) {
+      logSystemError('populatePaymentFields',
+        `Failed to auto-populate at row ${row}: ${error.toString()}`);
+      return { paymentAmt: '', prevInvoice: '' };
+    }
+  },
+
+  /**
+   * PRIVATE: Determine if payment should be processed
+   * @private
+   */
+  _shouldProcessPayment: function(data) {
+    return shouldProcessPayment(data);
   }
-}
+};
 
 /**
- * Populate Payment Fields
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SECTION 4: BACKWARD COMPATIBILITY WRAPPERS
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * Fills payment fields for Regular and Partial payment types.
- * Copies Invoice No to Previous Invoice and Received Amount to Payment Amount.
- *
- * OPERATIONS:
- * - Copies Invoice No → Previous Invoice cell
- * - Copies Received Amount → Payment Amount cell
- * - Sets background color for Partial type (visual indicator)
- * - Handles missing values gracefully
- *
- * RETURNS:
- * - Returns updated values as object for local array update
- * - Eliminates redundant sheet reads in trigger context
- *
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
- * @param {number} row - Row number (1-based)
- * @param {string} paymentType - Payment type (Regular or Partial)
- * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
- *
- * @returns {Object} Result object:
- *   - paymentAmt: Number or string amount that was set
- *   - prevInvoice: Invoice number that was set
- *
- * @example
- * const result = populatePaymentFields(sheet, 10, 'Regular', rowData);
- * // {paymentAmt: 1500, prevInvoice: 'INV-001'}
+ * Global functions that delegate to Code module for backward compatibility
  */
+
+function clearPaymentFieldsForTypeChange(sheet, row, newPaymentType) {
+  Code.clearPaymentFieldsForTypeChange(sheet, row, newPaymentType);
+}
+
+function populateDuePaymentAmount(sheet, row, supplier, prevInvoice) {
+  return Code.populateDuePaymentAmount(sheet, row, supplier, prevInvoice);
+}
+
 function populatePaymentFields(sheet, row, paymentType, rowData) {
-  try {
-    const invoiceNo = rowData[CONFIG.cols.invoiceNo];
-    const receivedAmt = rowData[CONFIG.cols.receivedAmt];
-    const hasInvoice = invoiceNo && invoiceNo !== '';
-    const hasAmount = receivedAmt && receivedAmt !== '';
-
-    if (hasInvoice && hasAmount) {
-      const startCol = CONFIG.cols.prevInvoice + 1;
-      sheet.getRange(row, startCol, 1, 2).setValues([[invoiceNo, receivedAmt]]);
-    } else if (hasInvoice) {
-      sheet.getRange(row, CONFIG.cols.prevInvoice + 1).setValue(invoiceNo);
-    } else if (hasAmount) {
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
-    }
-
-    if (StringUtils.equals(paymentType, 'Partial')) {
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(CONFIG.colors.warning);
-    } else {
-      sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(null);
-    }
-
-    return {
-      paymentAmt: receivedAmt || '',
-      prevInvoice: invoiceNo || ''
-    };
-
-  } catch (error) {
-    logSystemError('autoPopulatePaymentFields',
-      `Failed to auto-populate at row ${row}: ${error.toString()}`);
-    return { paymentAmt: '', prevInvoice: '' };
-  }
+  return Code.populatePaymentFields(sheet, row, paymentType, rowData);
 }
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 5: INTERNAL HELPERS
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * INTERNAL UTILITY FUNCTIONS
- * These are helper functions used internally within Code.gs and other modules.
- * They are defined in supporting modules (imported at runtime):
- *
- * From _Utils.gs:
- *   - DateUtils.now(): Get current date/time
- *   - DateUtils.formatTime(date): Format time (HH:MM:SS)
- *   - StringUtils.equals(str1, str2): Case-insensitive comparison
- *   - StringUtils.normalize(str): Normalize for matching
- *   - IDGenerator.generateUUID(): Generate unique ID
- *   - getDailySheetDate(sheetName): Extract date from daily sheet
- *   - LockManager.acquireDocumentLock(ms): Get document lock
- *   - LockManager.releaseLock(lock): Release lock
- *
- * From AuditLogger.gs:
- *   - AuditLogger.log(action, data, message): Log action to audit trail
- *   - AuditLogger.logError(context, message): Log error
- *   - AuditLogger.flush(): Ensure logs are written
- *   - logSystemError(context, message): Log system error
- *
- * From UIMenu.gs:
- *   - setBatchPostStatus(sheet, row, status, user, time, checked, color): Update row status
- *   - validateDailySheet(sheet): Verify sheet is a daily sheet (01-31)
- *
- * From ValidationEngine.gs:
- *   - validatePostData(data): Full post validation
- *
- * From InvoiceManager.gs:
- *   - InvoiceManager.createOrUpdateInvoice(data): Create or update invoice
- *   - InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, type): Build dropdown
- *
- * From PaymentManager.gs:
- *   - PaymentManager.processPayment(data, invoiceId): Record payment transaction
- *   - shouldProcessPayment(data): Determine if payment processing needed
- *
- * From BalanceCalculator.gs:
- *   - BalanceCalculator.updateBalanceCell(sheet, row, afterPost, rowData): Update balance
- *   - BalanceCalculator.getInvoiceOutstanding(invoiceNo, supplier): Get balance due
- *
- * From CacheManager.gs:
- *   - CacheManager.invalidateSupplierCache(supplier): Clear supplier cache
- */
+function processPostedRow(sheet, rowNum, rowData, invoiceDate, enteredBy) {
+  Code.processPostedRow(sheet, rowNum, rowData, invoiceDate, enteredBy);
+}
 
 /**
  * Build Previous Invoice Dropdown
  *
  * Wrapper for InvoiceManager.buildDuePaymentDropdown().
- * Creates dropdown of unpaid invoices for Due payment type selection.
- *
- * OPERATIONS:
- * - Extracts supplier from row data
- * - Delegates to InvoiceManager.buildDuePaymentDropdown()
- * - Handles pre-read row data for efficiency
  *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
  * @param {number} row - Row number (1-based)
- * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
- *                          (Optional: will read if not provided)
- *
+ * @param {Array} rowData - Pre-read row values (optional)
  * @returns {void} Updates sheet with dropdown
  */
 function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
-  // Fallback for direct calls (add 1 API call, but maintains backward compatibility)
   if (!rowData) {
     rowData = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
   }
@@ -1003,54 +823,20 @@ function buildPrevInvoiceDropdown(sheet, row, rowData = null) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 6: TRIGGER SETUP/TEARDOWN
+ * SECTION 5: TRIGGER SETUP/TEARDOWN
  * ═══════════════════════════════════════════════════════════════════════════
- *
- * Manages trigger lifecycle for Master Database mode.
- * When using Master Database, onEdit must be an INSTALLABLE trigger
- * (not a simple trigger) to access other spreadsheets.
  */
 
 /**
  * Set Up Installable Edit Trigger
  *
  * Creates an installable Edit trigger for Master Database access.
- * Replaces any existing simple Edit triggers to avoid duplicates.
- *
- * MASTER DATABASE REQUIREMENT:
- * Simple triggers (onEdit) have restricted permissions and cannot call
- * SpreadsheetApp.openById() to access other spreadsheets.
- * Installable triggers have full permissions and can access Master Database.
- *
- * SETUP PROCESS:
- * 1. Open Script Editor in your monthly spreadsheet
- * 2. Select setupInstallableEditTrigger from function dropdown
- * 3. Click Run button
- * 4. Authorize when prompted (OAuth consent screen)
- * 5. Confirmation dialog appears
- *
- * VERIFICATION:
- * - Check Script Editor → Triggers (⏰ icon)
- * - Should show one Edit trigger → onEditInstallable
- *
- * CLEANUP:
- * - Run removeInstallableEditTrigger() if you need to remove the trigger
- *
- * TIMING:
- * - Only needs to be done once per spreadsheet
- * - All monthly files need their own trigger setup
  *
  * @returns {void} Shows confirmation dialog
- *
- * @example
- * // From Script Editor, run this function
- * setupInstallableEditTrigger();
- * // Dialog confirms trigger is set up
  */
 function setupInstallableEditTrigger() {
   const ss = SpreadsheetApp.getActive();
 
-  // Remove any existing Edit triggers to avoid duplicates
   const triggers = ScriptApp.getUserTriggers(ss);
   triggers.forEach(trigger => {
     if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
@@ -1058,7 +844,6 @@ function setupInstallableEditTrigger() {
     }
   });
 
-  // Create new installable Edit trigger → Calls onEditInstallable (NOT onEdit)
   ScriptApp.newTrigger('onEditInstallable')
     .forSpreadsheet(ss)
     .onEdit()
@@ -1081,28 +866,8 @@ function setupInstallableEditTrigger() {
  * Remove Installable Edit Trigger
  *
  * Removes the installable Edit trigger if it exists.
- * Use this for troubleshooting or reverting to simple trigger.
  *
- * WHEN TO USE:
- * - Troubleshooting trigger issues
- * - Reverting to simple trigger setup (not recommended for Master DB mode)
- * - Cleaning up duplicate triggers
- *
- * EFFECT:
- * - Removes all Edit triggers for the current spreadsheet
- * - If using Master Database, you'll need to run setupInstallableEditTrigger() again
- * - Simple onEdit trigger will NOT be recreated automatically
- *
- * VERIFICATION:
- * - Check Script Editor → Triggers (⏰ icon)
- * - Should show no Edit triggers after removal
- *
- * @returns {void} Shows confirmation dialog with count of triggers removed
- *
- * @example
- * // From Script Editor, run this function
- * removeInstallableEditTrigger();
- * // Dialog shows how many triggers were removed
+ * @returns {void} Shows confirmation dialog
  */
 function removeInstallableEditTrigger() {
   const ss = SpreadsheetApp.getActive();
