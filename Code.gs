@@ -401,10 +401,11 @@ const Code = {
    */
   _handlePostCheckbox: function(sheet, row, rowValues) {
     const now = DateUtils.now();
-    const invoiceDate = getDailySheetDate(sheet.getName()) || now;
+    const sheetName = sheet.getName();
+    const invoiceDate = getDailySheetDate(sheetName) || now;
 
     const quickValidationData = {
-      sheetName: sheet.getName(),
+      sheetName: sheetName,
       rowNum: row,
       supplier: rowValues[CONFIG.cols.supplier],
       invoiceNo: rowValues[CONFIG.cols.invoiceNo],
