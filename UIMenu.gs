@@ -592,8 +592,8 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
         sheet,
         rowNum,
         `ERROR: ${error.message.substring(0, 100)}`,
-        UserResolver.getUsernameOnly(),  // Get current user and extract username
-        new Date(),
+        UserResolver.extractUsername(enteredBy),  // Reuse pre-resolved user
+        DateUtils.formatTimestamp(),
         false,
         CONFIG.colors.error
       );
