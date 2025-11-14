@@ -66,18 +66,18 @@ const StringUtils = {
 /**
  * Date and time utilities
  *
- * STANDARDIZED FORMAT: MM/DD/YYYY H:mm:ss
+ * STANDARDIZED FORMAT: MM/DD/YYYY HH:mm:ss
  * This matches Google Apps Script's native timestamp format
  */
 const DateUtils = {
   /**
-   * Format timestamp as MM/DD/YYYY H:mm:ss (standardized global format)
+   * Format timestamp as MM/DD/YYYY HH:mm:ss (standardized global format)
    * Used for all user-facing timestamps, audit logs, and system messages
    * @param {Date} date - Date object
-   * @returns {string} Formatted timestamp (MM/DD/YYYY H:mm:ss)
+   * @returns {string} Formatted timestamp (MM/DD/YYYY HH:mm:ss)
    */
   formatTime: function(date) {
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy H:mm:ss');
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
   },
 
   /**
@@ -90,13 +90,13 @@ const DateUtils = {
   },
 
   /**
-   * Format datetime as MM/DD/YYYY H:mm:ss (standardized global format)
+   * Format datetime as MM/DD/YYYY HH:mm:ss (standardized global format)
    * Alias for formatTime() - recommended for explicit clarity
    * @param {Date} date - Date object
-   * @returns {string} Formatted datetime (MM/DD/YYYY H:mm:ss)
+   * @returns {string} Formatted datetime (MM/DD/YYYY HH:mm:ss)
    */
   formatDateTime: function(date) {
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy H:mm:ss');
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
   },
 
   /**
@@ -109,9 +109,9 @@ const DateUtils = {
 
   /**
    * Format timestamp using standardized pattern
-   * Preferred method for all new code: ensures MM/DD/YYYY H:mm:ss everywhere
+   * Preferred method for all new code: ensures MM/DD/YYYY HH:mm:ss everywhere
    * @param {Date} date - Date object (optional, defaults to now())
-   * @returns {string} Formatted timestamp (MM/DD/YYYY H:mm:ss)
+   * @returns {string} Formatted timestamp (MM/DD/YYYY HH:mm:ss)
    */
   formatTimestamp: function(date) {
     return this.formatTime(date || this.now());
