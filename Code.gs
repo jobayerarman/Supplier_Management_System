@@ -678,7 +678,7 @@ const Code = {
         paymentType: newPaymentType,
         clearedFields: clearedFields.join(', '),
         oldValues: clearedValues,
-        timestamp: new Date().toISOString()
+        timestamp: DateUtils.formatTimestamp()
       };
 
       AuditLogger.log('FIELD_CLEARED', auditData,

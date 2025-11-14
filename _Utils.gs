@@ -65,41 +65,56 @@ const StringUtils = {
 
 /**
  * Date and time utilities
+ *
+ * STANDARDIZED FORMAT: MM/DD/YYYY H:mm:ss
+ * This matches Google Apps Script's native timestamp format
  */
 const DateUtils = {
   /**
-   * Format time as HH:mm:ss
+   * Format timestamp as MM/DD/YYYY H:mm:ss (standardized global format)
+   * Used for all user-facing timestamps, audit logs, and system messages
    * @param {Date} date - Date object
-   * @returns {string} Formatted time
+   * @returns {string} Formatted timestamp (MM/DD/YYYY H:mm:ss)
    */
   formatTime: function(date) {
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'HH:mm:ss');
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy H:mm:ss');
   },
-  
+
   /**
-   * Format date as YYYY-MM-DD
+   * Format date only as MM/DD/YYYY (standardized format)
    * @param {Date} date - Date object
-   * @returns {string} Formatted date
+   * @returns {string} Formatted date (MM/DD/YYYY)
    */
   formatDate: function(date) {
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy');
   },
-  
+
   /**
-   * Format datetime as YYYY-MM-DD HH:mm:ss
+   * Format datetime as MM/DD/YYYY H:mm:ss (standardized global format)
+   * Alias for formatTime() - recommended for explicit clarity
    * @param {Date} date - Date object
-   * @returns {string} Formatted datetime
+   * @returns {string} Formatted datetime (MM/DD/YYYY H:mm:ss)
    */
   formatDateTime: function(date) {
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MM/dd/yyyy H:mm:ss');
   },
-  
+
   /**
-   * Get current timestamp
+   * Get current timestamp as Date object
    * @returns {Date} Current date and time
    */
   now: function() {
     return new Date();
+  },
+
+  /**
+   * Format timestamp using standardized pattern
+   * Preferred method for all new code: ensures MM/DD/YYYY H:mm:ss everywhere
+   * @param {Date} date - Date object (optional, defaults to now())
+   * @returns {string} Formatted timestamp (MM/DD/YYYY H:mm:ss)
+   */
+  formatTimestamp: function(date) {
+    return this.formatTime(date || this.now());
   }
 };
 

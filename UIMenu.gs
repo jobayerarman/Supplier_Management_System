@@ -671,7 +671,7 @@ function buildDataObject(rowData, rowNum, sheetName, enteredBy = null) {
     sysId: rowData[CONFIG.cols.sysId],
     invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
     enteredBy: finalEnteredBy, // Phase 2: Use parameter or detect
-    timestamp: new Date(),       // Current processing time (for audit trail)
+    timestamp: DateUtils.formatTimestamp(),  // Current processing time formatted as MM/DD/YYYY H:mm:ss
     rowNum: rowNum,
     sheetName: sheetName
   };
