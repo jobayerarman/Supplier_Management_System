@@ -401,7 +401,7 @@ const Code = {
    */
   _handlePostCheckbox: function(sheet, row, rowValues) {
     const now = DateUtils.now();
-    const invoiceDate = sheet.getRange('A3').getValue() || now;
+    const invoiceDate = getDailySheetDate(sheet.getName()) || now;
 
     const quickValidationData = {
       sheetName: sheet.getName(),
@@ -602,8 +602,8 @@ const Code = {
         sheet.getRange(rowNum, cols.sysId + 1).setValue(sysIdValue);
       }
 
-      const bgRange = CONFIG.totalColumns.daily - 4;
-      sheet.getRange(rowNum, 1, 1, bgRange).setBackground(colors.success);
+      const bgRange = CONFIG.totalColumns.daily - 5;
+      sheet.getRange(rowNum, 2, 1, bgRange).setBackground(colors.success);
 
     } catch (error) {
       const errMsg = `SYSTEM ERROR: ${error.message || error}`;
@@ -671,18 +671,6 @@ const Code = {
             paymentAmt: oldPaymentAmt || '(empty)'
           };
       }
-
-      const auditData = {
-        sheetName: sheet.getName(),
-        rowNum: row,
-        paymentType: newPaymentType,
-        clearedFields: clearedFields.join(', '),
-        oldValues: clearedValues,
-        timestamp: DateUtils.formatTimestamp()
-      };
-
-      AuditLogger.log('FIELD_CLEARED', auditData,
-        `Payment type changed to ${newPaymentType}, cleared: ${clearedFields.join(', ')}`);
 
     } catch (error) {
       AuditLogger.logError('clearPaymentFieldsForTypeChange',
