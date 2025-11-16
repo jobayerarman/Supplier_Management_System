@@ -212,6 +212,70 @@ function clearAllPostCheckboxes() {
 }
 
 /**
+ * Global handler: Create daily sheets 02-31
+ * Delegates to UIMenu module
+ */
+function createDailySheets() {
+  UIMenu.createDailySheets();
+}
+
+/**
+ * Global handler: Create missing daily sheets only
+ * Delegates to UIMenu module
+ */
+function createMissingSheets() {
+  UIMenu.createMissingSheets();
+}
+
+/**
+ * Global handler: Reorganize sheets in numerical order
+ * Delegates to UIMenu module
+ */
+function organizeSheets() {
+  UIMenu.organizeSheets();
+}
+
+/**
+ * Global handler: Fix date formulas only
+ * Delegates to UIMenu module
+ */
+function fixDateFormulasOnly() {
+  UIMenu.fixDateFormulasOnly();
+}
+
+/**
+ * Global handler: Reset current sheet to zero
+ * Delegates to UIMenu module
+ */
+function resetInputCellsToZero() {
+  UIMenu.resetInputCellsToZero();
+}
+
+/**
+ * Global handler: Reset all daily sheets to zero
+ * Delegates to UIMenu module
+ */
+function resetAllDailySheetsToZero() {
+  UIMenu.resetAllDailySheetsToZero();
+}
+
+/**
+ * Global handler: Quick reset current sheet
+ * Delegates to UIMenu module
+ */
+function quickResetCurrentSheet() {
+  UIMenu.quickResetCurrentSheet();
+}
+
+/**
+ * Global handler: Delete daily sheets safely
+ * Delegates to UIMenu module
+ */
+function deleteDailySheetsSafe() {
+  UIMenu.deleteDailySheetsSafe();
+}
+
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * SECTION 3: UIMENU MODULE - Batch Operations Implementation
  * ═══════════════════════════════════════════════════════════════════════════
@@ -227,19 +291,38 @@ const UIMenu = {
 
   /**
    * Creates custom menu items on spreadsheet open
-   * Adds: Batch operations, utilities, and user settings submenu
+   * Adds: Batch operations, sheet management, reset utilities, and user settings
    */
   createMenus: function() {
     const ui = SpreadsheetApp.getUi();
 
     ui.createMenu('📋FP - Operations')
+      // ═══ BATCH OPERATIONS ═══
       .addItem('Batch Validate All Rows', 'batchValidateAllRows')
       .addItem('Batch Post All Valid Rows', 'batchPostAllRows')
       .addSeparator()
       .addItem('Validate Selected Rows', 'batchValidateSelectedRows')
       .addItem('Post Selected Rows', 'batchPostSelectedRows')
       .addSeparator()
+
+      // ═══ DAILY SHEET MANAGEMENT ═══
+      .addSubMenu(ui.createMenu('📝 Daily Sheets')
+        .addItem('Create All Daily Sheets (02-31)', 'createDailySheets')
+        .addItem('Create Missing Sheets Only', 'createMissingSheets')
+        .addItem('Reorganize Sheets', 'organizeSheets')
+        .addItem('Fix Date Formulas Only', 'fixDateFormulasOnly'))
+      .addSeparator()
+
+      // ═══ RESET OPERATIONS ═══
+      .addSubMenu(ui.createMenu('🔄 Reset Operations')
+        .addItem('Reset Current Sheet to Zero', 'resetInputCellsToZero')
+        .addItem('Reset All Daily Sheets to Zero', 'resetAllDailySheetsToZero')
+        .addItem('⚡ Quick Reset Current Sheet', 'quickResetCurrentSheet'))
+      .addSeparator()
+
+      // ═══ USER SETTINGS & UTILITIES ═══
       .addItem('Clear All Post Checkboxes', 'clearAllPostCheckboxes')
+      .addItem('🗑️ Delete Daily Sheets (02-31)', 'deleteDailySheetsSafe')
       .addSeparator()
       .addSubMenu(ui.createMenu('👤 User Settings')
         .addItem('Set My Email', 'menuSetMyEmail')
@@ -431,6 +514,196 @@ const UIMenu = {
     }
 
     this._handleClearCheckboxes(sheet);
+  },
+
+  /**
+   * Creates daily sheets 02-31 from sheet 01 as template
+   * Updates formulas to reference previous day's sheet
+   *
+   * FLOW:
+   *   1. Get confirmation from user
+   *   2. Delegate to _handleCreateDailySheets()
+   *   3. Show success message
+   */
+  createDailySheets: function() {
+    const ui = SpreadsheetApp.getUi();
+
+    const response = ui.alert(
+      'Create All Daily Sheets (02-31)',
+      'This will create sheets 02-31 using sheet 01 as a template and update all formulas.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleCreateDailySheets();
+  },
+
+  /**
+   * Creates only missing daily sheets (02-31 that don't exist)
+   * Useful for recovering deleted sheets without recreating all of them
+   *
+   * FLOW:
+   *   1. Get confirmation from user
+   *   2. Delegate to _handleCreateMissingSheets()
+   *   3. Show results
+   */
+  createMissingSheets: function() {
+    const ui = SpreadsheetApp.getUi();
+
+    const response = ui.alert(
+      'Create Missing Sheets Only',
+      'This will create only missing daily sheets (02-31) that don\'t already exist.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleCreateMissingSheets();
+  },
+
+  /**
+   * Reorganizes sheets in numerical order
+   * Reorders all sheets so daily sheets (01-31) appear first in numerical order
+   *
+   * FLOW:
+   *   1. Get confirmation from user
+   *   2. Delegate to _handleOrganizeSheets()
+   *   3. Show success message
+   */
+  organizeSheets: function() {
+    const ui = SpreadsheetApp.getUi();
+
+    const response = ui.alert(
+      'Reorganize Sheets',
+      'This will reorder all sheets to place daily sheets (01-31) first in numerical order.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleOrganizeSheets();
+  },
+
+  /**
+   * Fixes date formulas in all daily sheets
+   * Recalculates date offsets relative to sheet 01
+   *
+   * FLOW:
+   *   1. Get confirmation from user
+   *   2. Delegate to _handleFixDateFormulas()
+   *   3. Show completion message
+   */
+  fixDateFormulasOnly: function() {
+    const ui = SpreadsheetApp.getUi();
+
+    const response = ui.alert(
+      'Fix Date Formulas Only',
+      'This will update all date formulas in daily sheets (02-31) to correctly reference sheet 01.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleFixDateFormulas();
+  },
+
+  /**
+   * Resets current sheet input cells to zero
+   * Clears transaction data while preserving formulas and formatting
+   *
+   * FLOW:
+   *   1. Validate daily sheet
+   *   2. Get confirmation from user
+   *   3. Delegate to _handleResetCurrentSheet()
+   *   4. Show success message
+   */
+  resetInputCellsToZero: function() {
+    const ui = SpreadsheetApp.getUi();
+    const sheet = SpreadsheetApp.getActiveSheet();
+
+    if (!this._validateDailySheet(sheet)) {
+      return;
+    }
+
+    const response = ui.alert(
+      'Reset Current Sheet to Zero',
+      `This will clear all transaction data from sheet "${sheet.getName()}" while preserving formulas and formatting.\n\nContinue?`,
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleResetCurrentSheet();
+  },
+
+  /**
+   * Resets all daily sheets to zero
+   * Clears transaction data from all sheets while preserving formulas and formatting
+   *
+   * FLOW:
+   *   1. Get confirmation from user
+   *   2. Delegate to _handleResetAllSheets()
+   *   3. Show completion message
+   */
+  resetAllDailySheetsToZero: function() {
+    const ui = SpreadsheetApp.getUi();
+
+    const response = ui.alert(
+      'Reset All Daily Sheets to Zero',
+      'This will clear all transaction data from ALL daily sheets (01-31) while preserving formulas and formatting.\n\nWARNING: This cannot be undone. Continue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    this._handleResetAllSheets();
+  },
+
+  /**
+   * Quick reset of current sheet (no confirmation)
+   * Fast clear of current sheet data without confirmation dialogs
+   *
+   * FLOW:
+   *   1. Validate daily sheet
+   *   2. Delegate to _handleQuickResetCurrentSheet()
+   *   3. Show success message
+   */
+  quickResetCurrentSheet: function() {
+    const sheet = SpreadsheetApp.getActiveSheet();
+
+    if (!this._validateDailySheet(sheet)) {
+      return;
+    }
+
+    this._handleQuickResetCurrentSheet();
+  },
+
+  /**
+   * Deletes daily sheets safely
+   * Only deletes sheets 02-31, never touches protected sheets like 01
+   *
+   * FLOW:
+   *   1. Get initial confirmation
+   *   2. Show list of sheets to be deleted
+   *   3. Get final confirmation
+   *   4. Delegate to _handleDeleteDailySheets()
+   *   5. Show results
+   */
+  deleteDailySheetsSafe: function() {
+    this._handleDeleteDailySheets();
   },
 
   /**
@@ -837,6 +1110,305 @@ const UIMenu = {
   },
 
   /**
+   * PRIVATE: Handle create all daily sheets operation
+   *
+   * Creates sheets 02-31 from sheet 01 as template
+   * Updates formulas to reference previous day's sheet
+   *
+   * @private
+   */
+  _handleCreateDailySheets: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      const templateSheet = ss.getSheetByName('01');
+      if (!templateSheet) {
+        throw new Error('Template sheet "01" not found');
+      }
+
+      let createdCount = 0;
+
+      // Create sheets from 02 to 31
+      for (let day = 2; day <= 31; day++) {
+        const sheetName = day.toString().padStart(2, '0');
+        const prevDayName = (day - 1).toString().padStart(2, '0');
+
+        // Check if sheet already exists
+        const existingSheet = ss.getSheetByName(sheetName);
+        if (existingSheet) {
+          continue;
+        }
+
+        // Copy template and rename
+        const newSheet = templateSheet.copyTo(ss);
+        newSheet.setName(sheetName);
+
+        // Update date formulas
+        this._updateDateFormulas(newSheet, sheetName);
+
+        createdCount++;
+      }
+
+      // Reorganize sheets in order
+      this._organizeSheetOrder(ss);
+
+      ui.alert(`Successfully created ${createdCount} daily sheets (02-31) with proper formula references.`);
+    } catch (error) {
+      ui.alert(`Error creating daily sheets: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle create missing daily sheets operation
+   *
+   * Creates only missing sheets (02-31 that don't exist)
+   *
+   * @private
+   */
+  _handleCreateMissingSheets: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      const templateSheet = ss.getSheetByName('01');
+      if (!templateSheet) {
+        throw new Error('Template sheet "01" not found');
+      }
+
+      const missingSheets = [];
+
+      // Check which sheets are missing
+      CONFIG.dailySheets.forEach(sheetName => {
+        if (sheetName === '01') return;
+
+        const existingSheet = ss.getSheetByName(sheetName);
+        if (!existingSheet) {
+          missingSheets.push(sheetName);
+        }
+      });
+
+      if (missingSheets.length === 0) {
+        ui.alert('All daily sheets already exist!');
+        return;
+      }
+
+      // Create missing sheets
+      missingSheets.forEach(sheetName => {
+        const newSheet = templateSheet.copyTo(ss);
+        newSheet.setName(sheetName);
+        this._updateDateFormulas(newSheet, sheetName);
+      });
+
+      this._organizeSheetOrder(ss);
+      ui.alert(`Created ${missingSheets.length} missing sheets: ${missingSheets.join(', ')}`);
+    } catch (error) {
+      ui.alert(`Error creating missing sheets: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle organize sheets operation
+   *
+   * Reorders sheets in numerical order (01-31 first, then other sheets)
+   *
+   * @private
+   */
+  _handleOrganizeSheets: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      this._organizeSheetOrder(ss);
+      ui.alert('Sheets reorganized successfully in numerical order.');
+    } catch (error) {
+      ui.alert(`Error reorganizing sheets: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle fix date formulas operation
+   *
+   * Updates date formulas in all daily sheets (02-31)
+   *
+   * @private
+   */
+  _handleFixDateFormulas: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      let fixedCount = 0;
+
+      CONFIG.dailySheets.forEach(sheetName => {
+        if (sheetName === '01') return;
+
+        const sheet = ss.getSheetByName(sheetName);
+        if (sheet) {
+          this._updateDateFormulas(sheet, sheetName);
+          fixedCount++;
+        }
+      });
+
+      ui.alert(`Date formulas fixed in ${fixedCount} sheets.`);
+    } catch (error) {
+      ui.alert(`Error fixing date formulas: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle reset current sheet operation
+   *
+   * Clears all transaction data from current sheet
+   *
+   * @private
+   */
+  _handleResetCurrentSheet: function() {
+    const sheet = SpreadsheetApp.getActiveSheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      this._clearSheetData(sheet);
+      ui.alert(`Sheet "${sheet.getName()}" reset to zero successfully.`);
+    } catch (error) {
+      ui.alert(`Error resetting sheet: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle reset all sheets operation
+   *
+   * Clears all transaction data from all daily sheets
+   *
+   * @private
+   */
+  _handleResetAllSheets: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      let resetCount = 0;
+
+      CONFIG.dailySheets.forEach(sheetName => {
+        const sheet = ss.getSheetByName(sheetName);
+        if (sheet) {
+          this._clearSheetData(sheet);
+          resetCount++;
+        }
+      });
+
+      ui.alert(`Reset ${resetCount} daily sheets to zero successfully.`);
+    } catch (error) {
+      ui.alert(`Error resetting sheets: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle quick reset current sheet operation
+   *
+   * Fast clear of current sheet without confirmations
+   *
+   * @private
+   */
+  _handleQuickResetCurrentSheet: function() {
+    const sheet = SpreadsheetApp.getActiveSheet();
+    const ui = SpreadsheetApp.getUi();
+
+    try {
+      this._clearSheetData(sheet);
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `Quick reset of "${sheet.getName()}" complete.`,
+        'Success',
+        3
+      );
+    } catch (error) {
+      ui.alert(`Error in quick reset: ${error.message}`);
+    }
+  },
+
+  /**
+   * PRIVATE: Handle delete daily sheets operation
+   *
+   * Safely deletes sheets 02-31, protecting sheet 01 and other important sheets
+   *
+   * @private
+   */
+  _handleDeleteDailySheets: function() {
+    const ui = SpreadsheetApp.getUi();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard', 'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog', 'SupplierDatabase'];
+
+    const response = ui.alert(
+      '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
+      'This will delete ONLY daily transaction sheets (02-31).\n\nProtected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) {
+      return;
+    }
+
+    try {
+      const sheetsToDelete = [];
+      const allSheets = ss.getSheets();
+
+      // Identify sheets to delete
+      allSheets.forEach(sheet => {
+        const sheetName = sheet.getName();
+
+        if (CONFIG.dailySheets.includes(sheetName) &&
+            sheetName !== '01' &&
+            !protectedSheets.includes(sheetName)) {
+          sheetsToDelete.push(sheetName);
+        }
+      });
+
+      if (sheetsToDelete.length === 0) {
+        ui.alert('No daily sheets (02-31) found to delete.');
+        return;
+      }
+
+      // Confirm deletion
+      const confirmResponse = ui.alert(
+        'CONFIRM DELETION',
+        `The following ${sheetsToDelete.length} sheets will be deleted:\n\n• ${sheetsToDelete.join('\n• ')}\n\nContinue?`,
+        ui.ButtonSet.YES_NO
+      );
+
+      if (confirmResponse !== ui.Button.YES) {
+        ui.alert('Deletion cancelled.');
+        return;
+      }
+
+      // Delete sheets
+      let deletedCount = 0;
+      let errors = [];
+
+      sheetsToDelete.forEach(sheetName => {
+        try {
+          const sheet = ss.getSheetByName(sheetName);
+          if (sheet) {
+            ss.deleteSheet(sheet);
+            deletedCount++;
+          }
+        } catch (error) {
+          errors.push(`Failed to delete ${sheetName}: ${error.message}`);
+        }
+      });
+
+      let resultMessage = `✅ Deleted ${deletedCount} daily sheets.`;
+      if (errors.length > 0) {
+        resultMessage += `\n\n❌ ${errors.length} errors:\n• ${errors.join('\n• ')}`;
+      }
+
+      ui.alert('DELETION COMPLETE', resultMessage, ui.ButtonSet.OK);
+
+    } catch (error) {
+      ui.alert(`Critical Error: ${error.message}`);
+    }
+  },
+
+  /**
    * ═══════════════════════════════════════════════════════════════════════════
    * PRIVATE UTILITIES - Shared Helper Functions
    * ═══════════════════════════════════════════════════════════════════════════
@@ -1035,6 +1607,130 @@ const UIMenu = {
       duration: 0,
       avgTimePerRow: 0
     };
+  },
+
+  /**
+   * PRIVATE: Clear all transaction data from a sheet
+   *
+   * Clears content while preserving formulas, formatting, and data validation
+   * Specifically handles clearing checkboxes, status messages, and system IDs
+   *
+   * @param {Sheet} sheet - The sheet to clear
+   * @private
+   */
+  _clearSheetData: function(sheet) {
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+
+    if (lastRow < CONFIG.dataStartRow) {
+      return; // No data to clear
+    }
+
+    // Clear values starting from row CONFIG.dataStartRow (preserve header)
+    const dataRange = sheet.getRange(CONFIG.dataStartRow, 1, lastRow - CONFIG.dataStartRow + 1, lastCol);
+    dataRange.clearContent();
+    dataRange.clearNote();
+
+    // Clear specific columns to avoid breaking formulas
+    const postCol = CONFIG.cols.post + 1;
+    const statusCol = CONFIG.cols.status + 1;
+    const sysIdCol = CONFIG.cols.sysId + 1;
+    const balanceCol = CONFIG.cols.balance + 1;
+
+    if (lastRow >= CONFIG.dataStartRow) {
+      // Clear post checkboxes
+      sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1).uncheck();
+
+      // Clear status messages
+      sheet.getRange(CONFIG.dataStartRow, statusCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+
+      // Clear system IDs
+      sheet.getRange(CONFIG.dataStartRow, sysIdCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+
+      // Clear balance calculations (but keep formulas)
+      sheet.getRange(CONFIG.dataStartRow, balanceCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+    }
+  },
+
+  /**
+   * PRIVATE: Update date formulas in a sheet
+   *
+   * Sets the B3 cell formula to calculate date offset from sheet 01
+   * Sheet 01 uses date as-is, Sheet 02 adds +1 day, Sheet 03 adds +2 days, etc.
+   *
+   * @param {Sheet} sheet - The sheet to update
+   * @param {string} sheetName - The sheet name (e.g., "02", "03")
+   * @private
+   */
+  _updateDateFormulas: function(sheet, sheetName) {
+    try {
+      const dayOffset = this._getDayOffset(sheetName);
+      sheet.getRange('B3').setFormula(`='01'!B3+${dayOffset}`);
+    } catch (error) {
+      // Silently fail - formula may already be correct or sheet may be read-only
+    }
+  },
+
+  /**
+   * PRIVATE: Calculate day offset for sheet date formulas
+   *
+   * Sheet 01 gets 0 offset, Sheet 02 gets +1, Sheet 03 gets +2, etc.
+   *
+   * @param {string} sheetName - The sheet name (e.g., "02", "03")
+   * @return {number} Day offset (0 for sheet 01, 1 for sheet 02, etc.)
+   * @private
+   */
+  _getDayOffset: function(sheetName) {
+    const dayNum = parseInt(sheetName);
+    return dayNum - 1;
+  },
+
+  /**
+   * PRIVATE: Check if a sheet name is a daily sheet (01-31)
+   *
+   * @param {string} sheetName - The sheet name to check
+   * @return {boolean} True if sheet is a daily sheet
+   * @private
+   */
+  _isDailySheet: function(sheetName) {
+    return CONFIG.dailySheets.includes(sheetName);
+  },
+
+  /**
+   * PRIVATE: Organize all sheets in numerical order
+   *
+   * Reorders sheets so that daily sheets (01-31) appear first in numerical order,
+   * followed by other sheets (InvoiceDatabase, PaymentLog, Settings, etc.)
+   *
+   * @param {Spreadsheet} ss - The spreadsheet to reorganize
+   * @private
+   */
+  _organizeSheetOrder: function(ss) {
+    const sheets = ss.getSheets();
+    const dailySheets = [];
+    const otherSheets = [];
+
+    // Separate daily sheets from other sheets
+    sheets.forEach(sheet => {
+      const name = sheet.getName();
+      if (this._isDailySheet(name)) {
+        dailySheets.push({ name, sheet });
+      } else {
+        otherSheets.push({ name, sheet });
+      }
+    });
+
+    // Sort daily sheets numerically
+    dailySheets.sort((a, b) => parseInt(a.name) - parseInt(b.name));
+
+    // Combine: daily sheets first, then other sheets
+    const allSheets = [...dailySheets, ...otherSheets];
+
+    // Reorder by moving each sheet to its target position
+    allSheets.forEach((item, index) => {
+      ss.setActiveSheet(item.sheet);
+      ss.moveActiveSheet(index + 1);
+    });
   }
 
 };
