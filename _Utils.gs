@@ -722,8 +722,8 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
 
   // Apply background color to entire row (inline to avoid function call overhead)
   if (bgColor) {
-    const totalCols = CONFIG.totalColumns.daily - 4; // A:J Column
-    sheet.getRange(row, 1, 1, totalCols).setBackground(bgColor);
+    const totalCols = CONFIG.totalColumns.daily - 5; // A:J Column
+    sheet.getRange(row, 2, 1, totalCols).setBackground(bgColor);
   }
 }
 
@@ -735,8 +735,8 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
  * @param {string} color - Hex color code
  */
 function setRowBackground(sheet, rowNum, color) {
-  const totalCols = CONFIG.totalColumns.daily - 4; // A:J Column
-  sheet.getRange(rowNum, 1, 1, totalCols).setBackground(color);
+  const totalCols = CONFIG.totalColumns.daily - 5; // A:J Column
+  sheet.getRange(rowNum, 2, 1, totalCols).setBackground(color);
 }
 
 // ==================== AUDIT LOGGING ====================
