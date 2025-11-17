@@ -56,11 +56,6 @@
  *    - Background color formatting
  *    - Row metadata writing
  *
- * 10. AUDIT LOGGING
- *     - Action logging to audit trail
- *     - System error tracking
- *     - Master Database write support
- *
  * ARCHITECTURE & DESIGN PATTERNS:
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  * MODULE ORGANIZATION:
@@ -139,16 +134,26 @@
  * ━━━━━━━━━━━━━━
  * None - All utilities are stateless or self-contained
  *
+ * SEPARATION OF CONCERNS:
+ * ━━━━━━━━━━━━━━━━━━━━
+ * AUDIT LOGGING:
+ *   - Responsibility: AuditLogger.gs (NOT _Utils.gs)
+ *   - AuditLogger.gs provides: AuditLogger module with batch queue system
+ *   - Backward compat functions: auditAction(), logSystemError()
+ *   - DO NOT implement audit functions in _Utils.gs
+ *   - Uses: AuditLogger.log(), AuditLogger.logError(), etc.
+ *
  * MODULE DEPENDENCIES:
  * - _Config.gs → Global CONFIG object (required)
- * - AuditLogger.gs → Error logging (required)
+ * - AuditLogger.gs → Error logging, audit trail (required)
  * - All other modules use _Utils.gs (not vice versa)
  *
  * Modular Architecture Dependencies:
  * - Used by: Code.gs, UIMenu.gs, InvoiceManager.gs, PaymentManager.gs
  * - Uses: _Config.gs (CONFIG object)
- * - Uses: AuditLogger.gs (audit trail logging)
+ * - Uses: AuditLogger.gs (for error reporting via logError)
  * - Uses: None others
+ * - DO NOT use for audit logging - use AuditLogger.gs instead
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -925,70 +930,4 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
 function setRowBackground(sheet, rowNum, color) {
   const totalCols = CONFIG.totalColumns.daily - 5; // Exclude date column (A)
   sheet.getRange(rowNum, 2, 1, totalCols).setBackground(color);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 10: AUDIT LOGGING
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Log action to audit trail
- * Writes transaction information to Master Database (master mode) or local sheet
- *
- * @param {string} action - Action type
- * @param {Object} data - Transaction data
- * @param {string} message - Audit message
- */
-function auditAction(action, data, message) {
-  try {
-    // Use Master Database target sheet for writes
-    const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
-    const auditRow = [
-      DateUtils.now(),
-      data.enteredBy || 'SYSTEM',
-      data.sheetName || 'N/A',
-      `Row ${data.rowNum || 'N/A'}`,
-      action,
-      JSON.stringify({
-        supplier: data.supplier,
-        invoice: data.invoiceNo,
-        prevInvoice: data.prevInvoice,
-        receivedAmt: data.receivedAmt,
-        paymentAmt: data.paymentAmt,
-        paymentType: data.paymentType,
-        sysId: data.sysId
-      }),
-      message
-    ];
-
-    auditSh.appendRow(auditRow);
-  } catch (error) {
-    console.error(`[AUDIT ERROR] ${action}: ${message}`, error);
-  }
-}
-
-/**
- * Log system error to audit trail
- * Writes critical system errors to Master Database (master mode) or local sheet
- *
- * @param {string} context - Error context/location
- * @param {string} message - Error message
- */
-function logSystemError(context, message) {
-  try {
-    // Use Master Database target sheet for writes
-    const auditSh = MasterDatabaseUtils.getTargetSheet('audit');
-    auditSh.appendRow([
-      DateUtils.now(),
-      'SYSTEM',
-      'N/A',
-      'N/A',
-      'SYSTEM_ERROR',
-      context,
-      message
-    ]);
-  } catch (error) {
-    // Fallback to console if audit sheet is unavailable
-    console.error(`[SYSTEM ERROR] ${context}: ${message}`);
-  }
 }
