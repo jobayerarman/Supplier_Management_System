@@ -295,7 +295,7 @@ const Code = {
           break;
       }
     } catch (error) {
-      logSystemError("onEdit", error.toString());
+      AuditLogger.logError("Code.onEdit", error.toString());
     }
   },
 
@@ -356,7 +356,7 @@ const Code = {
         BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
       }
     } catch (error) {
-      logSystemError("onEditInstallable", error.toString());
+      AuditLogger.logError("Code.onEditInstallable", error.toString());
     }
   },
 
@@ -609,7 +609,7 @@ const Code = {
     } catch (error) {
       const errMsg = `SYSTEM ERROR: ${error.message || error}`;
       setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
-      logSystemError('processPostedRow', error.toString());
+      AuditLogger.logError('Code.processPostedRow', error.toString());
     }
   },
 
@@ -707,7 +707,7 @@ const Code = {
       }
 
     } catch (error) {
-      logSystemError('populateDuePaymentAmount',
+      AuditLogger.logError('Code.populateDuePaymentAmount',
         `Failed to auto-populate due payment at row ${row}: ${error.toString()}`);
       const targetCell = sheet.getRange(row, CONFIG.cols.paymentAmt + 1);
       targetCell
@@ -750,7 +750,7 @@ const Code = {
       };
 
     } catch (error) {
-      logSystemError('populatePaymentFields',
+      AuditLogger.logError('Code.populatePaymentFields',
         `Failed to auto-populate at row ${row}: ${error.toString()}`);
       return { paymentAmt: '', prevInvoice: '' };
     }

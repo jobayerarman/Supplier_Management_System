@@ -825,7 +825,7 @@ const UIMenu = {
       }
     } catch (error) {
       // Handle critical errors (sheet access, config issues, etc.)
-      logSystemError('_handleBatchValidation', error.toString());
+      AuditLogger.logError('UIMenu._handleBatchValidation', error.toString());
       results.errors.push({
         row: 'N/A',
         supplier: 'SYSTEM',
