@@ -230,7 +230,7 @@ const ExecutionContext = {
       const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
       if (!sheet) return null;
 
-      const dateValue = sheet.getRange('A3').getValue();
+      const dateValue = sheet.getRange('B3').getValue();
 
       // Handle various date formats
       if (dateValue instanceof Date) {
@@ -605,7 +605,7 @@ const MasterDatabaseUtils = {
       'invoice': CONFIG.invoiceSheet,
       'payment': CONFIG.paymentSheet,
       'audit': CONFIG.auditSheet,
-      'supplier': 'SupplierDatabase'
+      'supplier': CONFIG.supplierList
     };
 
     const sheetName = sheetNameMap[sheetType];
@@ -797,77 +797,4 @@ function logSystemError(context, message) {
     // Fallback to console if audit sheet is unavailable
     console.error(`[SYSTEM ERROR] ${context}: ${message}`);
   }
-}
-
-// ==================== BACKWARD COMPATIBILITY ====================
-
-/**
- * Backward compatibility wrappers for legacy code
- */
-function generateUUID() {
-  return IDGenerator.generateUUID();
-}
-
-function getSheet(name) {
-  return SheetUtils.getSheet(name);
-}
-
-function formatTime(date) {
-  return DateUtils.formatTime(date);
-}
-
-function normalizeString(str) {
-  return StringUtils.normalize(str);
-}
-
-/**
- * Get current user email with reliable fallback
- *
- * @deprecated Since UserResolver v2.0 - Use UserResolver.getCurrentUser() directly
- * This wrapper is kept for backward compatibility with external scripts.
- *
- * Delegates to UserResolver v2.0 which provides:
- * - Context-aware fallback chains (menu vs trigger)
- * - Session caching (1-hour TTL)
- * - User prompt fallback (menu context)
- * - Detection metadata for debugging
- *
- * @returns {string} User email address
- */
-function getCurrentUserEmail() {
-  return UserResolver.getCurrentUser();
-}
-
-/**
- * Get Master Database URL
- * @returns {string|null} Master Database URL or null
- */
-function getMasterDatabaseUrl() {
-  return MasterDatabaseUtils.getMasterDatabaseUrl();
-}
-
-/**
- * Get Master Database ID
- * @returns {string|null} Master Database ID or null
- */
-function getMasterDatabaseId() {
-  return MasterDatabaseUtils.getMasterDatabaseId();
-}
-
-/**
- * Build IMPORTRANGE formula for Master Database
- * @param {string} sheetType - Sheet type ('invoice', 'payment', 'audit', 'supplier')
- * @param {string} customRange - Optional custom range
- * @returns {string} IMPORTRANGE formula
- */
-function buildMasterImportFormula(sheetType, customRange = null) {
-  return MasterDatabaseUtils.buildImportFormula(sheetType, customRange);
-}
-
-/**
- * Test Master Database connection
- * @returns {Object} Connection test result
- */
-function testMasterConnection() {
-  return MasterDatabaseUtils.testConnection();
 }
