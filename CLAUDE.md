@@ -918,9 +918,194 @@ When working with this codebase:
 - Formula generator: Ready-to-use IMPORTRANGE formulas
 - Cache test: Performance metrics and partition stats
 
+### WhatsAppManager.gs
+**Automated WhatsApp report delivery via Meta Cloud API**
+
+**Core Functions**:
+- `sendTextMessage(to, message)` - Send text message (max 4096 chars)
+- `uploadMedia(fileBlob, mimeType)` - Upload media file (max 16MB for PDFs)
+- `sendDocument(to, mediaId, filename, caption)` - Send document with caption
+- `validateConfig()` - Check configuration status
+- `getConfigStatus()` - Get current config details
+
+**Configuration** (via Script Properties):
+- `WA_ACCESS_TOKEN` - Meta System User access token
+- `WA_PHONE_NUMBER_ID` - WhatsApp Business phone ID
+- `REPORT_RECIPIENT_PHONE` - Recipient number (format: 8801711123456, no +)
+
+**Performance**:
+- Text message: 200-500ms
+- Media upload: 1-3 seconds (depends on file size)
+- Document send: 200-500ms
+
+**Error Handling**:
+- Returns `{success, data, error}` format
+- All operations logged via AuditLogger
+- Automatic phone number sanitization
+- Message/caption truncation to API limits
+
+### ReportingEngine.gs
+**Data aggregation for daily, weekly, and monthly reports**
+
+**Report Generation**:
+- `generateDailyReport(dateStr)` - Daily sheet transaction summary
+- `generateWeeklyReport(endDate)` - 7-day aggregation with collection efficiency
+- `generateMonthlyReport(year, month)` - Full month stats with aging analysis
+
+**Text Formatting**:
+- `formatDailyTextReport(reportData)` - WhatsApp-formatted daily text
+- `formatWeeklyTextReport(reportData)` - WhatsApp-formatted weekly text
+- `formatMonthlyTextReport(reportData)` - WhatsApp-formatted monthly text
+
+**Data Sources**:
+- Daily reports: Read from daily sheets (01-31)
+- Weekly reports: Aggregate multiple daily reports
+- Monthly reports: Use InvoiceCache and PaymentCache for performance
+
+**Metrics Included**:
+- Transaction counts (posted, invoices, payments)
+- Amount totals (invoices, payments)
+- Payment type breakdown
+- Top suppliers (by transaction volume)
+- Collection efficiency % (payments/invoices)
+- Aging buckets (0-30, 31-60, 61-90, 90+ days)
+- Total outstanding balance
+
+**Performance**:
+- Daily report: < 5 seconds
+- Weekly report: < 15 seconds (7 daily aggregations)
+- Monthly report: < 30 seconds (uses cached data)
+
+### PDFGenerator.gs
+**PDF document generation for weekly and monthly reports**
+
+**Core Functions**:
+- `createWeeklyPDF(reportData)` - Generate weekly summary PDF
+- `createMonthlyPDF(reportData)` - Generate monthly dashboard PDF
+
+**Architecture**:
+1. Create temporary Google Doc
+2. Add formatted content (tables, headers, styling)
+3. Convert to PDF blob via DriveApp
+4. Trash temporary Doc
+5. Return PDF blob for upload
+
+**PDF Content**:
+
+**Weekly PDF**:
+- Overview table (transactions, invoices, payments, efficiency, outstanding)
+- Daily breakdown table (7 days with metrics)
+- Top suppliers table (from last day)
+- Generated timestamp footer
+
+**Monthly PDF**:
+- Executive summary (outstanding, invoice/payment totals)
+- Invoice statistics (total, active, paid, collection rate)
+- Payment statistics (count, total, average)
+- Aging analysis table with percentages
+- Key insights (bullet points)
+- Generated timestamp footer
+
+**Styling**:
+- Professional table formatting (borders, padding, alternating rows)
+- Color-coded headers (#1a73e8 blue)
+- Consistent fonts and spacing
+- Bengali taka symbol (৳) support
+
+**Performance & Limits**:
+- Weekly PDF: 10-20 seconds
+- Monthly PDF: 15-30 seconds
+- WhatsApp limit: 16MB per file (usually 100-500KB)
+- Auto-cleanup: Temp docs deleted after conversion
+
+### ScheduledReports.gs
+**Automated report delivery with time-based triggers**
+
+**Trigger Setup**:
+- `setupAllReportTriggers()` - Enable all automated reports
+- `setupDailyReportTrigger()` - Daily at 9 PM
+- `setupWeeklyReportTrigger()` - Saturday at 8 AM
+- `setupMonthlyReportTrigger()` - 1st of month at 9 AM
+- `removeAllReportTriggers()` - Disable automation
+- `showTriggerStatus()` - Display current trigger state
+
+**Scheduled Functions** (called by triggers):
+- `sendDailyReport()` - Generate & send yesterday's summary (text only)
+- `sendWeeklyReport()` - Generate & send 7-day report (text + PDF)
+- `sendMonthlyReport()` - Generate & send monthly dashboard (text + PDF)
+
+**Manual Testing Functions** (via menu):
+- `sendDailyReportManual()` - Test daily report with UI feedback
+- `sendWeeklyReportManual()` - Test weekly report with progress dialog
+- `sendMonthlyReportManual()` - Test monthly report with progress dialog
+
+**Workflow**:
+1. Trigger fires at scheduled time
+2. Get recipient from Script Properties
+3. Generate report data (ReportingEngine)
+4. Format text message
+5. Send text via WhatsAppManager
+6. If weekly/monthly: Generate PDF (PDFGenerator)
+7. If weekly/monthly: Upload PDF to WhatsApp
+8. If weekly/monthly: Send document with caption
+9. Log success/failure via AuditLogger
+
+**Error Handling**:
+- All operations wrapped in try-catch
+- Errors logged to AuditLog
+- Failed reports don't crash system
+- Manual functions show user-friendly error dialogs
+
+**Cost Management**:
+- First 1,000 conversations/month: FREE (WhatsApp Cloud API)
+- Expected usage: ~35 conversations/month (30 daily + 4 weekly + 1 monthly)
+- Well within free tier limits
+
+### UIMenu.gs (WhatsApp Integration)
+**Added WhatsApp Reports submenu to existing menu**
+
+**New Menu Items**:
+```
+📱 WhatsApp Reports
+  ├─ 🔧 Configure WhatsApp       → Setup wizard for credentials
+  ├─ 🧪 Test Connection          → Send test message
+  ├─ 📊 Send Daily Report        → Manual daily report
+  ├─ 📈 Send Weekly Report       → Manual weekly report (with PDF)
+  ├─ 📅 Send Monthly Report      → Manual monthly report (with PDF)
+  ├─ ⚙️ Setup Report Triggers     → Enable automation
+  ├─ 🔴 Remove Report Triggers    → Disable automation
+  └─ 📋 Show Trigger Status       → Check automation status
+```
+
+**Configuration Functions**:
+- `configureWhatsApp()` - 3-step wizard for Meta credentials
+  - Step 1: Meta Access Token
+  - Step 2: Phone Number ID
+  - Step 3: Recipient Phone
+  - Validates inputs and saves to Script Properties
+- `testWhatsAppConnection()` - Send test message to verify setup
+  - Validates configuration
+  - Sends test message
+  - Shows success/error dialog with details
+
+**Integration Pattern**:
+- Follows existing menu structure (submenu under 📋FP - Operations)
+- Consistent with User Settings submenu pattern
+- User-friendly dialogs with step-by-step guidance
+- All operations logged via AuditLogger
+
+**Setup Documentation**:
+- See `WHATSAPP_SETUP.md` for complete setup guide
+- Covers Meta Business Account creation
+- WhatsApp Cloud API configuration
+- Google Apps Script setup
+- Testing procedures
+- Troubleshooting guide
+
 ---
 
-**Last Updated**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
+**Last Updated**: 18 November 2025 - Added WhatsApp Reporting Integration
+**Previous Update**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
 **Previous Update**: 2 November 2025 - Added Master Database architecture
 **Maintained By**: Development team
 **Questions**: Check AuditLog sheet or code comments for implementation details

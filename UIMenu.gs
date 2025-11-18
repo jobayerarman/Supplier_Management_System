@@ -34,6 +34,18 @@ function onOpen() {
       .addItem('Clear User Cache', 'menuClearUserCache')
       .addSeparator()
       .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('📱 WhatsApp Reports')
+      .addItem('🔧 Configure WhatsApp', 'configureWhatsApp')
+      .addItem('🧪 Test Connection', 'testWhatsAppConnection')
+      .addSeparator()
+      .addItem('📊 Send Daily Report', 'sendDailyReportManual')
+      .addItem('📈 Send Weekly Report', 'sendWeeklyReportManual')
+      .addItem('📅 Send Monthly Report', 'sendMonthlyReportManual')
+      .addSeparator()
+      .addItem('⚙️ Setup Report Triggers', 'setupAllReportTriggers')
+      .addItem('🔴 Remove Report Triggers', 'removeAllReportTriggers')
+      .addItem('📋 Show Trigger Status', 'showTriggerStatus'))
     .addToUi();
 }
 
@@ -740,4 +752,177 @@ function showValidationResults(results, isPosting) {
   const title = isPosting ? 'Batch Posting Results' : 'Batch Validation Results';
 
   ui.alert(title, message, ui.ButtonSet.OK);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHATSAPP MENU HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Configure WhatsApp credentials via UI prompts
+ * Saves to Script Properties for persistent storage
+ */
+function configureWhatsApp() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+
+  // Show introduction
+  ui.alert(
+    'WhatsApp Configuration',
+    'You will need:\n\n' +
+    '1. Meta Access Token (from Meta Business Account)\n' +
+    '2. WhatsApp Business Phone Number ID\n' +
+    '3. Recipient Phone Number (format: 8801711123456)\n\n' +
+    'Get these from: developers.facebook.com/apps',
+    ui.ButtonSet.OK
+  );
+
+  // Prompt for Access Token
+  const tokenResponse = ui.prompt(
+    'Step 1: Access Token',
+    'Enter your Meta Access Token:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (tokenResponse.getSelectedButton() !== ui.Button.OK) {
+    ui.alert('Configuration Cancelled', 'WhatsApp setup was cancelled.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const accessToken = tokenResponse.getResponseText().trim();
+  if (!accessToken) {
+    ui.alert('Error', 'Access Token cannot be empty.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Prompt for Phone Number ID
+  const phoneIdResponse = ui.prompt(
+    'Step 2: Phone Number ID',
+    'Enter your WhatsApp Business Phone Number ID:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (phoneIdResponse.getSelectedButton() !== ui.Button.OK) {
+    ui.alert('Configuration Cancelled', 'WhatsApp setup was cancelled.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const phoneNumberId = phoneIdResponse.getResponseText().trim();
+  if (!phoneNumberId) {
+    ui.alert('Error', 'Phone Number ID cannot be empty.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Prompt for Recipient Phone
+  const recipientResponse = ui.prompt(
+    'Step 3: Recipient Phone',
+    'Enter recipient phone number (format: 8801711123456, no + or spaces):',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (recipientResponse.getSelectedButton() !== ui.Button.OK) {
+    ui.alert('Configuration Cancelled', 'WhatsApp setup was cancelled.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const recipientPhone = recipientResponse.getResponseText().trim().replace(/[\s\+\-]/g, '');
+  if (!recipientPhone) {
+    ui.alert('Error', 'Recipient phone cannot be empty.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Validate phone number format (should be numbers only)
+  if (!/^\d+$/.test(recipientPhone)) {
+    ui.alert('Error', 'Phone number should contain only digits (e.g., 8801711123456).', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Save to Script Properties
+  props.setProperty('WA_ACCESS_TOKEN', accessToken);
+  props.setProperty('WA_PHONE_NUMBER_ID', phoneNumberId);
+  props.setProperty('REPORT_RECIPIENT_PHONE', recipientPhone);
+
+  // Log configuration
+  AuditLogger.logInfo('WHATSAPP_CONFIGURED', 'WhatsApp credentials configured');
+
+  // Show success message
+  ui.alert(
+    'Configuration Saved',
+    '✅ WhatsApp configuration saved successfully!\n\n' +
+    `Recipient: +${recipientPhone}\n\n` +
+    'Use "Test Connection" to verify setup.',
+    ui.ButtonSet.OK
+  );
+}
+
+/**
+ * Test WhatsApp connection by sending a test message
+ */
+function testWhatsAppConnection() {
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    // Validate configuration first
+    const configStatus = WhatsAppManager.validateConfig();
+
+    if (!configStatus.success) {
+      ui.alert(
+        'Configuration Error',
+        '❌ ' + configStatus.error + '\n\n' +
+        'Please run "Configure WhatsApp" first.',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+
+    // Get recipient
+    const props = PropertiesService.getScriptProperties();
+    const recipient = props.getProperty('REPORT_RECIPIENT_PHONE');
+
+    if (!recipient) {
+      ui.alert(
+        'Configuration Error',
+        '❌ Recipient phone number not configured.\n\n' +
+        'Please run "Configure WhatsApp" first.',
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+
+    // Send test message
+    const testMessage = '🧪 *Test Message*\n\n' +
+                       'WhatsApp integration is working correctly!\n\n' +
+                       `Sent: ${DateUtils.now()}`;
+
+    const result = WhatsAppManager.sendTextMessage(recipient, testMessage);
+
+    if (result.success) {
+      ui.alert(
+        'Test Successful',
+        '✅ Test message sent successfully!\n\n' +
+        `Recipient: +${recipient}\n` +
+        `Message ID: ${result.data.messageId}\n\n` +
+        'Check WhatsApp to confirm delivery.',
+        ui.ButtonSet.OK
+      );
+      AuditLogger.logInfo('WHATSAPP_TEST_SUCCESS', `Test message sent to ${recipient}`);
+    } else {
+      ui.alert(
+        'Test Failed',
+        '❌ Failed to send test message:\n\n' +
+        result.error + '\n\n' +
+        'Please check your configuration and try again.',
+        ui.ButtonSet.OK
+      );
+      AuditLogger.logError('WHATSAPP_TEST_FAILED', result.error);
+    }
+
+  } catch (error) {
+    ui.alert(
+      'Test Error',
+      '❌ An error occurred:\n\n' + error.toString(),
+      ui.ButtonSet.OK
+    );
+    AuditLogger.logError('WHATSAPP_TEST_ERROR', error.toString());
+  }
 }
