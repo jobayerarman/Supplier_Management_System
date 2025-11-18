@@ -761,7 +761,7 @@ const Code = {
    * @private
    */
   _shouldProcessPayment: function(data) {
-    return shouldProcessPayment(data);
+    return PaymentManager.shouldRecordPayment(data);
   }
 };
 
