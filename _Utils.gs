@@ -844,15 +844,6 @@ function getPaymentMethod(paymentType) {
   return methods[paymentType] || 'Cash';
 }
 
-/**
- * Check if payment should be recorded for transaction
- * @param {Object} data - Transaction data
- * @returns {boolean} True if payment should be recorded
- */
-function shouldProcessPayment(data) {
-  return PaymentManager.shouldRecordPayment(data);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION 9: UI HELPERS
 // ═══════════════════════════════════════════════════════════════════════════

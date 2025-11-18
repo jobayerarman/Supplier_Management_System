@@ -492,28 +492,6 @@ function validateSupplier(supplier) {
     return { valid: false, error: 'Supplier name is required' };
   }
 
-  // Optional: Check if supplier exists in SupplierList sheet
-  // Uncomment if you want to enforce supplier list validation
-  /*
-  try {
-    const supplierListSh = SheetUtils.getSheet(CONFIG.supplierList);
-    const data = supplierListSh.getRange(2, 1, supplierListSh.getLastRow() - 1, 2).getValues();
-    const validSuppliers = data
-      .filter(row => row[1] === 'ACTIVE')
-      .map(row => row[0].toString().trim().toUpperCase());
-
-    if (!validSuppliers.includes(supplier.toString().trim().toUpperCase())) {
-      return {
-        valid: false,
-        error: `Supplier "${supplier}" is not in the approved active supplier list`
-      };
-    }
-  } catch (error) {
-    AuditLogger.logWarning('validateSupplier', `Supplier validation failed: ${error.toString()}`);
-    // Don't block on validation error
-  }
-  */
-
   return { valid: true };
 }
 
