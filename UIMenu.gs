@@ -642,20 +642,21 @@ function postRowsInSheet(sheet, startRow = null, endRow = null) {
 /**
  * Builds data object from row data array
  *
- * IMPORTANT: Extracts invoice date from daily sheet
- * - Reads date from cell A3 of the daily sheet
- * - Falls back to constructing date from sheet name (e.g., "01" → day 1)
- * - Used by both InvoiceManager and PaymentManager for date fields
+ * IMPORTANT: Extracts transaction date from daily sheet (cell B3)
+ * - Both invoice date and payment date come from cell B3 of the daily sheet
+ * - Represents when the transaction occurred (invoice created or payment made)
+ * - Falls back to current date if B3 is empty/invalid
+ * - Used consistently throughout InvoiceManager and PaymentManager
  *
  * @param {Array} rowData - Array of cell values
  * @param {number} rowNum - Row number
  * @param {string} sheetName - Sheet name
  * @param {string} enteredBy - User email (optional, Phase 2 optimization - will detect if not provided)
- * @return {Object} Data object with invoiceDate field
+ * @return {Object} Data object with invoiceDate and paymentDate fields
  */
 function buildDataObject(rowData, rowNum, sheetName, enteredBy = null) {
-  // Get invoice date from daily sheet (cell A3) or construct from sheet name
-  const invoiceDate = getDailySheetDate(sheetName) || new Date();
+  // Get transaction date from daily sheet (cell B3) - used for both invoice and payment dates
+  const transactionDate = getDailySheetDate(sheetName) || new Date();
 
   // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
   const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
@@ -669,9 +670,10 @@ function buildDataObject(rowData, rowNum, sheetName, enteredBy = null) {
     paymentAmt: parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0,
     notes: rowData[CONFIG.cols.notes] || '',
     sysId: rowData[CONFIG.cols.sysId],
-    invoiceDate: invoiceDate,  // ✅ ADDED: Invoice/payment date from daily sheet
-    enteredBy: finalEnteredBy, // Phase 2: Use parameter or detect
-    timestamp: new Date(),       // Current processing time (for audit trail)
+    invoiceDate: transactionDate,   // Invoice date from daily sheet (cell B3)
+    paymentDate: transactionDate,   // Payment date from daily sheet (cell B3) - same as invoice date
+    enteredBy: finalEnteredBy,      // Phase 2: Use parameter or detect
+    timestamp: new Date(),          // Current processing time (for audit trail)
     rowNum: rowNum,
     sheetName: sheetName
   };

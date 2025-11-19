@@ -173,15 +173,16 @@ function onEditInstallable(e) {
         if (editedValue === true || String(editedValue).toUpperCase() === 'TRUE') {
           // ═══ EARLY VALIDATION (Fail Fast Without Lock) ═══
           const now = DateUtils.now();
-          // Read invoice date once from sheet cell A3
-          const invoiceDate = sheet.getRange('A3').getValue() || now;
+          // Read transaction date from daily sheet (cell B3) - consistent with buildDataObject()
+          const transactionDate = getDailySheetDate(sheetName) || now;
 
           const quickValidationData = {
             sheetName,
             rowNum: row,
             supplier,
             invoiceNo,
-            invoiceDate: invoiceDate,
+            invoiceDate: transactionDate,
+            paymentDate: transactionDate,
             receivedAmt,
             paymentAmt,
             paymentType,
@@ -239,8 +240,8 @@ function onEditInstallable(e) {
           }
 
           try {
-            // Pass pre-read data, date, and enteredBy to avoid redundant reads
-            processPostedRowWithLock(sheet, row, rowValues, invoiceDate, quickValidationData.enteredBy);
+            // Pass pre-read data, transaction date, and enteredBy to avoid redundant reads
+            processPostedRowWithLock(sheet, row, rowValues, transactionDate, quickValidationData.enteredBy);
           } finally {
             LockManager.releaseLock(lock);
           }
@@ -331,7 +332,7 @@ function onEditInstallable(e) {
  * 3. Pre-calculated balance before writes (eliminates updateBalanceCell call)
  * 4. Surgical cache invalidation (supplier-specific)
  * 5. Early validation exit (fail fast)
- * 6. Invoice date passed as parameter (eliminates redundant sheet read)
+ * 6. Transaction date passed as parameter (eliminates redundant sheet read)
  *
  * Write sequence:
  * - All processing done first (invoice + payment)
@@ -341,10 +342,10 @@ function onEditInstallable(e) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {Array} rowData - Pre-read row values (optional, will read if not provided)
- * @param {Date} invoiceDate - Invoice date (optional, will read from sheet if not provided)
+ * @param {Date} transactionDate - Transaction date from cell B3 (optional, will read if not provided)
  * @param {string} enteredBy - User email (optional, will detect if not provided)
  */
-function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = null, enteredBy = null) {
+function processPostedRowWithLock(sheet, rowNum, rowData = null, transactionDate = null, enteredBy = null) {
   const cols = CONFIG.cols;
   const totalCols = CONFIG.totalColumns.daily;
   const colors = CONFIG.colors;
@@ -367,19 +368,20 @@ function processPostedRowWithLock(sheet, rowNum, rowData = null, invoiceDate = n
     const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
     const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
 
-    // Use provided date or fallback to reading from sheet
-    const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
+    // Use provided transaction date or fallback to reading from sheet (cell B3)
+    const finalTransactionDate = transactionDate || getDailySheetDate(sheetName) || now;
 
     // Use provided enteredBy or fallback to detection (Phase 2: Parameter passing optimization)
     const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
 
-    // Build transaction context object
+    // Build transaction context object - both invoice and payment date come from the same source (cell B3)
     const data = {
       sheetName,
       rowNum,
       supplier,
       invoiceNo,
-      invoiceDate: finalInvoiceDate,
+      invoiceDate: finalTransactionDate,
+      paymentDate: finalTransactionDate,
       receivedAmt,
       paymentAmt,
       paymentType,

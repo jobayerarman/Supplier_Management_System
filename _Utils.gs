@@ -215,7 +215,7 @@ const ExecutionContext = {
       const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
       if (!sheet) return null;
 
-      const dateValue = sheet.getRange('A3').getValue();
+      const dateValue = sheet.getRange('B3').getValue();
 
       // Handle various date formats
       if (dateValue instanceof Date) {
@@ -248,10 +248,11 @@ const ExecutionContext = {
 };
 
 /**
- * Get the date from cell A3 of a daily sheet
+ * Get the date from cell B3 of a daily sheet
+ * Used consistently for invoice date and payment date throughout the system
  * PERFORMANCE: Uses ExecutionContext cache to avoid repeated API calls
  * @param {string} sheetName - Daily sheet name (01-31)
- * @returns {Date|null} Date from A3 or null
+ * @returns {Date|null} Date from B3 or null
  */
 function getDailySheetDate(sheetName) {
   return ExecutionContext.getDailySheetDate(sheetName);
