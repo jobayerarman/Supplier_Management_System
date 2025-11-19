@@ -661,7 +661,10 @@ const PaymentManager = {
       // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
       if (this._isPaidDateAlreadySet(invoice)) {
         const col = CONFIG.invoiceCols;
-        const result = this._buildAlreadyPaidResult(invoiceNo, invoice.data[col.paidDate]);
+        const paidDateValue = invoice.data[col.paidDate];
+        // Format date for consistent display in audit log
+        const formattedPaidDate = DateUtils.formatDate(paidDateValue);
+        const result = this._buildAlreadyPaidResult(invoiceNo, formattedPaidDate);
 
         AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
           `${result.message} | Payment: ${context.paymentId}`);
