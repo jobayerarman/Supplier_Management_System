@@ -624,7 +624,19 @@ const PaymentManager = {
    */
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
     try {
-      // ═══ STEP 1: FIND INVOICE ═══
+      // ═══ VALIDATION: Paid date must be reasonable (prevent future dates from sheet mismatches) ═══
+      const now = new Date();
+      if (paidDate > now) {
+        AuditLogger.logWarning('PaymentManager._updateInvoicePaidDate',
+          `Paid date (${DateUtils.formatDate(paidDate)}) appears to be in the future. Using current date instead.`);
+        paidDate = now;
+      }
+
+      // ═══ STEP 1: FIND INVOICE (Force Fresh Read) ═══
+      // Clear supplier cache to ensure we're checking actual sheet data, not stale cache
+      if (!cachedInvoice) {
+        CacheManager.invalidateSupplierCache(supplier);
+      }
       const invoice = cachedInvoice || InvoiceManager.findInvoice(supplier, invoiceNo);
 
       if (!invoice) {
@@ -940,7 +952,7 @@ const PaymentManager = {
     return this._updateInvoicePaidDate(
       targetInvoice,
       data.supplier,
-      data.invoiceDate || data.timestamp,
+      data.paymentDate || data.invoiceDate,
       data.paymentAmt,
       {
         paymentId: paymentId,
