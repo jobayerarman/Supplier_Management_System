@@ -594,7 +594,7 @@ const InvoiceManager = {
         .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
 
     } catch (error) {
-      logSystemError('InvoiceManager.applyInvoiceFormulas',
+      AuditLogger.logError('InvoiceManager.applyInvoiceFormulas',
         `Failed to set formulas for row ${row}: ${error.toString()}`);
       throw error;
     }
@@ -1045,7 +1045,7 @@ const InvoiceManager = {
         message: `Repaired ${repairedCount} invoice(s)`
       };
     } catch (error) {
-      logSystemError('InvoiceManager.repairAllFormulas', error.toString());
+      AuditLogger.logError('InvoiceManager.repairAllFormulas', error.toString());
       return { success: false, error: error.toString() };
     }
   },

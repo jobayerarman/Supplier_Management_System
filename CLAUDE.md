@@ -662,13 +662,29 @@ When using Master Database mode (`connectionMode: 'master'`), the system needs t
 
 ## Backward Compatibility
 
-Legacy function wrappers provided for external scripts:
-- `processInvoice(data)` → `InvoiceManager.process(data)`
-- `processPayment(data)` → `PaymentManager.process(data)`
-- `calculateBalance(data)` → `BalanceCalculator.calculate(data)`
-- `getCurrentUserEmail()` → `UserResolver.getCurrentUser()`
+### Legacy Function Wrappers (Deprecated but Kept)
 
-New code should use module methods directly.
+These functions are preserved for external scripts but should not be used in new code:
+- `auditAction(action, data, message)` → **Use:** `AuditLogger.log(action, data, message)` ⚠️ DEPRECATED
+- `logSystemError(context, message)` → **Use:** `AuditLogger.logError(context, message)` ⚠️ DEPRECATED
+- `detectUserFromSheetEdit()` → **Use:** `UserResolver.getCurrentUser()` ⚠️ DEPRECATED (returns null)
+- `setCurrentUserEmail(email)` → **Use:** `UserResolver.setManualUserEmail(email)` ⚠️ DEPRECATED
+
+### Removed Functions (No Longer Exists)
+
+The following utility functions have been removed as they were redundant wrappers:
+- ❌ `shouldProcessPayment(data)` - Removed (wrapper to PaymentManager.shouldRecordPayment())
+
+If you need this functionality, use `PaymentManager.shouldRecordPayment(data)` directly.
+
+### Migration Path
+
+All new code should follow modern conventions:
+- **Transaction logging:** Use `AuditLogger.log()` instead of `auditAction()`
+- **Error logging:** Use `AuditLogger.logError()` instead of `logSystemError()`
+- **Warning logging:** Use `AuditLogger.logWarning()` for validation warnings
+- **Info logging:** Use `AuditLogger.logInfo()` for informational messages
+- **User identification:** Use `UserResolver.getCurrentUser()` instead of `detectUserFromSheetEdit()`
 
 ## AI Assistant Guidelines
 
@@ -920,8 +936,8 @@ When working with this codebase:
 
 ---
 
-**Last Updated**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
-**Previous Update**: 2 November 2025 - Added Master Database architecture
+**Last Updated**: 18 November 2025 - Removed shouldProcessPayment(), cleaned up dead code, added deprecation notices
+**Previous Update**: 2 November 2025 - Added Conditional Cache Strategy for Master Database mode
 **Maintained By**: Development team
 **Questions**: Check AuditLog sheet or code comments for implementation details
 
