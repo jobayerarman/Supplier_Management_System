@@ -588,15 +588,22 @@ const PaymentManager = {
    * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
    * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
    * ✓ REFACTORED: Uses helper functions for clearer separation of concerns
+   * ✓ FIXED: Direct sheet check for paid date to prevent false INVOICE_ALREADY_PAID
    *
    * WORKFLOW:
    * 1. Find invoice (uses cached if provided)
    * 2. Calculate balance (via _calculateBalanceInfo)
    * 3. Check if fully paid (early return if partial)
-   * 4. Check if paid date already set (via _isPaidDateAlreadySet)
+   * 4. Check if paid date actually set in sheet (via _isPaidDateAlreadySetInSheet)
    * 5. Write paid date (via _writePaidDateToSheet with lock management)
    * 6. Update cache if written
    * 7. Return result with audit logging
+   *
+   * CRITICAL FIX:
+   * _isPaidDateAlreadySet() now reads the actual InvoiceDatabase sheet column H
+   * instead of relying on potentially stale cache data. This prevents false
+   * INVOICE_ALREADY_PAID errors when processing Due payments for invoices where
+   * the cache hasn't been updated yet or contains data from a prior transaction.
    *
    * @typedef {Object} PaidStatusResult
    * @property {boolean} attempted - Whether paid status update was attempted
@@ -646,8 +653,9 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
-      if (this._isPaidDateAlreadySet(invoice)) {
+      // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET IN SHEET ═══
+      // CRITICAL: Read the actual sheet, not cached data, for this decision
+      if (this._isPaidDateAlreadySetInSheet(invoice)) {
         const col = CONFIG.invoiceCols;
         const result = this._buildAlreadyPaidResult(invoiceNo, invoice.data[col.paidDate]);
 
@@ -840,6 +848,9 @@ const PaymentManager = {
 
   /**
    * Helper: Check if paid date is already set on invoice
+   * DEPRECATED: Use _isPaidDateAlreadySetInSheet() for critical decisions
+   * This relies on potentially stale cached data.
+   *
    * @private
    * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @returns {boolean} True if paid date is already set
@@ -847,6 +858,29 @@ const PaymentManager = {
   _isPaidDateAlreadySet: function(invoice) {
     const col = CONFIG.invoiceCols;
     return !!invoice.data[col.paidDate];
+  },
+
+  /**
+   * Helper: Check if paid date is already set in actual InvoiceDatabase sheet
+   * Reads the sheet directly to avoid stale cache data.
+   * Critical for accurate INVOICE_ALREADY_PAID detection.
+   *
+   * @private
+   * @param {Object} invoice - Invoice object with row number
+   * @returns {boolean} True if column H (paidDate) contains a value in the actual sheet
+   */
+  _isPaidDateAlreadySetInSheet: function(invoice) {
+    try {
+      const invoiceSh = MasterDatabaseUtils.getSourceSheet('invoice');
+      const col = CONFIG.invoiceCols;
+      const paidDateValue = invoiceSh.getRange(invoice.row, col.paidDate + 1).getValue();
+      return !!paidDateValue; // True if column H is not empty
+    } catch (error) {
+      AuditLogger.logWarning('PaymentManager._isPaidDateAlreadySetInSheet',
+        `Failed to read paid date from sheet: ${error.toString()}`);
+      // On error, fall back to cached data to avoid blocking the operation
+      return this._isPaidDateAlreadySet(invoice);
+    }
   },
 
   /**
