@@ -588,35 +588,34 @@ const PaymentManager = {
    * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
    * ✓ OPTIMIZED: Accepts optional cached invoice to eliminate redundant sheet read
    * ✓ REFACTORED: Uses helper functions for clearer separation of concerns
-   * ✓ FIXED: Direct sheet check for paid date to prevent false INVOICE_ALREADY_PAID
-   * ✓ ENHANCED: Explicit flow using cachedInvoice F column (Balance Due) data
+   * ✓ SIMPLIFIED: Uses currentPaymentAmount to determine if invoice is fully paid
    *
    * WORKFLOW:
    * 1. Find invoice (uses cached if provided)
    * 2. Extract Balance Due from cached invoice column F
-   * 3. Verify invoice is fully paid (early return if partial)
-   * 4. Log INVOICE_FULLY_PAID audit event
-   * 5. Check if paid date already set in sheet (via _isPaidDateAlreadySetInSheet)
-   * 6. Write paid date (via _writePaidDateToSheet with lock management)
-   * 7. Update cache if written
-   * 8. Return result with audit logging
+   * 3. Check if currentPaymentAmount fully pays remaining balance
+   * 4. If fully paid: Log INVOICE_FULLY_PAID and write paid date
+   * 5. If partial: Log INVOICE_PARTIAL_PAYMENT and return
+   * 6. Update cache after write
+   * 7. Return result with audit logging
    *
-   * CRITICAL FIX:
-   * _isPaidDateAlreadySetInSheet() reads the actual InvoiceDatabase sheet column H
-   * instead of relying on potentially stale cache data. This prevents false
-   * INVOICE_ALREADY_PAID errors when processing Due payments for invoices where
-   * the cache hasn't been updated yet or contains data from a prior transaction.
+   * BUSINESS LOGIC:
+   * - Regular payments: Invoice amount = payment amount (validated at source)
+   * - Due payments: Check if currentPaymentAmount >= remaining balanceDue
+   * - Partial payments: Skip paid date workflow (balance will remain due)
+   * - Unpaid payments: Skip paid date workflow (no payment made)
    *
    * PERFORMANCE:
    * Uses cachedInvoice.data[col.balanceDue] directly instead of recalculating,
-   * preserving O(1) performance for balance checks.
+   * preserving O(1) performance for balance checks. No sheet reads needed for
+   * the paid date decision - uses parameter data instead.
    *
    * @typedef {Object} PaidStatusResult
    * @property {boolean} attempted - Whether paid status update was attempted
    * @property {boolean} success - Whether paid date was successfully updated
    * @property {boolean} fullyPaid - Whether invoice is fully paid
    * @property {boolean} paidDateUpdated - Whether paid date was written to sheet
-   * @property {string} [reason] - Reason for outcome (invoice_not_found, partial_payment, already_set, updated, lock_failed, error)
+   * @property {string} [reason] - Reason for outcome (invoice_not_found, partial_payment, updated, lock_failed, error)
    * @property {string} [message] - Human-readable message about outcome
    * @property {BalanceInfo} [balanceInfo] - Balance information
    *
@@ -652,8 +651,10 @@ const PaymentManager = {
       const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
       const totalPaid = Number(invoice.data[col.totalPaid]) || 0;
 
-      // ═══ STEP 3: VERIFY INVOICE IS FULLY PAID ═══
-      const fullyPaid = Math.abs(balanceDue) < CONFIG.constants.BALANCE_TOLERANCE;
+      // ═══ STEP 3: CHECK IF CURRENT PAYMENT FULLY PAYS THE BALANCE ═══
+      // For Due payments: check if currentPaymentAmount >= balanceDue
+      // For Regular payments: balanceDue should be 0 after payment recorded
+      const fullyPaid = currentPaymentAmount >= Math.abs(balanceDue);
 
       if (!fullyPaid) {
         const balanceInfo = {
@@ -665,28 +666,16 @@ const PaymentManager = {
         const result = this._buildPartialPaymentResult(invoiceNo, balanceInfo);
 
         AuditLogger.log('INVOICE_PARTIAL_PAYMENT', context.transactionData,
-          `${result.message} | Total Paid: ${totalPaid}/${totalAmount} | Payment: ${context.paymentId}`);
+          `${result.message} | Total Paid: ${totalPaid}/${totalAmount} | Current Payment: ${currentPaymentAmount} | Payment: ${context.paymentId}`);
 
         return result;
       }
 
       // ═══ STEP 4: LOG INVOICE_FULLY_PAID AUDIT EVENT ═══
       AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
-        `Invoice ${invoiceNo} is fully paid | Balance: ${balanceDue} | Total Paid: ${totalPaid}/${totalAmount} | Payment: ${context.paymentId}`);
+        `Invoice ${invoiceNo} is fully paid | Balance: ${balanceDue} | Total Paid: ${totalPaid}/${totalAmount} | Current Payment: ${currentPaymentAmount} | Payment: ${context.paymentId}`);
 
-      // ═══ STEP 5: CHECK IF PAID DATE ALREADY SET IN SHEET ═══
-      // CRITICAL: Read the actual sheet, not cached data, for this decision
-      if (this._isPaidDateAlreadySetInSheet(invoice)) {
-        const currentPaidDate = invoice.data[col.paidDate];
-        const result = this._buildAlreadyPaidResult(invoiceNo, currentPaidDate);
-
-        AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
-          `${result.message} | Payment: ${context.paymentId}`);
-
-        return result;
-      }
-
-      // ═══ STEP 6: WRITE PAID DATE TO SHEET ═══
+      // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
       try {
         this._writePaidDateToSheet(invoice, paidDate);
       } catch (lockError) {
@@ -695,10 +684,10 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 7: UPDATE CACHE ═══
+      // ═══ STEP 6: UPDATE CACHE ═══
       CacheManager.updateInvoiceInCache(supplier, invoiceNo);
 
-      // ═══ STEP 8: RETURN SUCCESS ═══
+      // ═══ STEP 7: RETURN SUCCESS ═══
       const balanceInfo = {
         totalAmount: totalAmount,
         totalPaid: totalPaid,
@@ -873,42 +862,6 @@ const PaymentManager = {
     };
   },
 
-  /**
-   * Helper: Check if paid date is already set on invoice
-   * DEPRECATED: Use _isPaidDateAlreadySetInSheet() for critical decisions
-   * This relies on potentially stale cached data.
-   *
-   * @private
-   * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
-   * @returns {boolean} True if paid date is already set
-   */
-  _isPaidDateAlreadySet: function(invoice) {
-    const col = CONFIG.invoiceCols;
-    return !!invoice.data[col.paidDate];
-  },
-
-  /**
-   * Helper: Check if paid date is already set in actual InvoiceDatabase sheet
-   * Reads the sheet directly to avoid stale cache data.
-   * Critical for accurate INVOICE_ALREADY_PAID detection.
-   *
-   * @private
-   * @param {Object} invoice - Invoice object with row number
-   * @returns {boolean} True if column H (paidDate) contains a value in the actual sheet
-   */
-  _isPaidDateAlreadySetInSheet: function(invoice) {
-    try {
-      const invoiceSh = MasterDatabaseUtils.getSourceSheet('invoice');
-      const col = CONFIG.invoiceCols;
-      const paidDateValue = invoiceSh.getRange(invoice.row, col.paidDate + 1).getValue();
-      return !!paidDateValue; // True if column H is not empty
-    } catch (error) {
-      AuditLogger.logWarning('PaymentManager._isPaidDateAlreadySetInSheet',
-        `Failed to read paid date from sheet: ${error.toString()}`);
-      // On error, fall back to cached data to avoid blocking the operation
-      return this._isPaidDateAlreadySet(invoice);
-    }
-  },
 
   /**
    * Helper: Write paid date to sheet with lock management
