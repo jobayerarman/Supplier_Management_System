@@ -159,10 +159,17 @@ const CacheManager = {
    */
   _isActiveInvoice: function (rowData) {
     const col = CONFIG.invoiceCols;
-    const balanceDue = Number(rowData[col.balanceDue]) || 0;
+    const balanceDue = rowData[col.balanceDue];
 
-    // Active if balance due > 1 cent (accounting for floating point)
-    return Math.abs(balanceDue) > 0.01;
+    // If balanceDue is a formula string (sheet hasn't evaluated it yet),
+    // fall back to totalAmount to determine partition for new invoices.
+    // Number('=D2-E2') returns NaN → 0, which would wrongly place the invoice in INACTIVE.
+    if (typeof balanceDue === 'string' && balanceDue.startsWith('=')) {
+      return (Number(rowData[col.totalAmount]) || 0) > 0.01;
+    }
+
+    // Normal case: numeric evaluated value
+    return Math.abs(Number(balanceDue) || 0) > 0.01;
   },
 
   /**
