@@ -330,6 +330,8 @@ const UIMenu = {
         .addItem('Clear User Cache', 'menuClearUserCache')
         .addSeparator()
         .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
+      .addSeparator()
+      .addItem('System Health Check', 'MenuRunDataIntegrityCheck')
       .addToUi();
   },
 
@@ -1725,5 +1727,35 @@ const UIMenu = {
       ss.setActiveSheet(item.sheet);
       ss.moveActiveSheet(index + 1);
     });
+  }
+}
+
+/**
+ * Run data integrity check from the custom menu.
+ * Checks InvoiceDatabase formulas, PaymentLog, and SupplierLedger accessibility.
+ */
+function MenuRunDataIntegrityCheck() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const result = validateDataIntegrity({});
+    if (result.valid) {
+      ui.alert(
+        'System Health Check Passed',
+        'InvoiceDatabase formulas, PaymentLog, and SupplierLedger are all intact.',
+        ui.ButtonSet.OK
+      );
+    } else {
+      ui.alert(
+        'System Health Issues Found',
+        'The following issues were detected:\n\n' + result.issues.join('\n'),
+        ui.ButtonSet.OK
+      );
+    }
+  } catch (error) {
+    ui.alert(
+      'Health Check Failed',
+      `Error running health check: ${error.message}`,
+      ui.ButtonSet.OK
+    );
   }
 }
