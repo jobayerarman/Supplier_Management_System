@@ -1335,7 +1335,7 @@ const UIMenu = {
   _handleDeleteDailySheets: function() {
     const ui = SpreadsheetApp.getUi();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard', 'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog', 'SupplierDatabase'];
+    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard', 'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
 
     const response = ui.alert(
       '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
