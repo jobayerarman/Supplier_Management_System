@@ -488,7 +488,7 @@ const Code = {
       rowValues[CONFIG.cols.prevInvoice] = populatedValues.prevInvoice;
       return true;
     } else if (paymentType === 'Due') {
-      const currentSupplier = sheet.getRange(row, CONFIG.cols.supplier + 1).getValue();
+      const currentSupplier = rowValues[CONFIG.cols.supplier];
       if (currentSupplier && String(currentSupplier).trim()) {
         InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
       }
