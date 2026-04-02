@@ -349,9 +349,14 @@ const InvoiceManager = {
       const existingInvoice = invoice || this.findInvoice(supplier, invoiceNo);
 
       if (existingInvoice) {
-        const msg = `Invoice ${invoiceNo} already exists at row ${existingInvoice.row}`;
-        AuditLogger.log('DUPLICATE_PREVENTED', data, msg);
-        return { success: false, error: msg, existingRow: existingInvoice.row };
+        // Race condition: another process created this invoice between the pre-lock check
+        // and lock acquisition. Treat as an update rather than a hard failure.
+        AuditLogger.logWarning('InvoiceManager.createInvoice',
+          `Invoice ${invoiceNo} found under lock (concurrent create) — updating instead`);
+        const updateResult = this.updateInvoiceIfChanged(existingInvoice, data);
+        const invoiceId = existingInvoice.data[CONFIG.invoiceCols.sysId] ||
+                          IDGenerator.generateInvoiceId(data.sysId);
+        return { ...updateResult, invoiceId: invoiceId };
       }
 
       // Use Master Database if in master mode, otherwise use local sheet
