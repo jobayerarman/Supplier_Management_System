@@ -6,6 +6,7 @@ A high-performance Google Apps Script application for managing supplier invoices
 
 - [Features](#features)
 - [System Architecture](#system-architecture)
+- [Operational Modes](#operational-modes)
 - [Sheet Structure](#sheet-structure)
 - [Setup Instructions](#setup-instructions)
 - [Payment Type Workflows](#payment-type-workflows)
@@ -23,19 +24,22 @@ A high-performance Google Apps Script application for managing supplier invoices
 ### Core Functionality
 - **Invoice Management**: Create, track, and update supplier invoices with automatic status calculation
 - **Payment Processing**: Handle multiple payment types (Unpaid, Regular, Partial, Due)
-- **Real-time Balance Calculation**: Cached balance lookups with automatic invalidation
+- **Real-time Balance Calculation**: Partition-aware cache with surgical per-supplier invalidation
 - **Supplier Ledger**: Track outstanding balances per supplier
-- **Audit Trail**: Comprehensive logging of all transactions and system actions
+- **Audit Trail**: Comprehensive batch-queued logging of all transactions and system actions
 - **Data Validation**: Business rule enforcement with clear error messages
 - **Concurrency Safety**: Document-level locking for multi-user scenarios
 
 ### Advanced Features
-- **Smart Caching**: 60-second TTL cache for invoice data with surgical invalidation
-- **Batch Operations**: Optimized bulk invoice creation
+- **Smart Caching**: 60-second TTL invoice cache with Active/Inactive partition split (70–90% memory reduction)
+- **Payment Cache**: Separate quad-index payment cache for O(1) duplicate detection
+- **Master Database Mode**: Central write target with IMPORTRANGE read-back for multi-file deployments
+- **Dual Trigger System**: Lightweight simple trigger for UI ops + installable trigger for full DB access
+- **Batch Operations**: Bulk validate and post with real-time progress tracking via custom menu
 - **Auto-population**: Intelligent field completion based on payment type
 - **Dropdown Generation**: Dynamic unpaid invoice selection for Due payments
-- **User Resolution**: Multi-fallback user identification system
-- **Performance Monitoring**: Built-in performance tests and benchmarks
+- **User Resolution**: Multi-fallback user identification with execution-scoped and session-level caching
+- **Performance Monitoring**: Built-in benchmark runners
 
 ---
 
@@ -44,53 +48,109 @@ A high-performance Google Apps Script application for managing supplier invoices
 ### Modular Design
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         Code.gs                              │
-│                   (Main Entry Point)                         │
-│              onEdit() → Event Handler                        │
-└───────────────────────┬─────────────────────────────────────┘
-                        │
-        ┌───────────────┼───────────────┐
-        ▼               ▼               ▼
-  ┌──────────┐   ┌────────────┐  ┌──────────────┐
-  │ Validate │   │  Invoice   │  │   Payment    │
-  │  Engine  │   │  Manager   │  │   Manager    │
-  └─────┬────┘   └─────┬──────┘  └──────┬───────┘
-        │              │                 │
-        │              ▼                 │
-        │      ┌──────────────┐         │
-        │      │ Invoice Cache│         │
-        │      │   (60s TTL)  │         │
-        │      └──────────────┘         │
-        │                                │
-        └────────────┬───────────────────┘
-                     ▼
-           ┌──────────────────┐
-           │ Balance Calculator│
-           └─────────┬─────────┘
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-  ┌──────────┐ ┌─────────┐ ┌──────────┐
-  │  Audit   │ │  Utils  │ │  Config  │
-  │  Logger  │ │         │ │          │
-  └──────────┘ └─────────┘ └──────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    Spreadsheet Events                             │
+│  onEdit() [simple trigger]    onEditInstallable() [installable]  │
+│  ─ Invoice No / Received Amt  ─ POST / Payment Type / Due Inv.   │
+│  ─ Lightweight UI only        ─ Full DB + Cache access           │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+                     ┌─────▼─────┐
+                     │  Code.gs  │
+                     │ (Orchestr)│
+                     └─────┬─────┘
+           ┌───────────────┼──────────────────┬────────────────┐
+           ▼               ▼                  ▼                ▼
+    ┌────────────┐  ┌─────────────┐  ┌──────────────┐  ┌────────────┐
+    │ Validation │  │  Invoice    │  │   Payment    │  │  UIMenu.gs │
+    │  Engine   │  │  Manager    │  │   Manager    │  │ (Batch Ops)│
+    └────────────┘  └──────┬──────┘  └──────┬───────┘  └────────────┘
+                           │                │
+                    ┌──────▼──────┐  ┌──────▼──────┐
+                    │CacheManager │  │PaymentCache │
+                    │(Active/Inac)│  │(Quad-Index) │
+                    └──────┬──────┘  └─────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │    BalanceCalculator    │
+              └────────────┬────────────┘
+                           │
+          ┌────────────────┼───────────────┐
+          ▼                ▼               ▼
+    ┌──────────┐     ┌─────────┐    ┌──────────┐
+    │  Audit   │     │  Utils  │    │  Config  │
+    │  Logger  │     │         │    │          │
+    └──────────┘     └────┬────┘    └──────────┘
+                          │
+                 ┌────────▼────────┐
+                 │MasterDatabaseU. │
+                 │(getSourceSheet /│
+                 │ getTargetSheet) │
+                 └─────────────────┘
 ```
 
 ### Module Descriptions
 
 | Module | File | Purpose |
 |--------|------|---------|
-| **Entry Point** | `Code.gs` | Event handling, workflow orchestration |
-| **Validation** | `ValidationEngine.gs` | Data validation, business rule enforcement |
-| **Invoice Ops** | `InvoiceManager.gs` | Invoice CRUD, caching, search |
-| **Payment Ops** | `PaymentManager.gs` | Payment processing, invoice updates |
-| **Balance Calc** | `BalanceCalculator.gs` | Balance calculation, UI updates |
-| **Audit** | `AuditLogger.gs` | Transaction logging, audit trail |
-| **User Identity** | `_UserResolver.gs` | User identification with fallbacks |
-| **Utilities** | `_Utils.gs` | Date, string, lock, ID generation |
-| **Configuration** | `_Config.gs` | Sheet/column mappings, business rules |
-| **Tests** | `Test*.gs`, `PerformanceTests*.gs` | Unit and performance tests |
+| **Entry Point** | `Code.gs` | Event handling, dual-trigger dispatch, workflow orchestration, auto-populate |
+| **Validation** | `ValidationEngine.gs` | Data validation, business rule enforcement, due-payment invoice checks |
+| **Invoice Ops** | `InvoiceManager.gs` | Invoice CRUD (`createOrUpdateInvoice`, `findInvoice`), dropdown building |
+| **Payment Ops** | `PaymentManager.gs` | Payment recording, `PaymentCache` (quad-index), paid-date workflow |
+| **Invoice Cache** | `CacheManager.gs` | Partitioned invoice cache (Active/Inactive), TTL, surgical invalidation |
+| **Balance Calc** | `BalanceCalculator.gs` | Balance calculation, UI cell updates, supplier outstanding totals |
+| **Batch UI** | `UIMenu.gs` | Custom menu, `batchPostAllRows`, `batchValidateAllRows`, progress feedback |
+| **Audit** | `AuditLogger.gs` | Batch-queue audit trail, `log`, `logError`, `logWarning`, `flush` |
+| **User Identity** | `_UserResolver.gs` | User identification with multi-level fallback + execution/session caching |
+| **Utilities** | `_Utils.gs` | StringUtils, DateUtils, SheetUtils, MasterDatabaseUtils, IDGenerator, LockManager |
+| **Configuration** | `_Config.gs` | Sheet/column mappings, business rules, Master DB config, `isMasterMode()` |
+| **Tests** | `Test.*.gs`, `Benchmark.Performance.gs` | Unit, integration, and performance benchmarks |
+
+---
+
+## Operational Modes
+
+### Local Mode (default)
+All data stays in the monthly spreadsheet file. InvoiceDatabase, PaymentLog, and AuditLog are written directly to the current file.
+
+### Master Database Mode
+Writes go to a central `00_SUPPLIER_ACCOUNTS_DATABASE_MASTER` spreadsheet. Monthly files read data back via `IMPORTRANGE` formulas. Requires an installable trigger — see [Setup Instructions](#setup-instructions).
+
+**Active mode:** `CONFIG.isMasterMode()` — configured in [`_Config.gs`](_Config.gs):
+
+```javascript
+masterDatabase: {
+  connectionMode: 'master',  // 'local' or 'master'
+  id: '<spreadsheet-id>',
+  url: 'https://docs.google.com/spreadsheets/d/<id>',
+  sheets: {
+    invoice: 'InvoiceDatabase',
+    payment: 'PaymentLog',
+    audit: 'AuditLog',
+    supplier: 'SupplierList'
+  }
+}
+```
+
+All write operations are automatically routed via `MasterDatabaseUtils.getTargetSheet(type)`. Reads always use the local sheet (fast; in Master mode the local sheet displays data via IMPORTRANGE).
+
+---
+
+## Dual Trigger System
+
+The system uses two separate `onEdit` handlers to work within Google Apps Script permission boundaries:
+
+| Trigger | Function | Columns Handled | Permissions |
+|---------|----------|-----------------|-------------|
+| **Simple** | `onEdit(e)` | Invoice No, Received Amount | Limited — current spreadsheet only, no `openById` |
+| **Installable** | `onEditInstallable(e)` | POST checkbox, Payment Type, Supplier, Previous Invoice, Payment Amount | Full — can access Master Database |
+
+In **Local mode** the simple trigger handles everything. In **Master mode**, run `setupInstallableEditTrigger()` once per monthly file to register the installable trigger.
+
+```javascript
+// Run once from Script Editor to enable Master Database mode:
+setupInstallableEditTrigger()
+```
 
 ---
 
@@ -98,52 +158,51 @@ A high-performance Google Apps Script application for managing supplier invoices
 
 ### Required Sheets
 
-The system requires the following sheets in your Google Spreadsheet:
-
-#### 1. Daily Sheets (`01` - `31`)
+#### 1. Daily Sheets (`01` – `31`)
 **Purpose**: Daily transaction entry sheets (one per day of month)
 
-**Columns** (A-N):
+**Columns** (A–N):
 | Column | Name | Type | Description |
 |--------|------|------|-------------|
-| A | Date | Date | Transaction date (auto-filled) |
+| A | Date | Date | Transaction date (from cell B3, auto-filled) |
 | B | Supplier | Text | Supplier name (from SupplierList) |
 | C | Invoice No | Text | Invoice number (max 50 chars) |
 | D | Received Amount | Number | Total invoice amount received |
 | E | Payment Type | Dropdown | `Unpaid`, `Regular`, `Partial`, `Due` |
 | F | Previous Invoice | Text/Dropdown | Reference invoice (for Due payments) |
 | G | Payment Amount | Number | Amount being paid |
-| H | Current Balance | Formula | Supplier's outstanding balance |
+| H | Current Balance | Number | Supplier's outstanding balance (calculated) |
 | I | Notes | Text | Optional notes |
 | J | Post | Checkbox | Check to post transaction |
-| K | Status | Text | Posting status (`POSTED`, `ERROR`) |
-| L | Entered By | Text | User email (auto-filled) |
+| K | Status | Text | Posting status (`POSTED`, `ERROR`, `PROCESSING...`) |
+| L | Entered By | Text | User display name (auto-filled) |
 | M | Timestamp | DateTime | Post timestamp (auto-filled) |
 | N | SYS_ID | Text | System-generated UUID |
 
 #### 2. InvoiceDatabase
 **Purpose**: Master invoice ledger
 
-**Columns** (A-L):
+**Columns** (A–M):
 | Column | Name | Type | Description |
 |--------|------|------|-------------|
-| A | Date | Date | System post date |
+| A | Invoice Date | Date | Actual invoice/receipt date |
 | B | Supplier | Text | Supplier name |
 | C | Invoice No | Text | Invoice number (unique per supplier) |
-| D | Invoice Date | Date | Actual invoice/receipt date |
-| E | Total Amount | Number | Invoice total |
-| F | Total Paid | Formula | `=SUMIFS(PaymentLog!E:E, ...)` |
-| G | Balance Due | Formula | `=E - F` |
-| H | Status | Formula | `=IF(G=0, "Paid", "Unpaid")` |
-| I | Paid Date | Formula | Date when fully paid |
-| J | Origin Day | Text | Source sheet name |
-| K | Days Outstanding | Formula | Days since invoice date |
-| L | SYS_ID | Text | Unique invoice ID |
+| D | Total Amount | Number | Invoice total |
+| E | Total Paid | Formula | `=SUMIFS(PaymentLog!E:E, ...)` |
+| F | Balance Due | Formula | `=D - E` |
+| G | Status | Formula | `=IFS(F=0,"Paid",F=D,"Unpaid",F<D,"Partial")` |
+| H | Paid Date | Formula | Date when fully paid |
+| I | Days Outstanding | Formula | Days since invoice date |
+| J | Origin Day | Text | Source sheet name (`01`–`31`) |
+| K | Entered By | Text | User email |
+| L | Timestamp | DateTime | Post timestamp |
+| M | SYS_ID | Text | Unique invoice ID |
 
 #### 3. PaymentLog
 **Purpose**: Payment transaction log
 
-**Columns** (A-L):
+**Columns** (A–L):
 | Column | Name | Type | Description |
 |--------|------|------|-------------|
 | A | Date | Date | Payment date |
@@ -151,7 +210,7 @@ The system requires the following sheets in your Google Spreadsheet:
 | C | Invoice No | Text | Invoice being paid |
 | D | Payment Type | Text | Type of payment |
 | E | Amount | Number | Payment amount |
-| F | Method | Text | `Cash`, `Check`, `Bank Transfer` |
+| F | Method | Text | `Cash`, `Check`, `Bank Transfer`, `None` |
 | G | Reference | Text | Payment reference |
 | H | From Sheet | Text | Source daily sheet |
 | I | Entered By | Text | User email |
@@ -162,30 +221,30 @@ The system requires the following sheets in your Google Spreadsheet:
 #### 4. SupplierLedger
 **Purpose**: Summary of outstanding balances per supplier
 
-**Columns** (A-D):
+**Columns** (A–D):
 | Column | Name | Type | Description |
 |--------|------|------|-------------|
 | A | Supplier | Text | Supplier name |
-| B | Outstanding | Formula | `=SUMIFS(InvoiceDatabase!G:G, ...)` |
+| B | Outstanding | Formula | `=SUMIFS(InvoiceDatabase!F:F, ...)` |
 | C | Last Updated | DateTime | Last transaction date |
 | D | Status | Text | `Active`, `Inactive` |
 
 #### 5. AuditLog
 **Purpose**: System audit trail
 
-**Columns** (A-G):
+**Columns** (A–G):
 | Column | Name | Type | Description |
 |--------|------|------|-------------|
 | A | Timestamp | DateTime | Action timestamp |
-| B | User | Text | User email |
-| C | Sheet | Text | Source sheet |
-| D | Location | Text | Row/column reference |
-| E | Action | Text | Action type |
-| F | Details | Text | Serialized transaction data |
+| B | User | Text | User email or `SYSTEM` |
+| C | Sheet | Text | Source sheet or `N/A` |
+| D | Location | Text | Row reference or `N/A` |
+| E | Action | Text | `POST`, `UPDATE`, `SYSTEM_ERROR`, `WARNING`, `INFO`, etc. |
+| F | Details | Text | JSON-serialized transaction fields |
 | G | Message | Text | Human-readable message |
 
 #### 6. SupplierList
-**Purpose**: Master list of approved suppliers (used for data validation)
+**Purpose**: Master list of approved suppliers (used for data validation dropdowns)
 
 ---
 
@@ -193,17 +252,18 @@ The system requires the following sheets in your Google Spreadsheet:
 
 ### Prerequisites
 - Google Account with access to Google Sheets
-- Basic understanding of Google Apps Script
 - Spreadsheet with required sheets (see [Sheet Structure](#sheet-structure))
 
 ### Installation Steps
 
 1. **Create Spreadsheet Structure**
    ```
-   ✓ Create a new Google Spreadsheet
+   ✓ Create a new Google Spreadsheet with name 00_SUPPLIER_ACCOUNTS_DATABASE_MASTER
    ✓ Create sheets: InvoiceDatabase, PaymentLog, SupplierLedger, AuditLog, SupplierList
+   ✓ Create a new Google Spreadsheet with name Supplier_Accounts_YYYY-DD_MMM
    ✓ Create daily sheets: 01, 02, 03, ..., 31
    ✓ Add column headers as specified in Sheet Structure section
+   ✓ Each daily sheet must have the transaction date in cell B3
    ```
 
 2. **Install Scripts**
@@ -216,38 +276,42 @@ The system requires the following sheets in your Google Spreadsheet:
 
 3. **Configure Settings**
    - Open `_Config.gs`
-   - Verify sheet names match your spreadsheet
+   - Set `connectionMode` to `'local'` (default) or `'master'`
+   - If using Master mode, fill in `id` and `url` under `masterDatabase`
    - Adjust business rules if needed:
      ```javascript
      rules: {
-       MAX_TRANSACTION_AMOUNT: 1000000,  // Adjust as needed
-       CACHE_TTL_MS: 60000,              // Cache lifetime (60s)
-       LOCK_TIMEOUT_MS: 30000,           // Lock timeout (30s)
+       MAX_TRANSACTION_AMOUNT: 1000000,
+       CACHE_TTL_MS: 60000,
+       LOCK_TIMEOUT_MS: 30000,
        MAX_INVOICE_NO_LENGTH: 50
      }
      ```
 
-4. **Initialize Configuration**
+4. **Validate Configuration**
    ```javascript
-   // Run this function once from Script Editor:
+   // Run once from Script Editor:
    initializeConfiguration()
    ```
-   This validates your sheet structure and displays any errors.
+   This validates sheet structure and logs any errors to the Script Editor console.
 
-5. **Set Up Triggers** (Optional)
-   - The system uses `onEdit()` which runs automatically
-   - No manual triggers needed for core functionality
+5. **Set Up Installable Trigger (Master mode only)**
+   ```javascript
+   // Run once per monthly file when using Master Database mode:
+   setupInstallableEditTrigger()
+   ```
+   In Local mode the built-in `onEdit` simple trigger is sufficient — no manual setup needed.
 
 6. **Test Installation**
    ```javascript
    // Run from Script Editor:
-   testBalanceCalculatorBasic()
+   runQuickBenchmark()
    ```
 
 ### Permissions
 On first run, Google will request permissions:
 - ✓ View and manage spreadsheets
-- ✓ Connect to external services (for audit logging)
+- ✓ Connect to external services (Master Database access)
 
 ---
 
@@ -330,9 +394,9 @@ On first run, Google will request permissions:
 - Balance Due = Total Amount - Payment Amount
 
 **Validation Rules**:
-- Payment Amount must be < Received Amount
-- Payment Amount must be > 0
+- Payment Amount must be > 0 and < Received Amount
 - Invoice Number required
+- Received Amount > 0
 
 ---
 
@@ -343,26 +407,25 @@ On first run, Google will request permissions:
 **Process**:
 ```
 1. Select Supplier
-2. Leave Invoice No blank (or enter new invoice if receiving one)
-3. Enter Received Amount (if receiving new invoice, else 0)
+2. Leave Invoice No blank
+3. Leave Received Amount as 0
 4. Select Payment Type: "Due"
 5. Previous Invoice = Select from dropdown (auto-generated list of unpaid invoices)
-6. Payment Amount = Balance Due (auto-populated, can adjust)
+6. Payment Amount = Balance Due (auto-populated, can adjust down)
 7. Check "Post" checkbox
 ```
 
 **System Actions**:
-- If Received Amount > 0: Creates new invoice
-- Updates existing invoice's Total Paid
-- Creates payment record
+- Updates existing invoice's Total Paid (via SUMIFS formula recalculation)
+- Creates payment record in PaymentLog
 - Recalculates Balance Due
-- If balance = 0, marks invoice as "Paid"
+- If balance = 0, invoice status transitions to "Paid" (cache moves to Inactive partition)
 
 **Validation Rules**:
+- Received Amount must be 0
 - Previous Invoice must be selected
-- Previous Invoice must exist and have balance > 0
-- Payment Amount > 0
-- Payment Amount ≤ Balance Due of selected invoice
+- Previous Invoice must exist with balance > 0
+- Payment Amount > 0 and ≤ Balance Due of selected invoice
 
 ---
 
@@ -376,109 +439,198 @@ On first run, Google will request permissions:
 /**
  * Validate transaction data before posting
  * @param {Object} data - Transaction data
- * @param {string} data.supplier - Supplier name
- * @param {string} data.invoiceNo - Invoice number
- * @param {number} data.receivedAmt - Received amount
- * @param {string} data.paymentType - Payment type
- * @param {number} data.paymentAmt - Payment amount
- * @param {string} data.prevInvoice - Previous invoice reference
- * @returns {Object} {valid: boolean, error: string, errors: array}
+ * @param {string} data.supplier
+ * @param {string} data.invoiceNo
+ * @param {number} data.receivedAmt
+ * @param {string} data.paymentType
+ * @param {number} data.paymentAmt
+ * @param {string} data.prevInvoice
+ * @returns {Object} {valid: boolean, error: string, errors: string[]}
  */
 function validatePostData(data)
+
+/**
+ * Validate payment type-specific rules
+ * @param {Object} data - Transaction data
+ * @returns {Object} {valid: boolean, errors: string[]}
+ */
+function validatePaymentTypeRules(data)
+
+/**
+ * Validate Due payment (invoice existence + balance check)
+ * @param {Object} data - Transaction data
+ * @returns {Object} {valid: boolean, errors: string[]}
+ */
+function validateDuePayment(data)
 ```
 
 #### InvoiceManager
 
 ```javascript
 /**
- * Process invoice optimized (create or find existing)
+ * Create or update invoice (UPSERT)
  * @param {Object} data - Transaction data
  * @returns {Object} {success: boolean, invoiceId: string, error: string}
  */
-InvoiceManager.processOptimized(data)
+InvoiceManager.createOrUpdateInvoice(data)
 
 /**
- * Find invoice by supplier and invoice number
- * @param {string} supplier - Supplier name
- * @param {string} invoiceNo - Invoice number
- * @returns {Object|null} Invoice record or null
+ * Find invoice by supplier and invoice number (O(1) cache lookup)
+ * @param {string} supplier
+ * @param {string} invoiceNo
+ * @returns {Object|null} {row, data: Array} or null
  */
-InvoiceManager.find(supplier, invoiceNo)
+InvoiceManager.findInvoice(supplier, invoiceNo)
 
 /**
- * Get unpaid invoices for supplier
- * @param {string} supplier - Supplier name
- * @returns {Array} Array of unpaid invoice objects
+ * Get unpaid/partial invoices for supplier
+ * @param {string} supplier
+ * @returns {Array} Array of invoice objects
  */
 InvoiceManager.getUnpaidForSupplier(supplier)
 
 /**
- * Build dropdown of unpaid invoices
- * @param {Sheet} sheet - Target sheet
- * @param {number} row - Row number
- * @param {string} supplier - Supplier name
- * @param {string} paymentType - Payment type
+ * Build dropdown of unpaid invoices for Due payment selection
+ * @param {Sheet} sheet
+ * @param {number} row
+ * @param {string} supplier
+ * @param {string} paymentType
  */
-InvoiceManager.buildUnpaidDropdown(sheet, row, supplier, paymentType)
+InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType)
 ```
 
 #### PaymentManager
 
 ```javascript
 /**
- * Process payment optimized
+ * Record payment and trigger invoice status update
  * @param {Object} data - Transaction data
- * @param {string} invoiceId - Invoice system ID
+ * @param {string} invoiceId - Invoice SYS_ID
  * @returns {Object} {success: boolean, error: string}
  */
 PaymentManager.processPayment(data, invoiceId)
+
+/**
+ * Determine if payment record should be written for this transaction
+ * @param {Object} data - Transaction data
+ * @returns {boolean}
+ */
+PaymentManager.shouldRecordPayment(data)
+```
+
+#### CacheManager
+
+```javascript
+/**
+ * Get invoice data (lazy-load with 60s TTL)
+ * Returns partition-aware cache object
+ * @returns {{activeData, activeIndexMap, activeSupplierIndex,
+ *            inactiveData, inactiveIndexMap, inactiveSupplierIndex, globalIndexMap}}
+ */
+CacheManager.getInvoiceData()
+
+/**
+ * Surgical per-supplier cache invalidation (reads only changed supplier's rows)
+ * @param {string} supplier
+ */
+CacheManager.invalidateSupplierCache(supplier)
+
+/**
+ * Full cache clear
+ */
+CacheManager.clear()
+
+/**
+ * Get partition statistics (active vs inactive counts, hit rates)
+ * @returns {Object}
+ */
+CacheManager.getPartitionStats()
 ```
 
 #### BalanceCalculator
 
 ```javascript
 /**
- * Get supplier's outstanding balance
- * @param {string} supplier - Supplier name
- * @returns {number} Outstanding balance
+ * Get supplier's total outstanding balance
+ * @param {string} supplier
+ * @returns {number}
  */
 BalanceCalculator.getSupplierOutstanding(supplier)
 
 /**
- * Get invoice's outstanding balance
- * @param {string} invoiceNo - Invoice number
- * @param {string} supplier - Supplier name
- * @returns {number} Outstanding balance
+ * Get single invoice's balance due
+ * @param {string} invoiceNo
+ * @param {string} supplier
+ * @returns {number}
  */
 BalanceCalculator.getInvoiceOutstanding(invoiceNo, supplier)
 
 /**
- * Update balance cell in daily sheet
- * @param {Sheet} sheet - Sheet object
- * @param {number} row - Row number
- * @param {boolean} isPostContext - Whether called from posting context
- * @param {Array} rowData - Pre-read row values (optional)
+ * Update balance cell in daily sheet (preview before post, actual after)
+ * @param {Sheet} sheet
+ * @param {number} row
+ * @param {boolean} afterPost
+ * @param {Array} rowData - Pre-read row values (required)
  */
-BalanceCalculator.updateBalanceCell(sheet, row, isPostContext, rowData)
+BalanceCalculator.updateBalanceCell(sheet, row, afterPost, rowData)
 ```
 
 #### AuditLogger
 
 ```javascript
 /**
- * Log audit action
- * @param {string} action - Action type
- * @param {Object} data - Transaction data
- * @param {string} message - Human-readable message
+ * Log transaction/action (queued in batch mode)
+ * @param {string} action
+ * @param {Object} data
+ * @param {string} message
  */
-function auditAction(action, data, message)
+AuditLogger.log(action, data, message)
+
+/**
+ * Log system error
+ * @param {string} context
+ * @param {string} message
+ */
+AuditLogger.logError(context, message)
+
+/**
+ * Flush queued entries to sheet (one batch write)
+ * @returns {number} Entries flushed
+ */
+AuditLogger.flush()
 
 /**
  * Get recent audit entries
- * @param {number} limit - Number of entries (default 100)
- * @returns {Array} Array of audit entry objects
+ * @param {number} limit - default 100
+ * @returns {Array}
  */
 AuditLogger.getRecentEntries(limit)
+
+/**
+ * Get complete audit trail for a transaction
+ * @param {string} sysId
+ * @returns {Array}
+ */
+AuditLogger.getTrailForRecord(sysId)
+```
+
+#### UIMenu (Batch Operations)
+
+```javascript
+/**
+ * Validate all rows in current daily sheet without posting
+ */
+UIMenu.batchValidateAllRows()
+
+/**
+ * Validate and post all valid rows in current daily sheet
+ */
+UIMenu.batchPostAllRows()
+
+/**
+ * Clear all Post checkboxes in current daily sheet
+ */
+UIMenu.clearAllPostCheckboxes()
 ```
 
 ---
@@ -516,24 +668,35 @@ rules: {
 
 ```javascript
 colors: {
-  success: '#E8F5E8',   // Light green (successful posts)
-  error: '#FFEBEE',     // Light red (errors)
-  warning: '#FFF4E6',   // Light orange (warnings)
-  info: '#E3F2FD',      // Light blue (info)
-  neutral: '#F5F5F5'    // Light gray (neutral)
+  success:    '#E8F5E8',  // Light green (successful posts)
+  error:      '#FFEBEE',  // Light red (errors)
+  warning:    '#FFF4E6',  // Light orange (warnings)
+  processing: '#FFF9C4',  // Light yellow (in-progress)
+  info:       '#E3F2FD',  // Light blue (balance preview)
+  neutral:    '#F5F5F5'   // Light gray
 }
 ```
 
-### Customizing Column Mappings
+### Column Mappings
 
-If your sheet structure differs, update column indices in `_Config.gs`:
+If your sheet structure differs, update column indices in `_Config.gs`. All indices are **0-based**:
 
 ```javascript
+// Daily sheet (cols A=0, B=1, ...)
 cols: {
-  supplier: 1,        // B (0-based index)
-  invoiceNo: 2,       // C
-  receivedAmt: 3,     // D
-  // ... adjust as needed
+  supplier:    1,  // B
+  invoiceNo:   2,  // C
+  receivedAmt: 3,  // D
+  paymentType: 4,  // E
+  prevInvoice: 5,  // F
+  paymentAmt:  6,  // G
+  balance:     7,  // H
+  notes:       8,  // I
+  post:        9,  // J
+  status:      10, // K
+  enteredBy:   11, // L
+  timestamp:   12, // M
+  sysId:       13  // N
 }
 ```
 
@@ -541,38 +704,47 @@ cols: {
 
 ## Performance Features
 
-### 1. Smart Caching
-- **Invoice Cache**: 60-second TTL with supplier-based indexing
-- **Write-Through**: New invoices immediately added to cache
-- **Surgical Invalidation**: Only invalidates affected supplier's cache
-- **Cache Statistics**: Track hits/misses (available in advanced mode)
+### 1. Invoice Cache — Active/Inactive Partitioning
+- **Active partition**: Unpaid and partially-paid invoices (balance > $0.01) — typically 10–30% of total
+- **Inactive partition**: Fully paid invoices — typically 70–90% of total
+- **Balance queries** only scan the Active partition, reducing iteration by 70–90%
+- Automatic partition transition when an invoice becomes fully paid
+- TTL: 60 seconds; cache persists across edits in the same execution window
 
-### 2. Batch Operations
-- **Single Read Strategy**: Pre-read entire row once, pass through pipeline
-- **Batch Writes**: Group related cell updates into single API call
-- **Minimal API Calls**: Optimized to reduce SpreadsheetApp operations
+### 2. Payment Cache — Quad-Index Structure (inside `PaymentManager`)
+- Four indexes: invoice, supplier, combined (`SUPPLIER|INVOICE_NO`), and payment-ID
+- O(1) duplicate detection for payment records
+- Write-through: new payments available in cache immediately after write
 
-### 3. Concurrency Management
-- **Document Locks**: Prevent race conditions in multi-user scenarios
-- **Lock Timeout**: 30-second timeout with automatic release
-- **Lock Manager**: Centralized lock acquisition/release
+### 3. Surgical Supplier Invalidation
+- `CacheManager.invalidateSupplierCache(supplier)` updates only the affected supplier's rows
+- Reads fresh values from the sheet only for that supplier, then updates partitions in-place
+- Other suppliers' data remains cached and valid — no global clear required
 
-### 4. Optimization Techniques
-```
-✓ Zero redundant cell reads
-✓ Pre-calculated balance passing
-✓ Conditional payment processing
-✓ Early validation exit (fail fast)
-✓ Formula-based calculations (offload to Sheets engine)
-```
+### 4. Batch Write Strategy
+- **Single read per edit**: row data read once, passed through the entire pipeline
+- **Batch writes**: `setValues()` for multi-column status updates (1 API call)
+- **AuditLogger batch queue**: entries queued in memory, flushed in a single `setValues()` call (auto-flush at threshold; manual flush at end of batch operations)
+
+### 5. Concurrency Management
+- Document locks acquired **only** during the critical POST operation
+- All non-POST edits (field auto-population, balance preview) run lock-free
+- Early validation exits before lock acquisition (fail fast — no lock wasted on invalid data)
+- Lock timeout: 30 seconds with automatic release
 
 ### Performance Benchmarks
 
-Typical operation times (from PerformanceTests):
-- **Invoice Find (cached)**: < 10ms
-- **Invoice Find (cache miss)**: < 100ms
-- **Balance Calculation**: < 50ms
-- **Full Post Transaction**: < 500ms
+Typical operation times (from `Benchmark.Performance.gs`):
+
+| Operation | Time |
+|-----------|------|
+| Invoice find (cache hit) | < 2ms |
+| Invoice find (cache miss) | 200–400ms |
+| Balance calculation (active partition) | < 10ms |
+| Surgical supplier invalidation | 10–50ms |
+| Full cache clear + reload | 200–600ms |
+| Full post transaction (Local mode) | 300–500ms |
+| Full post transaction (Master mode) | 500–800ms |
 
 ---
 
@@ -580,49 +752,68 @@ Typical operation times (from PerformanceTests):
 
 ### Running Tests
 
-From Google Apps Script Editor:
+From Google Apps Script Script Editor, run any of these functions:
 
-**Basic Tests**:
+**Unit / Integration Tests**:
 ```javascript
-// Test balance calculator
-testBalanceCalculatorBasic()
+// Cache manager tests
+runCacheManagerTests()         // Test.CacheManager.gs
 
-// Test invoice operations
-testInvoiceOperations()
+// Invoice manager tests
+runInvoiceManagerTests()       // Test.InvoiceManager.gs
 
-// Test payment processing
-testPaymentProcessing()
+// Payment manager tests
+runPaymentManagerTests()       // Test.PaymentManager.gs
+
+// Integration tests (full workflow)
+runIntegrationTests()          // Test.Integration.gs
+
+// Master Database connection and write tests
+testMasterDatabaseConnection() // Test.MasterDatabase.gs
+testMasterDatabaseWrites()     // Test.MasterDatabase.gs
+
+// Trigger setup tests
+runTriggerTests()              // Test.Triggers.gs
 ```
 
-**Performance Tests**:
+**Performance Benchmarks**:
 ```javascript
-// Run comprehensive performance suite
-runPerformanceTests01()
-runPerformanceTests02()
+runAllBenchmarks()   // Full benchmark suite — Benchmark.Performance.gs
+runQuickBenchmark()  // Quick smoke-test benchmarks
 ```
 
-### Test Coverage
+### Test File Map
 
-Current test files:
-- `TestCodeGS.gs` - Core workflow tests
-- `TestBalanceCalculator.gs` - Balance calculation tests
-- `PerformanceTests01.gs` - Cache and lookup performance
-- `PerformanceTests02.gs` - Transaction processing performance
+| File | What It Tests |
+|------|---------------|
+| `Test.CacheManager.gs` | Cache partitioning, TTL, surgical invalidation, partition transitions |
+| `Test.InvoiceManager.gs` | Invoice CRUD, duplicate detection, dropdown building |
+| `Test.PaymentManager.gs` | Payment recording, PaymentCache, duplicate detection, paid-date workflow |
+| `Test.Integration.gs` | Full end-to-end post workflow for each payment type |
+| `Test.MasterDatabase.gs` | Master DB connection, sheet access, write routing |
+| `Test.Triggers.gs` | Trigger setup and teardown |
+| `Benchmark.Performance.gs` | Cache load times, lookup times, batch operation throughput |
 
 ### Writing New Tests
 
-Example test structure:
 ```javascript
 function testMyFeature() {
   try {
-    // Setup
-    const testData = { /* ... */ };
+    const testData = {
+      supplier: 'TEST SUPPLIER',
+      invoiceNo: 'INV-001',
+      receivedAmt: 1000,
+      paymentAmt: 0,
+      paymentType: 'Unpaid',
+      sheetName: '01',
+      rowNum: 6,
+      enteredBy: 'test@example.com',
+      sysId: IDGenerator.generateUUID()
+    };
 
-    // Execute
-    const result = myFunction(testData);
+    const result = validatePostData(testData);
 
-    // Assert
-    if (result.success) {
+    if (result.valid) {
       Logger.log('✓ Test passed');
     } else {
       Logger.log('✗ Test failed: ' + result.error);
@@ -645,71 +836,92 @@ function testMyFeature() {
 
 **Solution**:
 ```javascript
-// Run configuration validation
 const result = CONFIG.validate();
 Logger.log(result.errors);
 Logger.log(result.warnings);
 ```
 
 #### 2. "Lock Acquisition Failed"
-**Cause**: Another user is processing a transaction, or previous lock not released
+**Cause**: Another user is processing a transaction, or a previous lock was not released
 
 **Solution**:
 - Wait 30 seconds and retry
 - Check for stuck scripts in Executions log
-- Clear locks manually (advanced):
+- Clear lock manually (advanced):
   ```javascript
   LockService.getDocumentLock().releaseLock()
   ```
 
 #### 3. Balance Not Updating
-**Cause**: Cache not invalidated or formula error
+**Cause**: Cache stale or formula error
 
 **Solution**:
 ```javascript
-// Clear all caches
-InvoiceCache.invalidate('delete')
+// Clear entire invoice cache (forces reload on next access)
+CacheManager.clear()
 
-// Force recalculation
-BalanceCalculator.updateBalanceCell(sheet, row, false, null)
+// Force balance recalculation for a specific row
+BalanceCalculator.updateBalanceCell(sheet, row, false, rowData)
 ```
 
 #### 4. "Invoice Already Exists" Error
 **Cause**: Duplicate invoice number for same supplier
 
 **Solution**:
-- Check if invoice was already posted
-- Use different invoice number
-- Or make payment on existing invoice using "Due" type
+- Check if invoice was already posted in InvoiceDatabase
+- Use a different invoice number
+- Or pay the existing invoice using the "Due" payment type
 
 #### 5. Dropdown Not Showing Unpaid Invoices
 **Cause**: No unpaid invoices exist, or supplier name mismatch
 
 **Solution**:
-- Verify supplier name matches exactly (case-insensitive)
-- Check InvoiceDatabase for unpaid invoices
-- Verify invoice status formulas are working
+- Verify supplier name matches exactly (comparison is case-insensitive but whitespace-sensitive)
+- Check InvoiceDatabase for invoices with `Balance Due > 0`
+- Verify `CacheManager` has not expired (TTL = 60s); re-edit the Supplier cell to rebuild the dropdown
 
 #### 6. Audit Log Not Recording
-**Cause**: Audit logging disabled or sheet missing
+**Cause**: AuditLog sheet missing or batch queue not flushed
 
 **Solution**:
-- Ensure AuditLog sheet exists
-- Uncomment audit calls in Code.gs (lines 197, 240-241)
-- Check AuditLogger.gs for errors
+- Ensure `AuditLog` sheet exists with 7 columns
+- In batch operations, call `AuditLogger.flush()` at the end
+- Check queue status: `AuditLogger.getQueueStats()`
+
+#### 7. Master Database Writes Not Working
+**Cause**: Missing installable trigger or wrong spreadsheet ID
+
+**Solution**:
+```javascript
+// Step 1: Verify connection
+const result = MasterDatabaseUtils.testConnection();
+Logger.log(JSON.stringify(result));
+
+// Step 2: Re-register trigger if needed
+setupInstallableEditTrigger()
+
+// Step 3: Validate config
+initializeConfiguration()
+```
 
 ### Debug Mode
 
-Enable detailed logging:
+View all recent audit entries:
 ```javascript
-// In Code.gs, uncomment audit lines:
-auditAction("══NEW-POST══", data, "Starting posting process");
-auditAction("══AFTER-POST══", data, "Posted successfully");
+const entries = AuditLogger.getRecentEntries(50);
+entries.forEach(e => Logger.log(`${e.action}: ${e.message}`));
 ```
 
-View logs:
-- **Script Editor**: View → Logs
-- **Advanced**: View → Executions (shows full execution history)
+View cache partition stats:
+```javascript
+Logger.log(JSON.stringify(CacheManager.getPartitionStats()));
+```
+
+View audit trail for a specific transaction:
+```javascript
+const trail = AuditLogger.getTrailForRecord('<sysId>');
+trail.forEach(e => Logger.log(e.action + ': ' + e.message));
+```
 
 ---
 
@@ -718,42 +930,39 @@ View logs:
 ### Development Guidelines
 
 1. **Code Style**:
-   - Use JSDoc comments for all functions
-   - Follow existing naming conventions
-   - Use const for immutable values
-   - Use descriptive variable names
+   - Use JSDoc comments for all public functions
+   - Follow existing naming conventions (`camelCase` methods, `UPPER_SNAKE` constants)
+   - Use `const` for immutable values
+   - Never hardcode sheet names or column indices — use `CONFIG`
 
-2. **Testing**:
-   - Write tests for new features
-   - Run existing tests before committing
-   - Add performance benchmarks for critical paths
+2. **Single Read Pattern**:
+   - Read the row once with `sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0]`
+   - Pass `rowData` through the entire function chain — never re-read
 
-3. **Documentation**:
-   - Update README for new features
-   - Add inline comments for complex logic
-   - Document breaking changes
+3. **Batch Writes**:
+   - Group related cell updates into a single `setValues()` call
+   - Never write cell-by-cell in a loop
 
-4. **Performance**:
-   - Minimize SpreadsheetApp API calls
-   - Use batch operations where possible
-   - Consider cache implications
+4. **Cache Awareness**:
+   - Use `CacheManager.getInvoiceData()` for all invoice lookups
+   - Call `CacheManager.invalidateSupplierCache(supplier)` after posting (not `CacheManager.clear()`)
+   - For payment lookups, use `PaymentCache` inside `PaymentManager`
 
-### Contribution Workflow
+5. **Testing**:
+   - Write tests in `Test.*.gs` before adding features
+   - Run `runAllBenchmarks()` to verify no performance regressions
+   - Manual checklist: post all four payment types (Unpaid, Regular, Partial, Due)
 
-```bash
-# Fork the repository
-# Make your changes
-# Test thoroughly
-# Submit pull request with description
-```
+6. **Adding New Payment Types**:
+   - Add to `CONFIG.rules.SUPPORTED_PAYMENT_TYPES`
+   - Add case to `validatePaymentTypeRules()` in `ValidationEngine.gs`
+   - Add entry to `PAYMENT_TYPE_CONFIG` in `BalanceCalculator.gs`
+   - Add case to `Code._handlePaymentTypeEdit()`
 
 ### Known Issues & Future Enhancements
-
-See codebase analysis for:
-- Formula injection vulnerability fix (high priority)
-- Audit logger pagination optimization
-- Rate limiting for posting operations
-- Enhanced error handling
+- Formula injection vulnerability on invoice number fields (high priority)
+- Audit logger pagination for large audit sheets
+- Rate limiting for rapid sequential post operations
 - Multi-currency support
 
 ---
@@ -769,12 +978,13 @@ This project is provided as-is for internal use. Modify and distribute according
 For issues, questions, or feature requests:
 1. Check [Troubleshooting](#troubleshooting) section
 2. Review [API Documentation](#api-documentation)
-3. Check Google Apps Script execution logs
-4. Contact system administrator
+3. Check Google Apps Script execution logs (`View → Executions`)
+4. Run `CONFIG.validate()` to check sheet/config health
+5. Contact system administrator
 
 ---
 
-**Version**: 1.0
-**Last Updated**: October 2025
+**Version**: 2.0
+**Last Updated**: April 2026
 **Timezone**: Asia/Dhaka
 **Runtime**: Google Apps Script V8
