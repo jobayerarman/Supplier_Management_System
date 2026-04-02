@@ -489,12 +489,11 @@ const CacheManager = {
   invalidate: function (operation, supplier = null, invoiceNo = null) {
     const incrementalOps = ['updateAmount', 'updateStatus', 'updateDate'];
 
-    // Incremental update if target specified
+    // Incremental path: only when target coordinates are known
     if (incrementalOps.includes(operation) && supplier && invoiceNo) {
       const success = this.updateSingleInvoice(supplier, invoiceNo);
-
       if (!success) {
-        // Fallback to full clear if incremental fails
+        // Fallback: incremental failed, do full clear so next access reloads
         AuditLogger.logWarning('CacheManager.invalidate',
           `Incremental update failed for ${supplier}|${invoiceNo}, falling back to full clear`);
         this.clear();
@@ -503,9 +502,10 @@ const CacheManager = {
       return;
     }
 
-    // Full invalidation for operations requiring it
-    const fullInvalidateOps = ['updateAmount', 'updateStatus', 'schemaChange', 'bulkUpdate'];
-    if (fullInvalidateOps.includes(operation)) {
+    // Full clear: explicit full-invalidate ops, OR incremental ops without coordinates
+    // Note: 'updateAmount'/'updateStatus' without supplier+invoiceNo also land here
+    const fullInvalidateOps = ['schemaChange', 'bulkUpdate'];
+    if (fullInvalidateOps.includes(operation) || incrementalOps.includes(operation)) {
       this.clear();
       this.stats.fullReloads++;
     }
