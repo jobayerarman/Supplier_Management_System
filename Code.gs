@@ -278,19 +278,29 @@ const Code = {
 
     if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
 
+    // Optimization A: Early column guard — exit before any API call
+    // Simple trigger only handles invoiceNo (col C=3) and receivedAmt (col D=4).
+    const configCols = CONFIG.cols;
+    const invoiceNoCol   = configCols.invoiceNo + 1;    // 3 (col C)
+    const receivedAmtCol = configCols.receivedAmt + 1;  // 4 (col D)
+    if (col !== invoiceNoCol && col !== receivedAmtCol) return;
+
     try {
-      const configCols = CONFIG.cols;
-      const rowValues = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
-      const editedValue = rowValues[col - 1];
-      const paymentType = rowValues[configCols.paymentType];
-      const invoiceNo = rowValues[configCols.invoiceNo];
+      // Optimization B: Minimal batch read — from edited col through paymentType col.
+      // Reads 2 cells (col D→E) or 3 cells (col C→E) instead of all 14.
+      // Avoids e.value which is undefined for multi-cell pastes.
+      const paymentTypeCol = configCols.paymentType + 1;  // 5 (col E)
+      const numCols = paymentTypeCol - col + 1;            // 3 for col C, 2 for col D
+      const rangeValues = sheet.getRange(row, col, 1, numCols).getValues()[0];
+      const editedValue = rangeValues[0];
+      const paymentType = rangeValues[numCols - 1];
 
       switch (col) {
-        case configCols.invoiceNo + 1:
-          this._handleInvoiceNoEdit(sheet, row, paymentType, invoiceNo);
+        case invoiceNoCol:
+          this._handleInvoiceNoEdit(sheet, row, paymentType, editedValue);
           break;
 
-        case configCols.receivedAmt + 1:
+        case receivedAmtCol:
           this._handleReceivedAmtEdit(sheet, row, paymentType, editedValue);
           break;
       }
@@ -313,9 +323,23 @@ const Code = {
 
     if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
 
+    // Optimization A: Early column guard — exit before any API call
+    // for non-monitored columns (A, H, I, K, L, M, N = 7 of 14 columns).
+    const configCols = CONFIG.cols;
+    const monitoredCols = new Set([
+      configCols.post + 1, configCols.supplier + 1, configCols.paymentType + 1,
+      configCols.prevInvoice + 1, configCols.paymentAmt + 1,
+      configCols.receivedAmt + 1, configCols.invoiceNo + 1
+    ]);
+    if (!monitoredCols.has(col)) return;
+
     try {
-      const configCols = CONFIG.cols;
-      const rowValues = sheet.getRange(row, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
+      // Optimization B: Conditional row read.
+      // post checkbox passes rowValues to processPostedRow which needs all 14 cols
+      // (uses notes at index 8, sysId at index 13, etc.).
+      // All other handlers + BalanceCalculator.updateBalanceCell need only cols A-G (indices 0-6).
+      const colsToRead = (col === configCols.post + 1) ? CONFIG.totalColumns.daily : 7;
+      const rowValues = sheet.getRange(row, 1, 1, colsToRead).getValues()[0];
 
       const editedValue = rowValues[col - 1];
       const paymentType = rowValues[configCols.paymentType];
@@ -368,11 +392,11 @@ const Code = {
    * PRIVATE: Handle Invoice No edit (simple trigger)
    * @private
    */
-  _handleInvoiceNoEdit: function(sheet, row, paymentType, invoiceNo) {
+  _handleInvoiceNoEdit: function(sheet, row, paymentType, editedValue) {
     if (['Regular', 'Partial'].includes(paymentType)) {
       const prevInvoiceCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
-      if (invoiceNo && String(invoiceNo).trim()) {
-        prevInvoiceCell.setValue(invoiceNo);
+      if (editedValue && String(editedValue).trim()) {
+        prevInvoiceCell.setValue(editedValue);
       } else {
         prevInvoiceCell.clearContent().clearNote();
       }
