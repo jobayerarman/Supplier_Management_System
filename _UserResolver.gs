@@ -19,8 +19,8 @@
  */
 
 const UserResolver = (() => {
-  // Configuration
-  const CONFIG = {
+  // Configuration (named RESOLVER_CONFIG to avoid shadowing the global CONFIG from _Config.gs)
+  const RESOLVER_CONFIG = {
     DEFAULT_USER_EMAIL: 'default@google.com',
     CACHE_TTL_MS: 3600000, // 1 hour
     CACHE_KEY_PREFIX: 'UserResolver_',
@@ -212,10 +212,10 @@ const UserResolver = (() => {
   function getCachedUser() {
     try {
       const userProps = PropertiesService.getUserProperties();
-      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
-      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
-      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
-      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
+      const cacheKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
       const cachedEmail = userProps.getProperty(cacheKey);
       const cachedTime = userProps.getProperty(cacheTimeKey);
@@ -242,7 +242,7 @@ const UserResolver = (() => {
 
       // Check if cache is still valid (within TTL)
       const cacheAge = Date.now() - parseInt(cachedTime, 10);
-      if (cacheAge > CONFIG.CACHE_TTL_MS) {
+      if (cacheAge > RESOLVER_CONFIG.CACHE_TTL_MS) {
         // Cache expired
         clearCachedUser();
         return null;
@@ -266,10 +266,10 @@ const UserResolver = (() => {
   function setCachedUser(email, method) {
     try {
       const userProps = PropertiesService.getUserProperties();
-      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
-      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
-      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
-      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
+      const cacheKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
       const cacheData = {
         [cacheKey]: email,
@@ -301,10 +301,10 @@ const UserResolver = (() => {
   function clearCachedUser() {
     try {
       const userProps = PropertiesService.getUserProperties();
-      const cacheKey = CONFIG.CACHE_KEY_PREFIX + 'email';
-      const cacheTimeKey = CONFIG.CACHE_KEY_PREFIX + 'timestamp';
-      const cacheMethodKey = CONFIG.CACHE_KEY_PREFIX + 'method';
-      const cacheSessionKey = CONFIG.CACHE_KEY_PREFIX + 'session_token';
+      const cacheKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'email';
+      const cacheTimeKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'timestamp';
+      const cacheMethodKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'method';
+      const cacheSessionKey = RESOLVER_CONFIG.CACHE_KEY_PREFIX + 'session_token';
 
       userProps.deleteProperty(cacheKey);
       userProps.deleteProperty(cacheTimeKey);
@@ -364,7 +364,7 @@ const UserResolver = (() => {
       const ui = SpreadsheetApp.getUi();
       let attempts = 0;
 
-      while (attempts < CONFIG.MAX_PROMPT_ATTEMPTS) {
+      while (attempts < RESOLVER_CONFIG.MAX_PROMPT_ATTEMPTS) {
         const response = ui.prompt(
           'User Identification Required',
           'Unable to automatically detect your email address.\n\n' +
@@ -385,11 +385,11 @@ const UserResolver = (() => {
 
         // Invalid email, try again
         attempts++;
-        if (attempts < CONFIG.MAX_PROMPT_ATTEMPTS) {
+        if (attempts < RESOLVER_CONFIG.MAX_PROMPT_ATTEMPTS) {
           ui.alert(
             'Invalid Email',
             `"${email}" is not a valid email address.\n\n` +
-            `Please try again (${attempts}/${CONFIG.MAX_PROMPT_ATTEMPTS} attempts used).`,
+            `Please try again (${attempts}/${RESOLVER_CONFIG.MAX_PROMPT_ATTEMPTS} attempts used).`,
             ui.ButtonSet.OK
           );
         }
@@ -538,7 +538,7 @@ const UserResolver = (() => {
       _stats.defaultFallbacks++;
 
       lastDetection = {
-        email: CONFIG.DEFAULT_USER_EMAIL,
+        email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL,
         method: 'default_fallback',
         context: context,
         timestamp: new Date()
@@ -547,19 +547,19 @@ const UserResolver = (() => {
       // Log warning for audit purposes
       Logger.log(`⚠️ UserResolver using default fallback | Context: ${context}`);
 
-      return CONFIG.DEFAULT_USER_EMAIL;
+      return RESOLVER_CONFIG.DEFAULT_USER_EMAIL;
 
     } catch (error) {
       Logger.log('UserResolver critical error: ' + error.message);
       _stats.defaultFallbacks++;
 
       lastDetection = {
-        email: CONFIG.DEFAULT_USER_EMAIL,
+        email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL,
         method: 'error_fallback',
         context: 'error',
         timestamp: new Date()
       };
-      return CONFIG.DEFAULT_USER_EMAIL;
+      return RESOLVER_CONFIG.DEFAULT_USER_EMAIL;
     }
   }
 
