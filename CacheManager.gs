@@ -341,7 +341,6 @@ const CacheManager = {
         }
       }
 
-      // Update statistics
       this.stats.incrementalUpdates++;
 
       return true;
@@ -624,14 +623,11 @@ const CacheManager = {
             }
           }
 
-          updatedCount++;
-
         } catch (rowError) {
           AuditLogger.logError('CacheManager.invalidateSupplierCache',
             `Failed to update invoice for supplier "${supplier}": ${rowError.toString()}`);
         }
       }
-
     } catch (error) {
       // Fallback: Clear entire cache if surgical update fails
       AuditLogger.logError('CacheManager.invalidateSupplierCache',
@@ -708,6 +704,7 @@ const CacheManager = {
     const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
     this.set(data);
 
+    // ✅ Return partition-only data (backward compatibility removed)
     return {
       activeData: this.activeData,
       activeIndexMap: this.activeIndexMap,
@@ -813,13 +810,3 @@ const CacheManager = {
     };
   }
 };
-
-// ==================== BACKWARD COMPATIBILITY ====================
-
-/**
- * Backward compatibility wrapper function
- * Clears the invoice cache
- */
-function clearInvoiceCache() {
-  CacheManager.clear();
-}

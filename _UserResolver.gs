@@ -1092,6 +1092,204 @@ function diagnoseUserResolution() {
 }
 
 /**
+ * Diagnostic function: Test all user resolution methods
+ * Run from Script Editor to diagnose user identification issues
+ * Particularly useful for debugging shared environment problems
+ *
+ * Tests:
+ * - Authorization context
+ * - Session.getActiveUser()
+ * - Session.getEffectiveUser()
+ * - Session.getTemporaryActiveUserKey()
+ * - Execution context detection
+ * - Cache functionality
+ * - Trigger type detection
+ *
+ * @returns {void} Results logged and shown in alert
+ */
+function diagnoseUserResolution() {
+  const ui = SpreadsheetApp.getUi();
+  const results = [];
+
+  results.push('═══ USER RESOLUTION DIAGNOSTIC ═══\n');
+
+  // Test 1: Authorization Info
+  results.push('1. AUTHORIZATION CONTEXT:');
+  try {
+    const authInfo = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+    const authStatus = authInfo.getAuthorizationStatus();
+    const permUrl = authInfo.getAuthorizationUrl();
+
+    results.push(`   Status: ${authStatus}`);
+    results.push(`   Required: ${authStatus === ScriptApp.AuthorizationStatus.REQUIRED ? 'YES ⚠️' : 'NO ✅'}`);
+    if (permUrl) {
+      results.push(`   Auth URL: ${permUrl.substring(0, 50)}...`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 2: Execution Context
+  results.push('2. EXECUTION CONTEXT:');
+  try {
+    const context = UserResolver.getExecutionContext();
+    results.push(`   Context: ${context}`);
+    results.push(`   Expected: 'direct' (running from editor)`);
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 3: Session.getActiveUser()
+  results.push('3. SESSION.GETACTIVEUSER():');
+  try {
+    const user = Session.getActiveUser();
+    const email = user ? user.getEmail() : null;
+    if (email && email.trim().length > 0) {
+      results.push(`   ✅ Email: ${email}`);
+      results.push(`   Valid: ${UserResolver.isValidEmail(email) ? 'YES' : 'NO'}`);
+    } else {
+      results.push(`   ⚠️ Empty or null email`);
+      results.push(`   This is common in shared environments with simple triggers`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 4: Session.getEffectiveUser()
+  results.push('4. SESSION.GETEFFECTIVEUSER():');
+  try {
+    const email = Session.getEffectiveUser().getEmail();
+    if (email && email.trim().length > 0) {
+      results.push(`   ✅ Email: ${email}`);
+      results.push(`   Note: Often returns script owner, not actual user`);
+    } else {
+      results.push(`   ⚠️ Empty or null email`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 5: Session Token
+  results.push('5. SESSION.GETTEMPORARYACTIVEUSERKEY():');
+  try {
+    const token = Session.getTemporaryActiveUserKey();
+    if (token && token.length > 0) {
+      results.push(`   ✅ Token: ${token.substring(0, 20)}...`);
+      results.push(`   Length: ${token.length} chars`);
+    } else {
+      results.push(`   ⚠️ Empty token`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 6: UserResolver.getCurrentUser()
+  results.push('6. USERRESOLVER.GETCURRENTUSER():');
+  try {
+    UserResolver.clearUserCache(); // Clear first for fresh test
+    const email = UserResolver.getCurrentUser();
+    const metadata = UserResolver.getLastDetection();
+    results.push(`   Email: ${email}`);
+    results.push(`   Method: ${metadata.method}`);
+    results.push(`   Context: ${metadata.context}`);
+
+    if (email === 'default@google.com') {
+      results.push(`   ⚠️ USING DEFAULT FALLBACK - This is the reported bug!`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Test 7: Trigger Detection
+  results.push('7. TRIGGER SETUP:');
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const triggers = ScriptApp.getUserTriggers(ss);
+    const editTriggers = triggers.filter(t => t.getEventType() === ScriptApp.EventType.ON_EDIT);
+
+    results.push(`   Total triggers: ${triggers.length}`);
+    results.push(`   Edit triggers: ${editTriggers.length}`);
+
+    if (editTriggers.length === 0) {
+      results.push(`   ⚠️ NO INSTALLABLE EDIT TRIGGER FOUND`);
+      results.push(`   → This causes the bug in shared environments!`);
+      results.push(`   → Run setupInstallableEditTrigger() to fix`);
+    } else {
+      editTriggers.forEach((trigger, i) => {
+        results.push(`   Trigger ${i + 1}: ${trigger.getHandlerFunction()}`);
+      });
+      results.push(`   ✅ Installable trigger is set up`);
+    }
+  } catch (error) {
+    results.push(`   ❌ Error: ${error.message}`);
+  }
+  results.push('');
+
+  // Summary and recommendations
+  results.push('═══ DIAGNOSIS SUMMARY ═══');
+
+  const hasActiveUser = results.join('\n').includes('SESSION.GETACTIVEUSER():\n   ✅');
+  const hasInstallableTrigger = results.join('\n').includes('✅ Installable trigger is set up');
+  const usingDefaultFallback = results.join('\n').includes('USING DEFAULT FALLBACK');
+
+  if (usingDefaultFallback) {
+    results.push('❌ BUG CONFIRMED: Using default@google.com\n');
+
+    if (!hasInstallableTrigger) {
+      results.push('ROOT CAUSE: No installable Edit trigger');
+      results.push('SOLUTION:');
+      results.push('1. Run: setupInstallableEditTrigger()');
+      results.push('2. Authorize when prompted');
+      results.push('3. Test again with diagnoseUserResolution()');
+    } else if (!hasActiveUser) {
+      results.push('ROOT CAUSE: Session.getActiveUser() failing');
+      results.push('POSSIBLE ISSUES:');
+      results.push('• User lacks authorization to the script');
+      results.push('• Script permissions not properly granted');
+      results.push('• Running in limited execution context');
+      results.push('\nSOLUTION:');
+      results.push('1. Each user must authorize the script');
+      results.push('2. Use "Set My Email" menu option as workaround');
+    }
+  } else if (hasActiveUser && hasInstallableTrigger) {
+    results.push('✅ USER RESOLUTION WORKING CORRECTLY');
+  } else {
+    results.push('⚠️ PARTIAL SETUP - May work in some contexts');
+  }
+
+  const message = results.join('\n');
+
+  // Log to console for detailed analysis
+  Logger.log(message);
+
+  // Show in alert (truncated if too long)
+  const maxLength = 1800;
+  const displayMessage = message.length > maxLength
+    ? message.substring(0, maxLength) + '\n\n... (see Logs for full output)'
+    : message;
+
+  ui.alert('User Resolution Diagnostic', displayMessage, ui.ButtonSet.OK);
+}
+
+/**
+ * Benchmark UserResolver performance with execution-scoped cache
+ * Run from Script Editor to measure cache effectiveness
+ *
+ * Tests:
+ * - Performance of 200 consecutive getCurrentUser() calls
+ * - Cache hit rate
+ * - Average timing per cache level
+ * - Overall performance improvement
+ *
+ * @returns {void} Results logged to console
+ */
+/**
  * Benchmark UserResolver performance with execution-scoped cache
  * Run from Script Editor to measure cache effectiveness
  *
@@ -1210,3 +1408,99 @@ function benchmarkUserResolver() {
   ui.alert('UserResolver Benchmark', summary, ui.ButtonSet.OK);
 }
 
+/**
+ * Minimal benchmark to measure true execution cache performance
+ * WITHOUT statistics tracking overhead
+ *
+ * This is a temporary diagnostic function for performance validation.
+ * TODO: Remove before merging to main
+ *
+ * @returns {Object} Benchmark results
+ */
+function benchmarkUserResolverMinimal() {
+  Logger.log('═══ Minimal UserResolver Benchmark (No Statistics) ═══');
+  Logger.log('Testing execution cache benefit without overhead from statistics tracking\n');
+
+  const iterations = 200;
+
+  // ═══ TEST 1: WITH execution cache (normal operation) ═══
+  Logger.log('TEST 1: Measuring WITH execution cache...');
+  UserResolver.clearExecutionCache();
+  UserResolver.clearUserCache();
+
+  const startWith = Date.now();
+  for (let i = 0; i < iterations; i++) {
+    UserResolver.getCurrentUser();
+  }
+  const durationWith = Date.now() - startWith;
+  const avgWith = durationWith / iterations;
+
+  Logger.log('  Duration: ' + durationWith + 'ms');
+  Logger.log('  Average: ' + avgWith.toFixed(2) + 'ms per call\n');
+
+  // ═══ TEST 2: WITHOUT execution cache (clearing after each call) ═══
+  Logger.log('TEST 2: Measuring WITHOUT execution cache (simulated)...');
+  UserResolver.clearExecutionCache();
+  // Keep UserProperties cache to simulate realistic scenario
+
+  const startWithout = Date.now();
+  for (let i = 0; i < iterations; i++) {
+    UserResolver.getCurrentUser();
+    // Clear execution cache after each call (except last)
+    // This forces next call to hit UserProperties cache
+    if (i < iterations - 1) {
+      UserResolver.clearExecutionCache();
+    }
+  }
+  const durationWithout = Date.now() - startWithout;
+  const avgWithout = durationWithout / iterations;
+
+  Logger.log('  Duration: ' + durationWithout + 'ms');
+  Logger.log('  Average: ' + avgWithout.toFixed(2) + 'ms per call\n');
+
+  // ═══ CALCULATE IMPROVEMENT ═══
+  const timeSaved = durationWithout - durationWith;
+  const improvement = (timeSaved / durationWithout * 100);
+
+  Logger.log('═══ RESULTS ═══');
+  Logger.log('WITH execution cache: ' + durationWith + 'ms');
+  Logger.log('WITHOUT execution cache: ' + durationWithout + 'ms');
+  Logger.log('Performance Improvement: ' + improvement.toFixed(1) + '% faster');
+  Logger.log('Time Saved: ' + timeSaved + 'ms per ' + iterations + ' calls');
+  Logger.log('');
+
+  Logger.log('═══ PER-CALL BREAKDOWN ═══');
+  Logger.log('WITH exec cache: ' + avgWith.toFixed(2) + 'ms per call');
+  Logger.log('WITHOUT exec cache: ' + avgWithout.toFixed(2) + 'ms per call');
+  Logger.log('Savings per call: ' + (avgWithout - avgWith).toFixed(2) + 'ms');
+  Logger.log('');
+
+  Logger.log('═══ REAL-WORLD IMPACT ═══');
+  Logger.log('100-row batch operation:');
+  Logger.log('  WITHOUT exec cache: ~' + (avgWithout * 100).toFixed(0) + 'ms');
+  Logger.log('  WITH exec cache: ~' + (avgWith * 100).toFixed(0) + 'ms');
+  Logger.log('  Savings: ~' + ((avgWithout - avgWith) * 100).toFixed(0) + 'ms per batch');
+  Logger.log('');
+
+  // Show alert dialog
+  const ui = SpreadsheetApp.getUi();
+  const summary =
+    '═══ Minimal Benchmark Results ═══\n\n' +
+    'WITH exec cache: ' + durationWith + 'ms (' + avgWith.toFixed(2) + 'ms/call)\n' +
+    'WITHOUT exec cache: ' + durationWithout + 'ms (' + avgWithout.toFixed(2) + 'ms/call)\n\n' +
+    '═══ Performance ═══\n' +
+    'Improvement: ' + improvement.toFixed(1) + '% faster\n' +
+    'Time Saved: ' + timeSaved + 'ms per ' + iterations + ' calls\n\n' +
+    '═══ Batch Impact ═══\n' +
+    '100 rows: ~' + ((avgWithout - avgWith) * 100).toFixed(0) + 'ms faster\n\n' +
+    'See Logs for complete breakdown';
+
+  ui.alert('Minimal Benchmark', summary, ui.ButtonSet.OK);
+
+  return {
+    withCache: durationWith,
+    withoutCache: durationWithout,
+    improvement: improvement,
+    timeSaved: timeSaved
+  };
+}

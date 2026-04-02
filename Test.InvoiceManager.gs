@@ -565,6 +565,8 @@ function testInvoiceGetStatistics() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SECTION 6: PROCESS FUNCTION TESTS
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Test: Process creates new invoice

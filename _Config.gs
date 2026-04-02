@@ -39,6 +39,7 @@ const CONFIG = {
   auditSheet: 'AuditLog',
   supplierList: 'SupplierList',
   idColHeader: 'SYS_ID',
+  dataStartRow: 6,      // First row of data in daily sheets (0-based would be 6)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MASTER DATABASE CONFIGURATION
@@ -46,18 +47,18 @@ const CONFIG = {
 
   masterDatabase: {
     // Connection mode: 'local' (current monthly file) or 'master' (central database)
-    connectionMode: 'local',  // Change to 'master' to enable Master Database writes
+    connectionMode: 'master',  // Change to 'master' to enable Master Database writes
 
     // Master database file identification (to be filled in during setup)
-    id: '',  // Spreadsheet ID from URL: https://docs.google.com/spreadsheets/d/{ID}/edit
-    url: '', // Full spreadsheet URL
+    id: '1gMOCdFqqmOn7AlNbd_GXgwuQkI6AyQvEdBt8lkFkmTM',  // Spreadsheet ID from URL: https://docs.google.com/spreadsheets/d/{ID}/edit
+    url: 'https://docs.google.com/spreadsheets/d/1gMOCdFqqmOn7AlNbd_GXgwuQkI6AyQvEdBt8lkFkmTM', // Full spreadsheet URL
 
     // Master database sheet names (must match actual sheet names in Master file)
     sheets: {
       invoice: 'InvoiceDatabase',
       payment: 'PaymentLog',
       audit: 'AuditLog',
-      supplier: 'SupplierDatabase'
+      supplier: 'SupplierList'
     },
 
     // Import ranges for monthly files (used when building IMPORTRANGE formulas)
@@ -65,7 +66,7 @@ const CONFIG = {
       invoice: 'A:M',      // All invoice columns
       payment: 'A:L',      // All payment columns
       audit: 'A:G',        // All audit columns
-      supplier: 'A:D'      // All supplier columns
+      supplier: 'B:G'      // All supplier columns
     }
   },
 
@@ -73,12 +74,12 @@ const CONFIG = {
   // SHEET STRUCTURE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  dataStartRow: 7,        // First row of data in daily sheets (0-based would be 6)
+  // dataStartRow: 7,        // First row of data in daily sheets (0-based would be 6)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COLUMN MAPPINGS
   // ═══════════════════════════════════════════════════════════════════════════
-
+  
   // Daily sheet column mappings (0-based indices)
   cols: {
     supplier: 1,        // B
@@ -120,19 +121,26 @@ const CONFIG = {
     // System fields
     sysId: 12             // M
   },
-  
+
   // Payment sheet column mappings (0-based indices)
   paymentCols: {
+    // Core identifiers
     date: 0,            // A
     supplier: 1,        // B
     invoiceNo: 2,       // C
+    
+    // Payment-specific data
     paymentType: 3,     // D
     amount: 4,          // E
     method: 5,          // F
     reference: 6,       // G
+    
+    // Metadata
     fromSheet: 7,       // H
     enteredBy: 8,       // I
     timestamp: 9,       // J
+    
+    // System fields
     sysId: 10,          // K
     invoiceId: 11       // L
   },
@@ -155,7 +163,7 @@ const CONFIG = {
     details: 5,         // F
     message: 6          // G
   },
-
+  
   // ═══════════════════════════════════════════════════════════════════════════
   // BUSINESS RULES
   // ═══════════════════════════════════════════════════════════════════════════
@@ -206,7 +214,7 @@ const CONFIG = {
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITY FUNCTIONS
   // ═══════════════════════════════════════════════════════════════════════════
-
+  
   /**
    * Validate configuration on initialization
    * @returns {Object} Validation result with valid flag and errors
@@ -270,7 +278,7 @@ const CONFIG = {
       if (this.rules.MAX_TRANSACTION_AMOUNT <= 0) {
         errors.push('MAX_TRANSACTION_AMOUNT must be positive');
       }
-
+      
       if (this.rules.CACHE_TTL_MS <= 0) {
         errors.push('CACHE_TTL_MS must be positive');
       }
