@@ -834,9 +834,6 @@ const UIMenu = {
       });
     }
 
-    // FLUSH AUDIT QUEUE
-    AuditLogger.flush();
-
     return results;
   },
 
@@ -1063,9 +1060,6 @@ const UIMenu = {
     //   `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped | ` +
     //   `Duration: ${results.duration}ms, Avg: ${results.avgTimePerRow}ms/row | ` +
     //   `Suppliers invalidated: ${suppliersToInvalidate.size}`);
-
-    // FLUSH AUDIT QUEUE
-    AuditLogger.flush();
 
     // UX FEEDBACK: Final completion toast with performance
     SpreadsheetApp.getActiveSpreadsheet().toast(
