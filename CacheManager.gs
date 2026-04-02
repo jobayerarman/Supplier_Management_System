@@ -644,6 +644,24 @@ const CacheManager = {
   },
 
   /**
+   * Signal that a payment was just written to PaymentLog for this invoice.
+   * Prevents the cache from reading InvoiceDatabase before SUMIFS recalculates.
+   * The _recentWrites 100ms defer in updateSingleInvoice will skip the re-read.
+   *
+   * Call this BEFORE invalidateSupplierCache() after a payment write.
+   * See CLAUDE.md Critical Gotcha #2.
+   *
+   * @param {string} supplier
+   * @param {string} invoiceNo
+   */
+  markPaymentWritten: function(supplier, invoiceNo) {
+    if (!supplier || !invoiceNo) return;
+    const key = `${StringUtils.normalize(supplier)}|${StringUtils.normalize(invoiceNo)}`;
+    this._recentWrites = this._recentWrites || new Map();
+    this._recentWrites.set(key, Date.now());
+  },
+
+  /**
    * Clear entire cache memory
    * Resets all partition data structures and global index
    */

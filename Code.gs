@@ -596,6 +596,9 @@ const Code = {
       BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
       const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
+      // Mark payment written before invalidation so cache defers re-read until SUMIFS recalculates
+      // See CLAUDE.md Critical Gotcha #2
+      CacheManager.markPaymentWritten(supplier, data.invoiceNo || data.prevInvoice);
       CacheManager.invalidateSupplierCache(supplier);
 
       const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(finalEnteredBy), timeStr]];
