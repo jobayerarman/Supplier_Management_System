@@ -61,7 +61,7 @@ Active mode: `CONFIG.isMasterMode()` — configured in [_Config.gs](_Config.gs).
 2. **Cache invalidation timing** — must happen AFTER writing to PaymentLog (SUMIFS recalculates first)
 3. **Master mode requires installable trigger** — simple `onEdit` cannot call `SpreadsheetApp.openById()`; run `setupInstallableEditTrigger()` once per monthly file
 4. **UserResolver not Session** — `Session.getActiveUser()` fails in trigger context; always use `UserResolver.getCurrentUser()`
-5. **Date source** — daily sheet dates come from cell A3, fallback to current date
+5. **Date source** — daily sheet dates come from cell B3, fallback to current date (rows 1-6 are headers; data starts at row 7)
 6. **Lock errors** — users may see "Unable to acquire lock" during concurrent edits; this is by design
 
 ## AI Guidelines

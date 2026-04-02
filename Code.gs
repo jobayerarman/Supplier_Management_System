@@ -276,7 +276,7 @@ const Code = {
     const row = e.range.getRow();
     const col = e.range.getColumn();
 
-    if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
+    if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
 
     try {
       const configCols = CONFIG.cols;
@@ -311,7 +311,7 @@ const Code = {
     const row = e.range.getRow();
     const col = e.range.getColumn();
 
-    if (row < 6 || !CONFIG.dailySheets.includes(sheetName)) return;
+    if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
 
     try {
       const configCols = CONFIG.cols;

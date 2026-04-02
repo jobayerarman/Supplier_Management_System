@@ -39,7 +39,7 @@ const CONFIG = {
   auditSheet: 'AuditLog',
   supplierList: 'SupplierList',
   idColHeader: 'SYS_ID',
-  dataStartRow: 6,      // First row of data in daily sheets (0-based would be 6)
+  dataStartRow: 7,      // First row of data in daily sheets (rows 1-6 are headers/titles; B3 = date)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MASTER DATABASE CONFIGURATION
@@ -73,8 +73,6 @@ const CONFIG = {
   // ═══════════════════════════════════════════════════════════════════════════
   // SHEET STRUCTURE
   // ═══════════════════════════════════════════════════════════════════════════
-
-  // dataStartRow: 7,        // First row of data in daily sheets (0-based would be 6)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COLUMN MAPPINGS

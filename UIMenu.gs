@@ -111,7 +111,7 @@
  *   - flush(): Batch audit operations into single write
  *
  * CONFIGURATION (CONFIG):
- *   - CONFIG.dataStartRow: First data row (5)
+ *   - CONFIG.dataStartRow: First data row (7, 1-based; rows 1-6 are headers/titles, B3 = date)
  *   - CONFIG.totalColumns.daily: Column count for daily sheets
  *   - CONFIG.cols: Column index mappings
  *   - CONFIG.dailySheets: Array of valid sheet names (01-31)
