@@ -148,7 +148,7 @@ const BalanceCalculator = {
 
     // Log errors if any
     if (impact.error) {
-      logSystemError('BalanceCalculator.calculate',
+      AuditLogger.logError('BalanceCalculator.calculate',
         `${impact.error} | Supplier: ${data.supplier}, Type: ${data.paymentType}`);
     }
 
@@ -222,7 +222,7 @@ const BalanceCalculator = {
    */
   updateBalanceCell: function(sheet, row, afterPost, rowData) {
     if (!rowData) {
-      logSystemError('BalanceCalculator.updateBalanceCell',
+      AuditLogger.logError('BalanceCalculator.updateBalanceCell',
         'rowData parameter is required');
       return;
     }
@@ -317,7 +317,7 @@ const BalanceCalculator = {
       }
       return Number(invoice.data[CONFIG.invoiceCols.balanceDue]) || 0;
     } catch (error) {
-      logSystemError('BalanceCalculator.getInvoiceOutstanding',
+      AuditLogger.logError('BalanceCalculator.getInvoiceOutstanding',
         `Failed to get invoice outstanding: ${error.toString()}`);
       return 0;
     }
@@ -347,7 +347,7 @@ const BalanceCalculator = {
         unpaidInvoices: unpaidInvoices
       };
     } catch (error) {
-      logSystemError('BalanceCalculator.getSupplierSummary',
+      AuditLogger.logError('BalanceCalculator.getSupplierSummary',
         `Failed to get summary for ${supplier}: ${error.toString()}`);
       return null;
     }
@@ -476,7 +476,7 @@ const BalanceCalculator = {
         data: cacheData.activeData || []
       };
     } catch (error) {
-      logSystemError('BalanceCalculator._getActiveInvoicesForSupplier',
+      AuditLogger.logError('BalanceCalculator._getActiveInvoicesForSupplier',
         `Failed to retrieve active invoices: ${error.toString()}`);
       return null;
     }
@@ -760,7 +760,7 @@ const BalanceCalculator = {
    * @returns {SupplierBalanceResult} Error result
    */
   _buildBalanceErrorResult: function(supplier, error) {
-    logSystemError('BalanceCalculator._buildBalanceErrorResult',
+    AuditLogger.logError('BalanceCalculator._buildBalanceErrorResult',
       `Balance calculation failed for "${supplier}": ${error.toString()}`);
 
     return {

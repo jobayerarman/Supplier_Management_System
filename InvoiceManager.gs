@@ -1,5 +1,4 @@
-
-/**
+/**AuditLogger.logError
  * ═══════════════════════════════════════════════════════════════════════════
  * InvoiceManager Module - Supplier Invoice Management System
  * ═══════════════════════════════════════════════════════════════════════════
@@ -337,7 +336,6 @@ const InvoiceManager = {
    * @param {InvoiceRecord} invoice - Pre-checked invoice (optional, for optimization)
    * @returns {{success: boolean, action: string, invoiceId: string, row: number, error?: string, existingRow?: number}} Creation result
    */
-
   createInvoice: function (data, invoice = null) {
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
@@ -519,7 +517,6 @@ const InvoiceManager = {
     ];
   },
 
-
   // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 6: INTERNAL HELPERS - UTILITIES
   // ═════════════════════════════════════════════════════════════════════════════
@@ -594,7 +591,7 @@ const InvoiceManager = {
         .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
 
     } catch (error) {
-      logSystemError('InvoiceManager.applyInvoiceFormulas',
+      AuditLogger.logError('InvoiceManager.applyInvoiceFormulas',
         `Failed to set formulas for row ${row}: ${error.toString()}`);
       throw error;
     }
@@ -740,7 +737,6 @@ const InvoiceManager = {
    * @param {string} supplier - Supplier name
    * @returns {Array<{invoiceNo: string, rowIndex: number, amount: number}>} Array of unpaid invoices
    */
-
   getUnpaidForSupplier: function (supplier) {
     if (StringUtils.isEmpty(supplier)) return [];
 
@@ -881,7 +877,6 @@ const InvoiceManager = {
    *
    * @returns {{total: number, unpaid: number, partial: number, paid: number, totalOutstanding: number, activePartitionSize: number, inactivePartitionSize: number}} Statistics summary with partition sizes
    */
-
   getInvoiceStatistics: function () {
     try {
       // Use partition-aware data
@@ -955,7 +950,6 @@ const InvoiceManager = {
    * @param {string} paymentType - Payment type ('Due', 'Regular', 'Partial')
    * @returns {boolean} True if dropdown created successfully, false if validation failed or no invoices found
    */
-
   buildDuePaymentDropdown: function (sheet, row, supplier, paymentType) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
@@ -1005,7 +999,6 @@ const InvoiceManager = {
    *
    * @returns {{success: boolean, repairedCount: number, message: string, error?: string}} Repair result with count of repaired rows
    */
-
   repairAllFormulas: function () {
     try {
       // Use Master Database if in master mode, otherwise use local sheet
@@ -1045,11 +1038,10 @@ const InvoiceManager = {
         message: `Repaired ${repairedCount} invoice(s)`
       };
     } catch (error) {
-      logSystemError('InvoiceManager.repairAllFormulas', error.toString());
+      AuditLogger.logError('InvoiceManager.repairAllFormulas', error.toString());
       return { success: false, error: error.toString() };
     }
   },
-
 
   // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 7: RESULT BUILDERS (Immutable Constructors)
@@ -1161,4 +1153,3 @@ const InvoiceManager = {
     };
   }
 };
-

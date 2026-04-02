@@ -624,19 +624,7 @@ const PaymentManager = {
    */
   _updateInvoicePaidDate: function(invoiceNo, supplier, paidDate, currentPaymentAmount, context = {}, cachedInvoice = null) {
     try {
-      // ═══ VALIDATION: Paid date must be reasonable (prevent future dates from sheet mismatches) ═══
-      const now = new Date();
-      if (paidDate > now) {
-        AuditLogger.logWarning('PaymentManager._updateInvoicePaidDate',
-          `Paid date (${DateUtils.formatDate(paidDate)}) appears to be in the future. Using current date instead.`);
-        paidDate = now;
-      }
-
-      // ═══ STEP 1: FIND INVOICE (Force Fresh Read) ═══
-      // Clear supplier cache to ensure we're checking actual sheet data, not stale cache
-      if (!cachedInvoice) {
-        CacheManager.invalidateSupplierCache(supplier);
-      }
+      // ═══ STEP 1: FIND INVOICE ═══
       const invoice = cachedInvoice || InvoiceManager.findInvoice(supplier, invoiceNo);
 
       if (!invoice) {
@@ -658,22 +646,14 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 4: CHECK IF PAID DATE ALREADY SET ═══
-      if (this._isPaidDateAlreadySet(invoice)) {
-        // Use paidDate from parameter (already processed) instead of reading from sheet
-        // paidDate is the transaction date passed from _handlePaidStatusUpdate (data.paymentDate || data.invoiceDate)
-        const formattedPaidDate = DateUtils.formatDate(paidDate);
-        const result = this._buildAlreadyPaidResult(invoiceNo, formattedPaidDate);
+      const successResult = this._buildPaidDateSuccessResult(paidDate, balanceInfo);
 
-        AuditLogger.log('INVOICE_ALREADY_PAID', context.transactionData,
-          `${result.message} | Payment: ${context.paymentId}`);
-
-        return result;
-      }
-
-      // ═══ STEP 5: WRITE PAID DATE TO SHEET ═══
+      // ═══ STEP 4: WRITE PAID DATE TO SHEET ═══
       try {
         this._writePaidDateToSheet(invoice, paidDate);
+        // Log AFTER successful sheet write (inside try block)
+        AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
+        `Invoice ${invoiceNo} ${successResult.message} | Invoice row ${invoice.row} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
       } catch (lockError) {
         const result = this._buildLockFailedResult(lockError);
         AuditLogger.logError('PaymentManager._updateInvoicePaidDate', result.message);
@@ -684,7 +664,7 @@ const PaymentManager = {
       CacheManager.updateInvoiceInCache(supplier, invoiceNo);
 
       // ═══ STEP 7: RETURN SUCCESS ═══
-      return this._buildPaidDateSuccessResult(paidDate, balanceInfo);
+      return successResult;
 
     } catch (error) {
       const result = this._buildErrorResult(error);
@@ -861,6 +841,29 @@ const PaymentManager = {
   _isPaidDateAlreadySet: function(invoice) {
     const col = CONFIG.invoiceCols;
     return !!invoice.data[col.paidDate];
+  },
+
+  /**
+   * Helper: Check if paid date is already set in actual InvoiceDatabase sheet
+   * Reads the sheet directly to avoid stale cache data.
+   * Critical for accurate INVOICE_ALREADY_PAID detection.
+   *
+   * @private
+   * @param {Object} invoice - Invoice object with row number
+   * @returns {boolean} True if column H (paidDate) contains a value in the actual sheet
+   */
+  _isPaidDateAlreadySetInSheet: function(invoice) {
+    try {
+      const invoiceSh = MasterDatabaseUtils.getSourceSheet('invoice');
+      const col = CONFIG.invoiceCols;
+      const paidDateValue = invoiceSh.getRange(invoice.row, col.paidDate + 1).getValue();
+      return !!paidDateValue; // True if column H is not empty
+    } catch (error) {
+      AuditLogger.logWarning('PaymentManager._isPaidDateAlreadySetInSheet',
+        `Failed to read paid date from sheet: ${error.toString()}`);
+      // On error, fall back to cached data to avoid blocking the operation
+      return this._isPaidDateAlreadySet(invoice);
+    }
   },
 
   /**
@@ -1066,7 +1069,7 @@ const PaymentManager = {
     result.paidDateUpdated = true;
     result.balanceInfo = balanceInfo;
     result.reason = 'updated';
-    result.message = `Paid date set to ${DateUtils.formatDate(paidDate)}`;
+    result.message = `Paid on ${DateUtils.formatDate(paidDate)}`;
     return result;
   },
 
