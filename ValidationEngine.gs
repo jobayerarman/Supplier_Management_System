@@ -250,6 +250,29 @@ function validatePostData(data) {
     errors.push('Invoice number cannot exceed 50 characters');
   }
 
+  // === VALIDATION PHASE 3A: INVOICE NUMBER FORMAT ===
+  // Skip for Due payments (prevInvoice is the relevant field, not invoiceNo)
+  if (data.invoiceNo && data.paymentType !== 'Due') {
+    const invoiceNoValidation = validateInvoiceNo(data.invoiceNo);
+    if (!invoiceNoValidation.valid) {
+      errors.push(invoiceNoValidation.error);
+    }
+  }
+
+  // === VALIDATION PHASE 3B: AMOUNT LIMITS ===
+  if (!isNaN(data.receivedAmt) && data.receivedAmt >= 0) {
+    const receivedAmtValidation = validateAmount(data.receivedAmt, 'Received Amount');
+    if (!receivedAmtValidation.valid) {
+      errors.push(receivedAmtValidation.error);
+    }
+  }
+  if (!isNaN(data.paymentAmt) && data.paymentAmt >= 0) {
+    const paymentAmtValidation = validateAmount(data.paymentAmt, 'Payment Amount');
+    if (!paymentAmtValidation.valid) {
+      errors.push(paymentAmtValidation.error);
+    }
+  }
+
   // === VALIDATION PHASE 4: PAYMENT TYPE SPECIFIC RULES ===
   const paymentValidation = validatePaymentTypeRules(data);
   if (!paymentValidation.valid) {
