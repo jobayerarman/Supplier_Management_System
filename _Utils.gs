@@ -928,13 +928,9 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
 }
 
 /**
- * Dispatcher: route to setPostStatus or setBatchPostStatus based on CONFIG.rules.useBatchStatusUpdates.
- *
- * DEFAULT (useBatchStatusUpdates = false): calls setPostStatus() for immediate
- * cell-by-cell feedback — users see each field update as it happens.
- *
- * OPTIONAL (useBatchStatusUpdates = true): calls setBatchPostStatus() for a
- * single API call — faster but user sees no update until all fields are written.
+ * Write post status for a single row (used by onEdit / single-row paths).
+ * Always uses the single-call setBatchPostStatus() path — no individual
+ * setValue() calls.
  *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {number} row
@@ -945,10 +941,74 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
  * @param {string} bgColor - Hex color code
  */
 function writePostStatus(sheet, row, status, user, time, keepChecked, bgColor) {
-  if (CONFIG.rules.useBatchStatusUpdates) {
-    setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor);
-  } else {
-    setPostStatus(sheet, row, status, user, time, keepChecked, bgColor);
+  setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor);
+}
+
+/**
+ * Build a 2-D values grid for the 4 status columns (Post, Status, EnteredBy,
+ * Timestamp) covering every row in the batch range.
+ *
+ * Rows that were not processed keep the values that were already in allData
+ * so that the single setValues() call is safe to write over the entire range.
+ *
+ * @param {Array[]}  allData           - Raw sheet data from the initial batch read
+ * @param {number}   startRow          - 1-based first row of the batch range
+ * @param {Object[]} pendingUpdates    - [{rowNum, keepChecked, status, user, time}]
+ * @returns {Array[][]} numRows×4 grid ready for setValues()
+ */
+function buildStatusGrid(allData, startRow, pendingUpdates) {
+  const cols = CONFIG.cols;
+  // Initialise grid with current sheet values (preserves skipped rows)
+  const grid = allData.map(row => [
+    row[cols.post],
+    row[cols.status],
+    row[cols.enteredBy],
+    row[cols.timestamp]
+  ]);
+  // Overwrite only the rows that were actually processed
+  for (const { rowNum, keepChecked, status, user, time } of pendingUpdates) {
+    const i = rowNum - startRow;
+    grid[i] = [keepChecked, status, user, time];
+  }
+  return grid;
+}
+
+/**
+ * Apply background colours to all processed rows using the fewest possible
+ * setBackground() calls — one call per contiguous block of the same colour.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object[]} pendingUpdates - [{rowNum, bgColor}]
+ */
+function flushBackgroundUpdates(sheet, pendingUpdates) {
+  if (!pendingUpdates.length) return;
+
+  const totalCols = CONFIG.totalColumns.daily - 5; // exclude date column A
+  const startCol  = 2;                              // column B
+
+  // Group by colour, then find contiguous run lengths
+  // Sort by rowNum so runs are detected correctly
+  const sorted = pendingUpdates.slice().sort((a, b) => a.rowNum - b.rowNum);
+
+  let runStart = sorted[0].rowNum;
+  let runLen   = 1;
+  let runColor = sorted[0].bgColor;
+
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur && cur.bgColor === runColor && cur.rowNum === runStart + runLen) {
+      runLen++;
+    } else {
+      // Flush current run
+      if (runColor) {
+        sheet.getRange(runStart, startCol, runLen, totalCols).setBackground(runColor);
+      }
+      if (cur) {
+        runStart = cur.rowNum;
+        runLen   = 1;
+        runColor = cur.bgColor;
+      }
+    }
   }
 }
 

@@ -913,11 +913,20 @@ const UIMenu = {
     // BATCH OPTIMIZATION: Collect suppliers for cache invalidation
     const suppliersToInvalidate = new Set();
 
+    // PERF FIX: Accumulate status updates; write all rows in one setValues() call
+    // after the loop instead of per-row API calls.
+    const pendingStatusUpdates = [];
+
     // Dynamic progress interval
     const progressInterval = this._calculateProgressInterval(numRows);
 
     // PHASE 2 OPTIMIZATION: Get user once before loop
     const enteredBy = UserResolver.getCurrentUser();
+
+    // PERF FIX: Pre-fetch Master DB sheet references and last-row counts once
+    // before the loop so createInvoice / _recordPayment skip their per-row
+    // getLastRow() calls (each is a ~500ms remote call in MASTER mode).
+    const batchContext = this._initBatchContext();
 
     // Process each row
     for (let i = 0; i < allData.length; i++) {
@@ -962,20 +971,18 @@ const UIMenu = {
             error: validation.error || validation.errors.join(', ')
           });
 
-          // Update status to show error
           const errorMsg = validation.error ||
                            (validation.errors && validation.errors.length > 0
                              ? validation.errors[0]
                              : 'Validation failed');
-          writePostStatus(
-            sheet,
+          pendingStatusUpdates.push({
             rowNum,
-            `ERROR: ${errorMsg.substring(0, 100)}`,
-            UserResolver.extractUsername(data.enteredBy),  // Display username only
-            data.timestamp,
-            false,
-            CONFIG.colors.error
-          );
+            keepChecked: false,
+            status:  `ERROR: ${errorMsg.substring(0, 100)}`,
+            user:    UserResolver.extractUsername(data.enteredBy),
+            time:    data.timestamp,
+            bgColor: CONFIG.colors.error
+          });
 
           // Log error
           AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
@@ -989,28 +996,27 @@ const UIMenu = {
         }
 
         // Process invoice (create if new, update if exists)
-        const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
+        const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
         data.invoiceId = invoiceResult.invoiceId;
 
         // Process payment if applicable
         let paymentResult = null;
         if (this._shouldProcessPayment(data)) {
-          paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
+          paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
         }
 
         // UPDATE BALANCE CELL
         BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
-        // Update status to POSTED
-        writePostStatus(
-          sheet,
+        // Queue status update — flushed in one setValues() call after the loop
+        pendingStatusUpdates.push({
           rowNum,
-          'POSTED',
-          UserResolver.extractUsername(data.enteredBy),  // Display username only
-          data.timestamp,
-          true,
-          CONFIG.colors.success
-        );
+          keepChecked: true,
+          status:  'POSTED',
+          user:    UserResolver.extractUsername(data.enteredBy),
+          time:    data.timestamp,
+          bgColor: CONFIG.colors.success
+        });
 
         // Collect supplier for batch cache invalidation (done after loop)
         suppliersToInvalidate.add(data.supplier);
@@ -1026,16 +1032,14 @@ const UIMenu = {
           error: error.message
         });
 
-        // Update status to show error
-        writePostStatus(
-          sheet,
+        pendingStatusUpdates.push({
           rowNum,
-          `ERROR: ${error.message.substring(0, 100)}`,
-          UserResolver.extractUsername(enteredBy),  // Reuse pre-resolved user
-          DateUtils.formatTimestamp(),
-          false,
-          CONFIG.colors.error
-        );
+          keepChecked: false,
+          status:  `ERROR: ${error.message.substring(0, 100)}`,
+          user:    UserResolver.extractUsername(enteredBy),
+          time:    DateUtils.formatTimestamp(),
+          bgColor: CONFIG.colors.error
+        });
 
         // Log error
         AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
@@ -1047,6 +1051,13 @@ const UIMenu = {
     // PERFORMANCE: Reduces redundant invalidations by 50-90%
     for (const supplier of suppliersToInvalidate) {
       CacheManager.invalidateSupplierCache(supplier);
+    }
+
+    // PERF FIX: Flush all status updates in one setValues() + 1-2 setBackground() calls
+    if (pendingStatusUpdates.length > 0) {
+      const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
+      sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
+      flushBackgroundUpdates(sheet, pendingStatusUpdates);
     }
 
     // PERFORMANCE TRACKING: Calculate metrics
@@ -1451,6 +1462,38 @@ const UIMenu = {
 
     const calculatedInterval = Math.ceil(totalRows / targetUpdates);
     return Math.max(minInterval, Math.min(maxInterval, calculatedInterval));
+  },
+
+  /**
+   * PRIVATE: Pre-fetch Master DB sheet references and last-row counters.
+   *
+   * In MASTER mode every getLastRow() call is a remote API call (~500ms).
+   * By reading both last-row values once before the batch loop and tracking
+   * them as in-memory counters, createInvoice() and _recordPayment() can
+   * skip their per-row getLastRow() calls entirely.
+   *
+   * Returns null in LOCAL mode (no optimisation needed there).
+   *
+   * @returns {{invoiceSheet, paymentSheet, invoiceNextRow: number, paymentNextRow: number}|null}
+   * @private
+   */
+  _initBatchContext: function() {
+    if (!CONFIG.isMasterMode()) return null;
+    try {
+      const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
+      const paymentSheet = MasterDatabaseUtils.getTargetSheet('payment');
+      return {
+        invoiceSheet:    invoiceSheet,
+        paymentSheet:    paymentSheet,
+        invoiceNextRow:  invoiceSheet.getLastRow() + 1,
+        paymentNextRow:  paymentSheet.getLastRow() + 1,
+      };
+    } catch (e) {
+      // Non-fatal — fall back to per-row getLastRow() calls
+      AuditLogger.logWarning('UIMenu._initBatchContext',
+        `Failed to pre-fetch batch context: ${e.toString()}`);
+      return null;
+    }
   },
 
   /**

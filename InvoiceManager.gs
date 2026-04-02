@@ -290,7 +290,7 @@ const InvoiceManager = {
    *   - enteredBy: {string} User email
    * @returns {{success: boolean, action: string, invoiceId: string|null, row?: number, error?: string}} Result with action and invoiceId
    */
-  createOrUpdateInvoice: function(data) {
+  createOrUpdateInvoice: function(data, batchContext = null) {
     try {
       // Skip for Due payments without invoice
       if (data.paymentType === this.CONSTANTS.PAYMENT_TYPE.DUE && !data.invoiceNo) {
@@ -311,7 +311,7 @@ const InvoiceManager = {
         };
       } else {
         // Create new
-        return this.createInvoice(data);
+        return this.createInvoice(data, null, batchContext);
       }
 
     } catch (error) {
@@ -336,7 +336,7 @@ const InvoiceManager = {
    * @param {InvoiceRecord} invoice - Pre-checked invoice (optional, for optimization)
    * @returns {{success: boolean, action: string, invoiceId: string, row: number, error?: string, existingRow?: number}} Creation result
    */
-  createInvoice: function (data, invoice = null) {
+  createInvoice: function (data, invoice = null, batchContext = null) {
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
       return { success: false, error: 'Unable to acquire lock for invoice creation' };
@@ -359,10 +359,13 @@ const InvoiceManager = {
         return { ...updateResult, invoiceId: invoiceId };
       }
 
-      // Use Master Database if in master mode, otherwise use local sheet
-      const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-      const lastRow = invoiceSh.getLastRow();
-      const newRow = lastRow + 1;
+      // Use Master Database if in master mode, otherwise use local sheet.
+      // PERF: batchContext pre-fetched the sheet and last-row before the batch
+      // loop — reuse them and increment the counter instead of a remote getLastRow().
+      const invoiceSh = batchContext ? batchContext.invoiceSheet
+                                     : MasterDatabaseUtils.getTargetSheet('invoice');
+      const newRow = batchContext ? batchContext.invoiceNextRow++
+                                  : invoiceSh.getLastRow() + 1;
       const invoiceDate = getDailySheetDate(sheetName) || timestamp;
       const formattedDate = DateUtils.formatDate(invoiceDate);
       const invoiceId = IDGenerator.generateInvoiceId(sysId);

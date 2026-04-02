@@ -284,7 +284,7 @@ const PaymentManager = {
    * @param {string} invoiceId - Invoice ID from InvoiceManager
    * @returns {PaymentResult} Result object with success status, payment details, and balance info
    */
-  processPayment: function(data, invoiceId) {
+  processPayment: function(data, invoiceId, batchContext = null) {
     // Step 1: Validate payment amount
     const validationError = this._validatePaymentAmount(data);
     if (validationError) {
@@ -293,7 +293,7 @@ const PaymentManager = {
 
     try {
       // Step 2: Record payment (lock acquired internally)
-      const paymentRecorded = this._recordPayment(data, invoiceId);
+      const paymentRecorded = this._recordPayment(data, invoiceId, batchContext);
       if (!paymentRecorded.success) {
         return paymentRecorded;
       }
@@ -520,7 +520,7 @@ const PaymentManager = {
    * @param {string} invoiceId - Invoice ID
    * @returns {RecordPaymentResult} Result with payment ID and row number
    */
-  _recordPayment: function(data, invoiceId) {
+  _recordPayment: function(data, invoiceId, batchContext = null) {
     // ═══ ACQUIRE LOCK FOR SHEET WRITE ═══
     const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
@@ -528,10 +528,13 @@ const PaymentManager = {
     }
 
     try {
-      // Use Master Database if in master mode, otherwise use local sheet
-      const paymentSh = MasterDatabaseUtils.getTargetSheet('payment');
-      const lastRow = paymentSh.getLastRow();
-      const newRow = lastRow + 1;
+      // Use Master Database if in master mode, otherwise use local sheet.
+      // PERF: batchContext pre-fetched the sheet and last-row before the batch
+      // loop — reuse them and increment the counter instead of a remote getLastRow().
+      const paymentSh = batchContext ? batchContext.paymentSheet
+                                     : MasterDatabaseUtils.getTargetSheet('payment');
+      const newRow = batchContext ? batchContext.paymentNextRow++
+                                  : paymentSh.getLastRow() + 1;
 
       const paymentId = IDGenerator.generatePaymentId(data.sysId);
       const paymentMethod = this.getPaymentMethod(data.paymentType);
@@ -661,7 +664,17 @@ const PaymentManager = {
       }
 
       // ═══ STEP 6: UPDATE CACHE ═══
-      CacheManager.updateInvoiceInCache(supplier, invoiceNo);
+      // PERF: paidDate is not a SUMIFS field — patch it directly in memory
+      // instead of re-reading the row from MASTER DB (~500ms saved).
+      // SUMIFS fields (totalPaid, balanceDue) are refreshed by
+      // invalidateSupplierCache() after the batch loop completes.
+      const patched = CacheManager.patchInvoiceField(
+        supplier, invoiceNo, CONFIG.invoiceCols.paidDate, paidDate
+      );
+      if (!patched) {
+        // Invoice not in cache — fall back to full incremental update
+        CacheManager.updateInvoiceInCache(supplier, invoiceNo);
+      }
 
       // ═══ STEP 7: RETURN SUCCESS ═══
       return successResult;
@@ -913,6 +926,7 @@ const PaymentManager = {
       return null;
     }
 
+    CacheManager.markPaymentWritten(supplier, targetInvoice);
     const cacheUpdated = CacheManager.updateInvoiceInCache(supplier, targetInvoice);
 
     if (!cacheUpdated) {

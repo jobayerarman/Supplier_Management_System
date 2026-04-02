@@ -262,6 +262,36 @@ const CacheManager = {
   },
 
   /**
+   * PATCH A SINGLE FIELD in the in-memory cache without re-reading from sheet.
+   *
+   * Safe only for fields that are NOT recalculated by SUMIFS (e.g. paidDate).
+   * SUMIFS-computed fields (totalPaid, balanceDue, status) must still go through
+   * updateSingleInvoice / invalidateSupplierCache.
+   *
+   * @param {string} supplier  - Supplier name
+   * @param {string} invoiceNo - Invoice number
+   * @param {number} colIndex  - 0-based column index to patch (from CONFIG.invoiceCols)
+   * @param {*}      value     - New value to store
+   * @returns {boolean} True if patch was applied, false if invoice not in cache
+   */
+  patchInvoiceField: function(supplier, invoiceNo, colIndex, value) {
+    if (!this.globalIndexMap) return false;
+
+    const key = `${StringUtils.normalize(supplier)}|${StringUtils.normalize(invoiceNo)}`;
+    const location = this.globalIndexMap.get(key);
+    if (!location) return false;
+
+    const rowData = location.partition === 'active'
+      ? this.activeData[location.index]
+      : this.inactiveData[location.index];
+
+    if (!rowData) return false;
+
+    rowData[colIndex] = value;
+    return true;
+  },
+
+  /**
    * UPDATE SINGLE INVOICE (Partition-Only Incremental Update)
    *
    * SIMPLIFIED: Uses globalIndexMap for partition-aware updates
@@ -583,29 +613,38 @@ const CacheManager = {
         ...inactiveRows.map(idx => ({ partition: 'inactive', index: idx }))
       ];
 
+      // ── PERF FIX: collect all sheet-row numbers first, then read the entire
+      //    range in a single API call instead of one getValues() per invoice.
+      const invoiceEntries = [];
       for (const { partition, index } of allInvoices) {
+        const currentData = partition === 'active'
+          ? this.activeData[index]
+          : this.inactiveData[index];
+        if (!currentData) continue;
+        const invoiceNo = StringUtils.normalize(currentData[col.invoiceNo]);
+        const key = `${normalizedSupplier}|${invoiceNo}`;
+        const location = this.globalIndexMap.get(key);
+        if (!location) continue;
+        invoiceEntries.push({ partition, index, key, location });
+      }
+
+      // One batch read covering minRow..maxRow  (1 API call regardless of N invoices)
+      const rowMap = new Map(); // sheetRow → rowData
+      if (invoiceEntries.length > 0) {
+        const sheetRows = invoiceEntries.map(e => e.location.sheetRow);
+        const minRow = Math.min(...sheetRows);
+        const maxRow = Math.max(...sheetRows);
+        const batchValues = invoiceSh.getRange(
+          minRow, 1, maxRow - minRow + 1, CONFIG.totalColumns.invoice
+        ).getValues();
+        sheetRows.forEach(r => rowMap.set(r, batchValues[r - minRow]));
+      }
+
+      for (const { partition, index, key, location } of invoiceEntries) {
         try {
-          // Get invoice data to find the key
-          const currentData = partition === 'active'
-            ? this.activeData[index]
-            : this.inactiveData[index];
-
-          if (!currentData) continue;
-
-          const invoiceNo = StringUtils.normalize(currentData[col.invoiceNo]);
-          const key = `${normalizedSupplier}|${invoiceNo}`;
-
-          // Get sheet row from globalIndexMap
-          const location = this.globalIndexMap.get(key);
-          if (!location) continue;
-
-          // Read single row from sheet
-          const updatedData = invoiceSh.getRange(
-            location.sheetRow,
-            1,
-            1,
-            CONFIG.totalColumns.invoice
-          ).getValues()[0];
+          // Use pre-fetched row data from the batch read above
+          const updatedData = rowMap.get(location.sheetRow);
+          if (!updatedData) continue;
 
           // Check partition transition
           const wasActive = (partition === 'active');

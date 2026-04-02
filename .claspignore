@@ -1,0 +1,14 @@
+# Git and editor files
+.git/**
+.gitignore
+.claude/**
+
+# Documentation (not needed in GAS)
+README.md
+CHANGELOG.md
+CLAUDE.md
+agent_docs/**
+
+# Clasp config itself
+.clasp.json
+.claspignore
