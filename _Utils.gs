@@ -868,7 +868,7 @@ function shouldProcessPayment(data) {
  * @param {string} timestamp - Formatted timestamp (optional)
  * @param {boolean} keepPostChecked - Whether to keep post checkbox checked (default: true)
  */
-function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChecked = true) {
+function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChecked = true, bgColor = null) {
   sheet.getRange(rowNum, CONFIG.cols.status + 1).setValue(status);
 
   if (enteredBy) {
@@ -883,6 +883,11 @@ function setPostStatus(sheet, rowNum, status, enteredBy, timestamp, keepPostChec
   // Only uncheck on errors
   if (!keepPostChecked) {
     sheet.getRange(rowNum, CONFIG.cols.post + 1).setValue(false);
+  }
+
+  // Apply row background color if provided
+  if (bgColor) {
+    setRowBackground(sheet, rowNum, bgColor);
   }
 }
 
@@ -923,8 +928,33 @@ function setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor
 }
 
 /**
+ * Dispatcher: route to setPostStatus or setBatchPostStatus based on CONFIG.rules.useBatchStatusUpdates.
+ *
+ * DEFAULT (useBatchStatusUpdates = false): calls setPostStatus() for immediate
+ * cell-by-cell feedback — users see each field update as it happens.
+ *
+ * OPTIONAL (useBatchStatusUpdates = true): calls setBatchPostStatus() for a
+ * single API call — faster but user sees no update until all fields are written.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} row
+ * @param {string} status
+ * @param {string} user
+ * @param {string} time
+ * @param {boolean} keepChecked
+ * @param {string} bgColor - Hex color code
+ */
+function writePostStatus(sheet, row, status, user, time, keepChecked, bgColor) {
+  if (CONFIG.rules.useBatchStatusUpdates) {
+    setBatchPostStatus(sheet, row, status, user, time, keepChecked, bgColor);
+  } else {
+    setPostStatus(sheet, row, status, user, time, keepChecked, bgColor);
+  }
+}
+
+/**
  * Set background color for entire row
- * NOTE: This function kept for backward compatibility but setBatchPostStatus now inlines this logic
+ * NOTE: setBatchPostStatus inlines this logic for performance; setPostStatus delegates here
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
  * @param {number} rowNum - Row number
  * @param {string} color - Hex color code

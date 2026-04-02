@@ -423,7 +423,7 @@ const Code = {
     const quickValidation = validatePostData(quickValidationData);
     if (!quickValidation.valid) {
       const timeStr = DateUtils.formatTime(now);
-      setBatchPostStatus(
+      writePostStatus(
         sheet, row,
         `ERROR: ${quickValidation.error}`,
         "SYSTEM", timeStr, false,
@@ -435,7 +435,7 @@ const Code = {
     }
 
     const processingTimeStr = DateUtils.formatTime(now);
-    setBatchPostStatus(
+    writePostStatus(
       sheet, row,
       "PROCESSING...",
       "SYSTEM", processingTimeStr, true,
@@ -445,7 +445,7 @@ const Code = {
     const lock = LockManager.acquireDocumentLock(CONFIG.rules.LOCK_TIMEOUT_MS);
     if (!lock) {
       const timeStr = DateUtils.formatTime(now);
-      setBatchPostStatus(
+      writePostStatus(
         sheet, row,
         "ERROR: Unable to acquire lock (concurrent edit in progress)",
         "SYSTEM", timeStr, false,
@@ -561,7 +561,7 @@ const Code = {
 
       const validation = validatePostData(data);
       if (!validation.valid) {
-        setBatchPostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
+        writePostStatus(sheet, rowNum, `ERROR: ${validation.error}`, "SYSTEM", timeStr, false, colors.error);
         sheet.getRange(rowNum, cols.balance + 1)
           .clearContent()
           .setNote(`⚠️ Validation failed - balance not calculated\n${validation.error}`)
@@ -573,7 +573,7 @@ const Code = {
 
       const invoiceResult = InvoiceManager.createOrUpdateInvoice(data);
       if (!invoiceResult.success) {
-        setBatchPostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
+        writePostStatus(sheet, rowNum, `ERROR: ${invoiceResult.error}`, "SYSTEM", timeStr, false, colors.error);
         sheet.getRange(rowNum, cols.balance + 1)
           .clearContent()
           .setNote(`⚠️ Invoice processing failed\n${invoiceResult.error}`)
@@ -584,7 +584,7 @@ const Code = {
       if (this._shouldProcessPayment(data)) {
         const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
         if (!paymentResult.success) {
-          setBatchPostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
+          writePostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
           sheet.getRange(rowNum, cols.balance + 1)
             .clearContent()
             .setNote(`⚠️ Payment processing failed\n${paymentResult.error}`)
@@ -610,7 +610,7 @@ const Code = {
 
     } catch (error) {
       const errMsg = `SYSTEM ERROR: ${error.message || error}`;
-      setBatchPostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
+      writePostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
       AuditLogger.logError('processPostedRow', error.toString());
     }
   },

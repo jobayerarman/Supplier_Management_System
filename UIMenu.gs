@@ -965,7 +965,7 @@ const UIMenu = {
                            (validation.errors && validation.errors.length > 0
                              ? validation.errors[0]
                              : 'Validation failed');
-          setBatchPostStatus(
+          writePostStatus(
             sheet,
             rowNum,
             `ERROR: ${errorMsg.substring(0, 100)}`,
@@ -1000,7 +1000,7 @@ const UIMenu = {
         BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
         // Update status to POSTED
-        setBatchPostStatus(
+        writePostStatus(
           sheet,
           rowNum,
           'POSTED',
@@ -1025,7 +1025,7 @@ const UIMenu = {
         });
 
         // Update status to show error
-        setBatchPostStatus(
+        writePostStatus(
           sheet,
           rowNum,
           `ERROR: ${error.message.substring(0, 100)}`,

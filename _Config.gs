@@ -173,7 +173,9 @@ const CONFIG = {
     MAX_INVOICE_NO_LENGTH: 50,
     SUPPORTED_PAYMENT_TYPES: ['Unpaid', 'Regular', 'Partial', 'Due'],
     SUPPORTED_PAYMENT_METHODS: ['Cash', 'Check', 'Bank Transfer', 'None'],
-    DEFAULT_PAYMENT_METHOD: 'Cash'
+    DEFAULT_PAYMENT_METHOD: 'Cash',
+    useBatchStatusUpdates: false   // false = setPostStatus (immediate, cell-by-cell feedback);
+                                   // true  = setBatchPostStatus (single API call, faster but delayed)
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
