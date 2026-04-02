@@ -556,11 +556,11 @@ function validateInvoiceNo(invoiceNo) {
     return { valid: false, error: 'Invoice number is required' };
   }
 
-  // Check format: alphanumeric, hyphens, underscores only
-  if (!/^[A-Za-z0-9\-_]+$/.test(invoiceNo)) {
+  // Check format: alphanumeric, hyphens, underscores, dots, forward slashes
+  if (!/^[A-Za-z0-9\-_.\/]+$/.test(invoiceNo)) {
     return {
       valid: false,
-      error: 'Invoice number can only contain letters, numbers, hyphens, and underscores'
+      error: 'Invoice number can only contain letters, numbers, hyphens, underscores, dots, and slashes'
     };
   }
 
