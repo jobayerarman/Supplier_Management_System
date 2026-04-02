@@ -505,7 +505,14 @@ const BalanceCalculator = {
           continue;
         }
 
-        const balanceDue = Number(row[col.balanceDue]);
+        // Guard: formula strings appear when a new invoice was cached before SUMIFS evaluated.
+        // Mirror the same fallback used in _isActiveInvoice: treat unevaluated balanceDue
+        // as totalAmount (full amount still owed), matching CacheManager.gs:167.
+        let rawBalance = row[col.balanceDue];
+        if (typeof rawBalance === 'string' && rawBalance.startsWith('=')) {
+          rawBalance = Number(row[col.totalAmount]) || 0;
+        }
+        const balanceDue = Number(rawBalance);
 
         if (!this._isValidBalance(balanceDue)) {
           tracker.skip(rowIndex, 'invalid_balance');

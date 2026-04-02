@@ -637,7 +637,7 @@ const PaymentManager = {
       }
 
       // ═══ STEP 2: CALCULATE BALANCE ═══
-      const balanceInfo = this._calculateBalanceInfo(invoice);
+      const balanceInfo = this._calculateBalanceInfo(invoice, currentPaymentAmount);
 
       // ═══ STEP 3: CHECK IF FULLY PAID ═══
       if (!balanceInfo.fullyPaid) {
@@ -831,16 +831,39 @@ const PaymentManager = {
    * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @returns {BalanceInfo} Balance information object
    */
-  _calculateBalanceInfo: function(invoice) {
+  _calculateBalanceInfo: function(invoice, currentPaymentAmount = 0) {
     const col = CONFIG.invoiceCols;
     const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
-    const totalPaid = Number(invoice.data[col.totalPaid]) || 0;
-    const balanceDue = Number(invoice.data[col.balanceDue]) || 0;
+
+    // The cache is always pre-payment at this point: markPaymentWritten causes
+    // updateSingleInvoice to defer the sheet read (100ms SUMIFS guard), so
+    // the cached values never include the payment just recorded.
+    // Subtract currentPaymentAmount from the cached pre-payment state to derive
+    // the accurate post-payment balance.
+    //
+    // Formula strings are a special case: the invoice was cached before SUMIFS
+    // ever evaluated (new invoice). Prior totalPaid = 0; apply current payment only.
+    let rawTotalPaid = invoice.data[col.totalPaid];
+    if (typeof rawTotalPaid === 'string' && rawTotalPaid.startsWith('=')) {
+      // New invoice: no prior payments in cache — use currentPaymentAmount directly.
+      const balanceDue = Math.max(0, totalAmount - currentPaymentAmount);
+      return {
+        totalAmount,
+        totalPaid: currentPaymentAmount,
+        balanceDue,
+        fullyPaid: Math.abs(balanceDue) < CONFIG.constants.BALANCE_TOLERANCE
+      };
+    }
+
+    // Existing invoice: cache holds pre-payment numeric values.
+    const cachedTotalPaid = Number(rawTotalPaid) || 0;
+    const cachedBalanceDue = Number(invoice.data[col.balanceDue]) || 0;
+    const balanceDue = Math.max(0, cachedBalanceDue - currentPaymentAmount);
 
     return {
-      totalAmount: totalAmount,
-      totalPaid: totalPaid,
-      balanceDue: balanceDue,
+      totalAmount,
+      totalPaid: cachedTotalPaid + currentPaymentAmount,
+      balanceDue,
       fullyPaid: Math.abs(balanceDue) < CONFIG.constants.BALANCE_TOLERANCE
     };
   },

@@ -22,7 +22,7 @@ const UserResolver = (() => {
   // Configuration (named RESOLVER_CONFIG to avoid shadowing the global CONFIG from _Config.gs)
   const RESOLVER_CONFIG = {
     DEFAULT_USER_EMAIL: 'default@google.com',
-    CACHE_TTL_MS: 3600000, // 1 hour
+    CACHE_TTL_MS: 2592000000, // 30 days
     CACHE_KEY_PREFIX: 'UserResolver_',
     MAX_PROMPT_ATTEMPTS: 3,
     // Deprecated settings (kept for backward compatibility)
@@ -277,15 +277,19 @@ const UserResolver = (() => {
         [cacheMethodKey]: method
       };
 
-      // Store session token if available (for validation on cache reads)
-      try {
-        const sessionToken = Session.getTemporaryActiveUserKey();
-        if (sessionToken) {
-          cacheData[cacheSessionKey] = sessionToken;
+      // Store session token for validation on cache reads.
+      // Skip for manual_override: the user explicitly set their email to persist
+      // across sessions (menu → trigger context switch would otherwise invalidate it).
+      if (method !== 'manual_override') {
+        try {
+          const sessionToken = Session.getTemporaryActiveUserKey();
+          if (sessionToken) {
+            cacheData[cacheSessionKey] = sessionToken;
+          }
+        } catch (sessionError) {
+          // Session token unavailable - cache will rely on TTL only
+          Logger.log('UserResolver: Session token unavailable for cache write');
         }
-      } catch (sessionError) {
-        // Session token unavailable - cache will rely on TTL only
-        Logger.log('UserResolver: Session token unavailable for cache write');
       }
 
       userProps.setProperties(cacheData);
