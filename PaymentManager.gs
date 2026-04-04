@@ -916,6 +916,7 @@ const PaymentManager = {
       const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
       const col = CONFIG.invoiceCols;
       invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
+      SpreadsheetApp.flush(); // Force commit to external Master DB before lock release
     }, 'paid date update');
   },
 

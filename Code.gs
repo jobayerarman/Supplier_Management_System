@@ -352,7 +352,7 @@ const Code = {
           return;
 
         case configCols.supplier + 1:
-          updateBalance = this._handleSupplierEdit(sheet, row, paymentType, editedValue);
+          updateBalance = this._handleSupplierEdit(sheet, row, paymentType, editedValue, rowValues);
           break;
 
         case configCols.paymentType + 1:
@@ -489,10 +489,13 @@ const Code = {
    * PRIVATE: Handle Supplier edit (installable trigger)
    * @private
    */
-  _handleSupplierEdit: function(sheet, row, paymentType, supplier) {
+  _handleSupplierEdit: function(sheet, row, paymentType, supplier, rowValues) {
     if (paymentType === 'Due') {
       if (supplier && String(supplier).trim()) {
-        InvoiceManager.buildDuePaymentDropdown(sheet, row, supplier, paymentType);
+        InvoiceManager.buildDuePaymentDropdown(
+          sheet, row, supplier, paymentType,
+          rowValues ? rowValues[CONFIG.cols.prevInvoice] : null
+        );
       }
       return false;
     }
@@ -514,7 +517,10 @@ const Code = {
     } else if (paymentType === 'Due') {
       const currentSupplier = rowValues[CONFIG.cols.supplier];
       if (currentSupplier && String(currentSupplier).trim()) {
-        InvoiceManager.buildDuePaymentDropdown(sheet, row, currentSupplier, paymentType);
+        InvoiceManager.buildDuePaymentDropdown(
+          sheet, row, currentSupplier, paymentType,
+          rowValues[CONFIG.cols.prevInvoice]
+        );
       }
       return false;
     }
@@ -653,53 +659,29 @@ const Code = {
   _clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
     try {
       const cols = CONFIG.cols;
-      const paymentAmtCol = cols.paymentAmt + 1;
+      const paymentAmtCol  = cols.paymentAmt  + 1;
       const prevInvoiceCol = cols.prevInvoice + 1;
 
-      const prevInvoiceCell = sheet.getRange(row, prevInvoiceCol);
-      const paymentAmtCell = sheet.getRange(row, paymentAmtCol);
-      const oldPrevInvoice = prevInvoiceCell.getValue();
-      const oldPaymentAmt = paymentAmtCell.getValue();
-
-      let clearedFields = [];
-      let clearedValues = {};
-
+      // Optimization: obtain range lazily inside each case — eliminates 2–4 wasted API calls
+      // (2 getValue always wasted; 1–2 getRange wasted depending on case).
+      // clearedFields/clearedValues removed: dead code (never consumed after assignment).
       switch (newPaymentType) {
-        case 'Unpaid':
-          const unpaidRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
-          unpaidRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-          clearedFields = ['prevInvoice', 'paymentAmt'];
-          clearedValues = {
-            prevInvoice: oldPrevInvoice || '(empty)',
-            paymentAmt: oldPaymentAmt || '(empty)'
-          };
-          break;
-
         case 'Regular':
         case 'Partial':
-          prevInvoiceCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-          clearedFields = ['prevInvoice'];
-          clearedValues = {
-            prevInvoice: oldPrevInvoice || '(empty)'
-          };
+          sheet.getRange(row, prevInvoiceCol)
+            .clearContent().clearNote().clearDataValidations().setBackground(null);
           break;
 
         case 'Due':
-          paymentAmtCell.clearContent().clearNote().clearDataValidations().setBackground(null);
-          clearedFields = ['paymentAmt'];
-          clearedValues = {
-            paymentAmt: oldPaymentAmt || '(empty)'
-          };
+          sheet.getRange(row, paymentAmtCol)
+            .clearContent().clearNote().clearDataValidations().setBackground(null);
           break;
 
+        case 'Unpaid':
         default:
-          const defaultRange = sheet.getRange(row, prevInvoiceCol, 1, 2);
-          defaultRange.clearContent().clearNote().clearDataValidations().setBackground(null);
-          clearedFields = ['prevInvoice', 'paymentAmt'];
-          clearedValues = {
-            prevInvoice: oldPrevInvoice || '(empty)',
-            paymentAmt: oldPaymentAmt || '(empty)'
-          };
+          sheet.getRange(row, prevInvoiceCol, 1, 2)
+            .clearContent().clearNote().clearDataValidations().setBackground(null);
+          break;
       }
 
     } catch (error) {
@@ -758,19 +740,23 @@ const Code = {
       const hasInvoice = invoiceNo && invoiceNo !== '';
       const hasAmount = receivedAmt && receivedAmt !== '';
 
+      const isPartial = StringUtils.equals(paymentType, 'Partial');
+      const bgColor = isPartial ? CONFIG.colors.warning : null;
+
       if (hasInvoice && hasAmount) {
         const startCol = CONFIG.cols.prevInvoice + 1;
-        sheet.getRange(row, startCol, 1, 2).setValues([[invoiceNo, receivedAmt]]);
+        const twoColRange = sheet.getRange(row, startCol, 1, 2);
+        twoColRange.setValues([[invoiceNo, receivedAmt]]);
+        twoColRange.offset(0, 1, 1, 1).setBackground(bgColor);  // offset() = 0 API calls
       } else if (hasInvoice) {
         sheet.getRange(row, CONFIG.cols.prevInvoice + 1).setValue(invoiceNo);
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(bgColor);
       } else if (hasAmount) {
-        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt);
-      }
-
-      if (StringUtils.equals(paymentType, 'Partial')) {
-        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(CONFIG.colors.warning);
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setValue(receivedAmt).setBackground(bgColor);
       } else {
-        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(null);
+        // Both empty — still apply correct background so prior state (e.g. Partial warning)
+        // is cleared when switching to a type that has no values to populate.
+        sheet.getRange(row, CONFIG.cols.paymentAmt + 1).setBackground(bgColor);
       }
 
       return {

@@ -648,11 +648,11 @@ const InvoiceManager = {
    * @param {Array<string>} invoiceNumbers - List of valid invoice numbers
    * @returns {boolean} True if dropdown applied successfully, false otherwise
    */
-  _applyDropdownToCell: function(targetCell, invoiceNumbers) {
+  _applyDropdownToCell: function(targetCell, invoiceNumbers, currentValue = null) {
     try {
       const rule = this._buildDropdownRule(invoiceNumbers);
-      const currentValue = targetCell.getValue();
-      const isValidValue = invoiceNumbers.includes(String(currentValue));
+      const resolvedValue = currentValue !== null ? currentValue : targetCell.getValue();
+      const isValidValue = invoiceNumbers.includes(String(resolvedValue));
 
       // CRITICAL FIX: Set dropdown FIRST, then clear content
       // This prevents the clearContent() edit event from interfering with the dropdown
@@ -661,7 +661,7 @@ const InvoiceManager = {
         .setBackground(CONFIG.colors.info);
 
       // Clear content and note ONLY if current value is invalid or empty
-      if (!isValidValue || !currentValue) {
+      if (!isValidValue || !resolvedValue) {
         targetCell.clearContent().clearNote();
       } else {
         targetCell.clearNote();
@@ -958,7 +958,7 @@ const InvoiceManager = {
    * @param {string} paymentType - Payment type ('Due', 'Regular', 'Partial')
    * @returns {boolean} True if dropdown created successfully, false if validation failed or no invoices found
    */
-  buildDuePaymentDropdown: function (sheet, row, supplier, paymentType) {
+  buildDuePaymentDropdown: function (sheet, row, supplier, paymentType, currentCellValue = null) {
     const targetCell = sheet.getRange(row, CONFIG.cols.prevInvoice + 1);
 
     // Validate request parameters
@@ -987,7 +987,7 @@ const InvoiceManager = {
 
       // Extract invoice numbers and apply dropdown
       const invoiceNumbers = unpaidInvoices.map(inv => inv.invoiceNo);
-      return this._applyDropdownToCell(targetCell, invoiceNumbers);
+      return this._applyDropdownToCell(targetCell, invoiceNumbers, currentCellValue);
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.buildDuePaymentDropdown', error.toString());
