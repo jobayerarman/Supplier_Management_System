@@ -257,8 +257,8 @@ const CacheManager = {
    * @param {string} invoiceNo - Invoice number
    * @returns {boolean} Success flag
    */
-  updateInvoiceInCache: function (supplier, invoiceNo) {
-    return this.updateSingleInvoice(supplier, invoiceNo);
+  updateInvoiceInCache: function (supplier, invoiceNo, forceRead = false) {
+    return this.updateSingleInvoice(supplier, invoiceNo, forceRead);
   },
 
   /**

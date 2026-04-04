@@ -337,8 +337,11 @@ const InvoiceManager = {
    * @returns {{success: boolean, action: string, invoiceId: string, row: number, error?: string, existingRow?: number}} Creation result
    */
   createInvoice: function (data, invoice = null, batchContext = null) {
-    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    if (!lock) {
+    // Skip per-row lock acquisition when the caller holds a batch lock already.
+    const ownLock = batchContext && batchContext.batchLock
+      ? null
+      : LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!batchContext?.batchLock && !ownLock) {
       return { success: false, error: 'Unable to acquire lock for invoice creation' };
     }
 
@@ -399,7 +402,7 @@ const InvoiceManager = {
       return {success: false, error: error.toString()};
 
     } finally {
-      LockManager.releaseLock(lock);
+      LockManager.releaseLock(ownLock);
     }
   },
 

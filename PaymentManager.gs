@@ -521,9 +521,11 @@ const PaymentManager = {
    * @returns {RecordPaymentResult} Result with payment ID and row number
    */
   _recordPayment: function(data, invoiceId, batchContext = null) {
-    // ═══ ACQUIRE LOCK FOR SHEET WRITE ═══
-    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    if (!lock) {
+    // Skip per-row lock acquisition when the caller holds a batch lock already.
+    const ownLock = batchContext && batchContext.batchLock
+      ? null
+      : LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!batchContext?.batchLock && !ownLock) {
       return { success: false, error: 'Unable to acquire payment lock' };
     }
 
@@ -581,7 +583,7 @@ const PaymentManager = {
       return {success: false, error: error.toString()};
     } finally {
       // ═══ RELEASE LOCK IMMEDIATELY AFTER WRITE ═══
-      LockManager.releaseLock(lock);
+      LockManager.releaseLock(ownLock);
     }
   },
 
@@ -951,7 +953,11 @@ const PaymentManager = {
     }
 
     CacheManager.markPaymentWritten(supplier, targetInvoice);
-    const cacheUpdated = CacheManager.updateInvoiceInCache(supplier, targetInvoice);
+    // forceRead=true: payment is already written to PaymentLog at this point, so
+    // getValues() will flush that write and return the evaluated SUMIFS balance.
+    // Without forceRead, the 100ms deferral leaves a stale formula string in cache,
+    // causing _sumInvoiceBalances to fall back to totalAmount (overcounts balance).
+    const cacheUpdated = CacheManager.updateInvoiceInCache(supplier, targetInvoice, true);
 
     if (!cacheUpdated) {
       // Log warning but don't fail - cache inconsistency is recoverable

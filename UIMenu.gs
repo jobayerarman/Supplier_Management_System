@@ -887,9 +887,10 @@ const UIMenu = {
     }
 
     const numRows = endRow - startRow + 1;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
 
     // UX FEEDBACK: Show initial toast with connection mode
-    SpreadsheetApp.getActiveSpreadsheet().toast(
+    ss.toast(
       `Starting batch post of ${numRows} rows (${connectionMode} mode)...`,
       'Processing',
       3
@@ -928,122 +929,129 @@ const UIMenu = {
     // getLastRow() calls (each is a ~500ms remote call in MASTER mode).
     const batchContext = this._initBatchContext();
 
-    // Process each row
-    for (let i = 0; i < allData.length; i++) {
-      const rowNum = startRow + i;
-      const rowData = allData[i];
+    // Process each row — single batch lock held across the whole loop so
+    // createInvoice() and _recordPayment() skip their per-row lock acquisitions.
+    // Lock is released in the finally block immediately after the loop.
+    try {
+      for (let i = 0; i < allData.length; i++) {
+        const rowNum = startRow + i;
+        const rowData = allData[i];
 
-      // UX FEEDBACK: Dynamic progress toast
-      if ((i + 1) % progressInterval === 0) {
-        SpreadsheetApp.getActiveSpreadsheet().toast(
-          `Processed ${i + 1} of ${numRows} rows...`,
-          'Progress',
-          2
-        );
-      }
+        // UX FEEDBACK: Dynamic progress toast
+        if ((i + 1) % progressInterval === 0) {
+          ss.toast(
+            `Processed ${i + 1} of ${numRows} rows...`,
+            'Progress',
+            2
+          );
+        }
 
-      // Skip empty rows (no supplier)
-      if (!rowData[CONFIG.cols.supplier]) {
-        results.skipped++;
-        continue;
-      }
+        // Skip empty rows (no supplier)
+        if (!rowData[CONFIG.cols.supplier]) {
+          results.skipped++;
+          continue;
+        }
 
-      // Skip already posted rows
-      const status = rowData[CONFIG.cols.status];
-      if (status && status.toString().toUpperCase() === 'POSTED') {
-        results.skipped++;
-        continue;
-      }
+        // Skip already posted rows
+        const status = rowData[CONFIG.cols.status];
+        if (status && status.toString().toUpperCase() === 'POSTED') {
+          results.skipped++;
+          continue;
+        }
 
-      try {
-        // Build data object (pass enteredBy to avoid redundant calls)
-        const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
+        try {
+          // Build data object (pass enteredBy to avoid redundant calls)
+          const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
 
-        // Validate first
-        const validation = validatePostData(data);
+          // Validate first
+          const validation = validatePostData(data);
 
-        if (!validation.valid) {
+          if (!validation.valid) {
+            results.failed++;
+            results.errors.push({
+              row: rowNum,
+              supplier: data.supplier,
+              invoiceNo: data.invoiceNo || 'N/A',
+              error: validation.error || validation.errors.join(', ')
+            });
+
+            const errorMsg = validation.error ||
+                             (validation.errors && validation.errors.length > 0
+                               ? validation.errors[0]
+                               : 'Validation failed');
+            pendingStatusUpdates.push({
+              rowNum,
+              keepChecked: false,
+              status:  `ERROR: ${errorMsg.substring(0, 100)}`,
+              user:    UserResolver.extractUsername(data.enteredBy),
+              time:    data.timestamp,
+              bgColor: CONFIG.colors.error
+            });
+
+            // Log error
+            AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
+            continue;
+          }
+
+          // Generate system ID if needed
+          if (!data.sysId) {
+            data.sysId = IDGenerator.generateUUID();
+            sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
+          }
+
+          // Process invoice (create if new, update if exists)
+          const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
+          data.invoiceId = invoiceResult.invoiceId;
+
+          // Process payment if applicable
+          if (this._shouldProcessPayment(data)) {
+            PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
+          }
+
+          // UPDATE BALANCE CELL
+          BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+
+          // Queue status update — flushed in one setValues() call after the loop
+          pendingStatusUpdates.push({
+            rowNum,
+            keepChecked: true,
+            status:  'POSTED',
+            user:    UserResolver.extractUsername(data.enteredBy),
+            time:    data.timestamp,
+            bgColor: CONFIG.colors.success
+          });
+
+          // Collect supplier for batch cache invalidation (done after loop)
+          suppliersToInvalidate.add(data.supplier);
+
+          results.posted++;
+
+        } catch (error) {
           results.failed++;
           results.errors.push({
             row: rowNum,
-            supplier: data.supplier,
-            invoiceNo: data.invoiceNo || 'N/A',
-            error: validation.error || validation.errors.join(', ')
+            supplier: rowData[CONFIG.cols.supplier],
+            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A',
+            error: error.message
           });
 
-          const errorMsg = validation.error ||
-                           (validation.errors && validation.errors.length > 0
-                             ? validation.errors[0]
-                             : 'Validation failed');
           pendingStatusUpdates.push({
             rowNum,
             keepChecked: false,
-            status:  `ERROR: ${errorMsg.substring(0, 100)}`,
-            user:    UserResolver.extractUsername(data.enteredBy),
-            time:    data.timestamp,
+            status:  `ERROR: ${error.message.substring(0, 100)}`,
+            user:    UserResolver.extractUsername(enteredBy),
+            time:    DateUtils.formatTimestamp(),
             bgColor: CONFIG.colors.error
           });
 
           // Log error
-          AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
-          continue;
+          AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
         }
-
-        // Generate system ID if needed
-        if (!data.sysId) {
-          data.sysId = IDGenerator.generateUUID();
-          sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
-        }
-
-        // Process invoice (create if new, update if exists)
-        const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
-        data.invoiceId = invoiceResult.invoiceId;
-
-        // Process payment if applicable
-        let paymentResult = null;
-        if (this._shouldProcessPayment(data)) {
-          paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
-        }
-
-        // UPDATE BALANCE CELL
-        BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
-
-        // Queue status update — flushed in one setValues() call after the loop
-        pendingStatusUpdates.push({
-          rowNum,
-          keepChecked: true,
-          status:  'POSTED',
-          user:    UserResolver.extractUsername(data.enteredBy),
-          time:    data.timestamp,
-          bgColor: CONFIG.colors.success
-        });
-
-        // Collect supplier for batch cache invalidation (done after loop)
-        suppliersToInvalidate.add(data.supplier);
-
-        results.posted++;
-
-      } catch (error) {
-        results.failed++;
-        results.errors.push({
-          row: rowNum,
-          supplier: rowData[CONFIG.cols.supplier],
-          invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A',
-          error: error.message
-        });
-
-        pendingStatusUpdates.push({
-          rowNum,
-          keepChecked: false,
-          status:  `ERROR: ${error.message.substring(0, 100)}`,
-          user:    UserResolver.extractUsername(enteredBy),
-          time:    DateUtils.formatTimestamp(),
-          bgColor: CONFIG.colors.error
-        });
-
-        // Log error
-        AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
       }
+    } finally {
+      // Release the batch lock immediately after the loop — post-loop work
+      // (cache invalidation, status flush, metrics) does not need it.
+      LockManager.releaseLock(batchContext ? batchContext.batchLock : null);
     }
 
     // BATCH CACHE INVALIDATION
@@ -1075,7 +1083,7 @@ const UIMenu = {
     //   `Suppliers invalidated: ${suppliersToInvalidate.size}`);
 
     // UX FEEDBACK: Final completion toast with performance
-    SpreadsheetApp.getActiveSpreadsheet().toast(
+    ss.toast(
       `Completed in ${(results.duration / 1000).toFixed(1)}s (${connectionMode} mode): ` +
       `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
       'Success',
@@ -1478,21 +1486,32 @@ const UIMenu = {
    * @private
    */
   _initBatchContext: function() {
-    if (!CONFIG.isMasterMode()) return null;
+    // PERF FIX Issue 4: Acquire ONE script lock for the entire batch.
+    // createInvoice() and _recordPayment() skip their per-row lock when
+    // batchContext.batchLock is present, eliminating ~100 lock ops per 50 rows.
+    // Non-fatal if acquisition fails — callees fall back to per-row locks.
+    const batchLock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+
+    if (!CONFIG.isMasterMode()) {
+      // LOCAL mode: no remote sheet pre-fetching needed; carry the lock only.
+      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
+    }
+
     try {
       const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
       const paymentSheet = MasterDatabaseUtils.getTargetSheet('payment');
       return {
-        invoiceSheet:    invoiceSheet,
-        paymentSheet:    paymentSheet,
+        batchLock,
+        invoiceSheet,
+        paymentSheet,
         invoiceNextRow:  invoiceSheet.getLastRow() + 1,
         paymentNextRow:  paymentSheet.getLastRow() + 1,
       };
     } catch (e) {
-      // Non-fatal — fall back to per-row getLastRow() calls
+      // Non-fatal — fall back to per-row getLastRow() calls; lock still carried.
       AuditLogger.logWarning('UIMenu._initBatchContext',
         `Failed to pre-fetch batch context: ${e.toString()}`);
-      return null;
+      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
     }
   },
 
