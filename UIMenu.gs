@@ -1129,10 +1129,45 @@ const UIMenu = {
   },
 
   /**
+   * PRIVATE: Returns the number of days in the template month.
+   *
+   * Reads the date from sheet "01" cell B3 and converts it to the
+   * spreadsheet's local timezone before extracting month/year. This is
+   * required because GAS executes in UTC: for UTC+6 (Bangladesh), a local
+   * date of April 1 00:00 is stored as March 31 18:00 UTC, so a naïve
+   * getMonth() would return 2 (March = 31 days) instead of 3 (April = 30).
+   *
+   * Falls back to 31 on any error so existing behaviour is preserved.
+   *
+   * @param {Spreadsheet} ss
+   * @returns {number} Last day of the template month (28–31)
+   * @private
+   */
+  _getDaysInMonth: function(ss) {
+    try {
+      const templateSheet = ss.getSheetByName('01');
+      if (!templateSheet) return 31;
+
+      const dateCell = templateSheet.getRange('B3').getValue();
+      if (!(dateCell instanceof Date) || isNaN(dateCell.getTime())) return 31;
+
+      // Use the spreadsheet's own timezone so UTC offsets don't shift the month.
+      const tz = ss.getSpreadsheetTimeZone();
+      const localStr = Utilities.formatDate(dateCell, tz, 'yyyy-MM-dd'); // e.g. "2026-04-01"
+      const [year, month] = localStr.split('-').map(Number);
+
+      // Day 0 of the next month = last day of the current month
+      return new Date(year, month, 0).getDate();
+    } catch (e) {
+      return 31;
+    }
+  },
+
+  /**
    * PRIVATE: Handle create all daily sheets operation
    *
-   * Creates sheets 02-31 from sheet 01 as template
-   * Updates formulas to reference previous day's sheet
+   * Creates sheets 02–<last day of month> from sheet 01 as template.
+   * Updates formulas to reference previous day's sheet.
    *
    * @private
    */
@@ -1146,18 +1181,18 @@ const UIMenu = {
         throw new Error('Template sheet "01" not found');
       }
 
+      // Start from Day 2 — up to the last day of the template month
+      const daysInMonth = this._getDaysInMonth(ss);
+      const sheetsToCreate = CONFIG.sheets.daily.slice(1, daysInMonth);
+
+      // Build a lookup map of already-existing sheets (one API call)
+      const sheetMap = {};
+      ss.getSheets().forEach(s => { sheetMap[s.getName()] = true; });
+
       let createdCount = 0;
 
-      // Create sheets from 02 to 31
-      for (let day = 2; day <= 31; day++) {
-        const sheetName = day.toString().padStart(2, '0');
-        const prevDayName = (day - 1).toString().padStart(2, '0');
-
-        // Check if sheet already exists
-        const existingSheet = ss.getSheetByName(sheetName);
-        if (existingSheet) {
-          continue;
-        }
+      sheetsToCreate.forEach(sheetName => {
+        if (sheetMap[sheetName]) return; // Skip existing
 
         // Copy template and rename
         const newSheet = templateSheet.copyTo(ss);
@@ -1167,12 +1202,13 @@ const UIMenu = {
         this._updateDateFormulas(newSheet, sheetName);
 
         createdCount++;
-      }
+      });
 
       // Reorganize sheets in order
       this._organizeSheetOrder(ss);
 
-      ui.alert(`Successfully created ${createdCount} daily sheets (02-31) with proper formula references.`);
+      const lastSheet = sheetsToCreate[sheetsToCreate.length - 1] || '01';
+      ui.alert(`Successfully created ${createdCount} daily sheets (02-${lastSheet}) with proper formula references.`);
     } catch (error) {
       ui.alert(`Error creating daily sheets: ${error.message}`);
     }
@@ -1197,12 +1233,14 @@ const UIMenu = {
 
       const missingSheets = [];
 
-      // Check which sheets are missing
-      CONFIG.dailySheets.forEach(sheetName => {
-        if (sheetName === '01') return;
+      // Build a lookup map of already-existing sheets (one API call)
+      const sheetMap = {};
+      ss.getSheets().forEach(s => { sheetMap[s.getName()] = true; });
 
-        const existingSheet = ss.getSheetByName(sheetName);
-        if (!existingSheet) {
+      // Check only sheets valid for this month (02 … last day of month)
+      const daysInMonth = this._getDaysInMonth(ss);
+      CONFIG.sheets.daily.slice(1, daysInMonth).forEach(sheetName => {
+        if (!sheetMap[sheetName]) {
           missingSheets.push(sheetName);
         }
       });
@@ -1357,9 +1395,14 @@ const UIMenu = {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard', 'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
 
+    // Determine valid range for this month before prompting
+    const daysInMonth = this._getDaysInMonth(ss);
+    const validDailySet = new Set(CONFIG.sheets.daily.slice(1, daysInMonth)); // '02'…last day
+    const lastSheet = CONFIG.sheets.daily[daysInMonth - 1] || '31';
+
     const response = ui.alert(
       '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
-      'This will delete ONLY daily transaction sheets (02-31).\n\nProtected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?',
+      `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\nProtected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?`,
       ui.ButtonSet.YES_NO
     );
 
@@ -1371,19 +1414,17 @@ const UIMenu = {
       const sheetsToDelete = [];
       const allSheets = ss.getSheets();
 
-      // Identify sheets to delete
+      // Identify sheets to delete: must be in this month's valid range and not protected
       allSheets.forEach(sheet => {
         const sheetName = sheet.getName();
 
-        if (CONFIG.dailySheets.includes(sheetName) &&
-            sheetName !== '01' &&
-            !protectedSheets.includes(sheetName)) {
+        if (validDailySet.has(sheetName) && !protectedSheets.includes(sheetName)) {
           sheetsToDelete.push(sheetName);
         }
       });
 
       if (sheetsToDelete.length === 0) {
-        ui.alert('No daily sheets (02-31) found to delete.');
+        ui.alert(`No daily sheets (02-${lastSheet}) found to delete.`);
         return;
       }
 
