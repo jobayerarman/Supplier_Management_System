@@ -854,3 +854,37 @@ function removeInstallableEditTrigger() {
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
+
+/**
+ * Menu handler: Setup Installable Trigger with pre-confirmation dialog
+ */
+function setupInstallableTriggerWithConfirmation() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    '⚠️ Setup Installable Trigger',
+    'This will remove any existing edit triggers and install a new one for Master Database mode.\n\n' +
+    'Continue?',
+    ui.ButtonSet.YES_NO
+  );
+  if (response === ui.Button.YES) {
+    setupInstallableEditTrigger();
+  }
+}
+
+/**
+ * Menu handler: Remove Installable Trigger with pre-confirmation dialog
+ */
+function removeInstallableTriggerWithConfirmation() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    '⚠️ Remove Installable Trigger',
+    'This will remove the installable edit trigger.\n\n' +
+    'The spreadsheet will fall back to the simple onEdit trigger. ' +
+    'Master Database writes will stop working.\n\n' +
+    'Continue?',
+    ui.ButtonSet.YES_NO
+  );
+  if (response === ui.Button.YES) {
+    removeInstallableEditTrigger();
+  }
+}

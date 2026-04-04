@@ -296,42 +296,47 @@ const UIMenu = {
   createMenus: function() {
     const ui = SpreadsheetApp.getUi();
 
-    ui.createMenu('📋FP - Operations')
-      // ═══ BATCH OPERATIONS ═══
-      .addItem('Batch Validate All Rows', 'batchValidateAllRows')
-      .addItem('Batch Post All Valid Rows', 'batchPostAllRows')
-      .addSeparator()
-      .addItem('Validate Selected Rows', 'batchValidateSelectedRows')
-      .addItem('Post Selected Rows', 'batchPostSelectedRows')
-      .addSeparator()
+    ui.createMenu('📋 FP - Operations')
 
-      // ═══ DAILY SHEET MANAGEMENT ═══
-      .addSubMenu(ui.createMenu('📝 Daily Sheets')
-        .addItem('Create All Daily Sheets (02-31)', 'createDailySheets')
-        .addItem('Create Missing Sheets Only', 'createMissingSheets')
-        .addItem('Reorganize Sheets', 'organizeSheets')
-        .addItem('Fix Date Formulas Only', 'fixDateFormulasOnly'))
+      // ═══ DAILY ═══
+      .addItem('✅ Validate Selected Rows', 'batchValidateSelectedRows')
+      .addItem('📤 Post Selected Rows', 'batchPostSelectedRows')
       .addSeparator()
+      .addItem('✅ Batch Validate All Rows', 'batchValidateAllRows')
+      .addItem('📤 Batch Post All Valid Rows', 'batchPostAllRows')
 
-      // ═══ RESET OPERATIONS ═══
+      // ═══ MONTHLY ═══
+      .addSubMenu(ui.createMenu('📅 Monthly Setup')
+        .addItem('🗑️ Delete Daily Sheets (02-31)', 'deleteDailySheetsSafe')
+        .addSeparator()
+        .addItem('☑️ Clear All Post Checkboxes', 'clearAllPostCheckboxes')
+        .addItem('🧹 Reset Current Sheet to Zero', 'resetInputCellsToZero')
+        .addSeparator()
+        .addItem('📄 Create All Daily Sheets (02-31)', 'createDailySheets')
+        .addItem('📄 Create Missing Sheets Only', 'createMissingSheets')
+        .addSeparator()
+        .addItem('🗂️ Reorganize Sheets', 'organizeSheets')
+        .addItem('🔧 Fix Date Formulas Only', 'fixDateFormulasOnly'))
+
+      // ═══ OCCASIONAL ═══
       .addSubMenu(ui.createMenu('🔄 Reset Operations')
-        .addItem('Reset Current Sheet to Zero', 'resetInputCellsToZero')
-        .addItem('Reset All Daily Sheets to Zero', 'resetAllDailySheetsToZero')
-        .addItem('⚡ Quick Reset Current Sheet', 'quickResetCurrentSheet'))
-      .addSeparator()
+        .addItem('🧹 Quick Reset Current Sheet', 'quickResetCurrentSheet')
+        .addItem('🧹 Reset All Daily Sheets to Zero', 'resetAllDailySheetsToZero'))
 
-      // ═══ USER SETTINGS & UTILITIES ═══
-      .addItem('Clear All Post Checkboxes', 'clearAllPostCheckboxes')
-      .addItem('🗑️ Delete Daily Sheets (02-31)', 'deleteDailySheetsSafe')
+      // ═══ ADMIN ═══
       .addSeparator()
+      .addSubMenu(ui.createMenu('⚙️ System & Admin')
+        .addItem('🏥 System Health Check', 'MenuRunDataIntegrityCheck')
+        .addSeparator()
+        .addItem('⚠️ Setup Installable Trigger', 'setupInstallableTriggerWithConfirmation')
+        .addItem('⚠️ Remove Installable Trigger', 'removeInstallableTriggerWithConfirmation'))
       .addSubMenu(ui.createMenu('👤 User Settings')
-        .addItem('Set My Email', 'menuSetMyEmail')
-        .addItem('Show User Info', 'menuShowUserInfo')
-        .addItem('Clear User Cache', 'menuClearUserCache')
+        .addItem('📧 Set My Email', 'menuSetMyEmail')
+        .addItem('ℹ️ Show User Info', 'menuShowUserInfo')
+        .addItem('🗑️ Clear User Cache', 'menuClearUserCache')
         .addSeparator()
         .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
-      .addSeparator()
-      .addItem('System Health Check', 'MenuRunDataIntegrityCheck')
+
       .addToUi();
   },
 
