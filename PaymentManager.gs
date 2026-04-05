@@ -877,40 +877,6 @@ const PaymentManager = {
   },
 
   /**
-   * Helper: Check if paid date is already set on invoice
-   * @private
-   * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
-   * @returns {boolean} True if paid date is already set
-   */
-  _isPaidDateAlreadySet: function(invoice) {
-    const col = CONFIG.invoiceCols;
-    return !!invoice.data[col.paidDate];
-  },
-
-  /**
-   * Helper: Check if paid date is already set in actual InvoiceDatabase sheet
-   * Reads the sheet directly to avoid stale cache data.
-   * Critical for accurate INVOICE_ALREADY_PAID detection.
-   *
-   * @private
-   * @param {Object} invoice - Invoice object with row number
-   * @returns {boolean} True if column H (paidDate) contains a value in the actual sheet
-   */
-  _isPaidDateAlreadySetInSheet: function(invoice) {
-    try {
-      const invoiceSh = MasterDatabaseUtils.getSourceSheet('invoice');
-      const col = CONFIG.invoiceCols;
-      const paidDateValue = invoiceSh.getRange(invoice.row, col.paidDate + 1).getValue();
-      return !!paidDateValue; // True if column H is not empty
-    } catch (error) {
-      AuditLogger.logWarning('PaymentManager._isPaidDateAlreadySetInSheet',
-        `Failed to read paid date from sheet: ${error.toString()}`);
-      // On error, fall back to cached data to avoid blocking the operation
-      return this._isPaidDateAlreadySet(invoice);
-    }
-  },
-
-  /**
    * Helper: Write paid date to sheet with lock management
    * ✓ REFACTORED: Uses _withLock wrapper for standardized lock handling
    *
@@ -1106,21 +1072,6 @@ const PaymentManager = {
     result.balanceInfo = balanceInfo;
     result.reason = 'partial_payment';
     result.message = `Invoice ${invoiceNo} partially paid | Balance: ${balanceInfo.balanceDue}`;
-    return result;
-  },
-
-  /**
-   * Result Builder: Already paid result
-   * @private
-   * @param {string} invoiceNo - Invoice number
-   * @param {string} currentPaidDate - Existing paid date
-   * @returns {PaidStatusResult} Result indicating already paid
-   */
-  _buildAlreadyPaidResult: function(invoiceNo, currentPaidDate) {
-    const result = this._createBasePaidStatusResult();
-    result.fullyPaid = true;
-    result.reason = 'already_set';
-    result.message = `Invoice ${invoiceNo} already marked as paid on ${currentPaidDate}`;
     return result;
   },
 
