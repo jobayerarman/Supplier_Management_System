@@ -383,45 +383,15 @@ const Code = {
    */
   processPostedRow: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
     const cols = CONFIG.cols;
-    const totalCols = CONFIG.totalColumns.daily;
     const colors = CONFIG.colors;
     const now = DateUtils.now();
     const timeStr = DateUtils.formatTime(now);
     const sheetName = sheet.getName();
 
     try {
-      if (!rowData) {
-        rowData = sheet.getRange(rowNum, 1, 1, totalCols).getValues()[0];
-      }
-
-      const supplier = rowData[cols.supplier];
-      const invoiceNo = rowData[cols.invoiceNo];
-      const receivedAmt = parseFloat(rowData[cols.receivedAmt]) || 0;
-      const paymentType = rowData[cols.paymentType];
-      const prevInvoice = rowData[cols.prevInvoice];
-      const paymentAmt = parseFloat(rowData[cols.paymentAmt]) || 0;
-      const sysId = rowData[cols.sysId] || IDGenerator.generateUUID();
-
-      const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
-      const paymentDate = getDailySheetDate(sheetName) || now;
-      const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
-
-      const data = {
-        sheetName,
-        rowNum,
-        supplier,
-        invoiceNo,
-        invoiceDate: finalInvoiceDate,
-        receivedAmt,
-        paymentAmt,
-        paymentType,
-        paymentDate: paymentDate,
-        prevInvoice,
-        notes: rowData[cols.notes],
-        enteredBy: finalEnteredBy,
-        timestamp: now,
-        sysId
-      };
+      const built = this._buildTransactionData(sheet, rowNum, rowData, invoiceDate, enteredBy, sheetName, now);
+      rowData = built.rowData;
+      const data = built.data;
 
       const validation = validatePostData(data);
       if (!validation.valid) {
@@ -462,10 +432,10 @@ const Code = {
       const sysIdValue = !rowData[cols.sysId] ? data.sysId : null;
       // Mark payment written before invalidation so cache defers re-read until SUMIFS recalculates
       // See CLAUDE.md Critical Gotcha #2
-      CacheManager.markPaymentWritten(supplier, data.invoiceNo || data.prevInvoice);
-      CacheManager.invalidateSupplierCache(supplier);
+      CacheManager.markPaymentWritten(data.supplier, data.invoiceNo || data.prevInvoice);
+      CacheManager.invalidateSupplierCache(data.supplier);
 
-      const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(finalEnteredBy), timeStr]];
+      const statusUpdates = [[true, "POSTED", UserResolver.extractUsername(data.enteredBy), timeStr]];
       sheet.getRange(rowNum, cols.post + 1, 1, 4).setValues(statusUpdates);
 
       if (sysIdValue) {
@@ -480,6 +450,49 @@ const Code = {
       writePostStatus(sheet, rowNum, errMsg, "SYSTEM", timeStr, false, colors.error);
       AuditLogger.logError('processPostedRow', error.toString());
     }
+  },
+
+  /**
+   * Build transaction data object from row
+   *
+   * Reads missing rowData from sheet if not supplied, coerces field types,
+   * and assembles the canonical `data` payload used throughout the POST workflow.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+   * @param {number} rowNum
+   * @param {Array|null} rowData - Pre-read row values, or null to read from sheet
+   * @param {Date|null} invoiceDate
+   * @param {string|null} enteredBy
+   * @param {string} sheetName
+   * @param {Date} now
+   * @returns {{rowData: Array, data: Object}}
+   */
+  _buildTransactionData: function(sheet, rowNum, rowData, invoiceDate, enteredBy, sheetName, now) {
+    const cols = CONFIG.cols;
+    if (!rowData) {
+      rowData = sheet.getRange(rowNum, 1, 1, CONFIG.totalColumns.daily).getValues()[0];
+    }
+    const finalInvoiceDate = invoiceDate || getDailySheetDate(sheetName) || now;
+    const finalEnteredBy = enteredBy || UserResolver.getCurrentUser();
+    return {
+      rowData: rowData,
+      data: {
+        sheetName,
+        rowNum,
+        supplier:    rowData[cols.supplier],
+        invoiceNo:   rowData[cols.invoiceNo],
+        invoiceDate: finalInvoiceDate,
+        receivedAmt: parseFloat(rowData[cols.receivedAmt]) || 0,
+        paymentAmt:  parseFloat(rowData[cols.paymentAmt]) || 0,
+        paymentType: rowData[cols.paymentType],
+        paymentDate: getDailySheetDate(sheetName) || now,
+        prevInvoice: rowData[cols.prevInvoice],
+        notes:       rowData[cols.notes],
+        enteredBy:   finalEnteredBy,
+        timestamp:   now,
+        sysId:       rowData[cols.sysId] || IDGenerator.generateUUID()
+      }
+    };
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
