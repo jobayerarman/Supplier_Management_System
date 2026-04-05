@@ -4,155 +4,35 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * OVERVIEW:
- * Batch operations system for streamlining end-of-day workflow processing.
- * Provides custom menu interface for bulk validation and posting operations
- * with real-time progress tracking and comprehensive error reporting.
+ * Batch operations system for end-of-day workflow processing. Provides a
+ * custom menu for bulk validation and posting with progress tracking and
+ * comprehensive error reporting.
  *
  * CORE RESPONSIBILITIES:
- * ━━━━━━━━━━━━━━━━━━━━
- * 1. MENU MANAGEMENT
- *    - onOpen(): Create custom menu on spreadsheet open
- *    - Menu structure: Batch validation, batch posting, user settings, utilities
- *    - Delegates to module methods for all operations
- *
- * 2. BATCH VALIDATION
- *    - UIMenu.batchValidateAllRows(): Validate all rows without posting
- *    - UIMenu.batchValidateSelectedRows(): Validate selected rows only
- *    - Real-time progress tracking with dynamic update intervals
- *    - Error collection with detailed error reporting
- *
- * 3. BATCH POSTING
- *    - UIMenu.batchPostAllRows(): Validate and post all valid rows
- *    - UIMenu.batchPostSelectedRows(): Post selected rows only
- *    - Performance-optimized cache invalidation (once per supplier)
- *    - Comprehensive error handling and status updates
- *
- * 4. UTILITY OPERATIONS
- *    - UIMenu.clearAllPostCheckboxes(): Reset sheet after batch operations
- *    - User settings delegation to UserResolver module
- *
- * ARCHITECTURE & DESIGN PATTERNS:
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * MODULE ORGANIZATION (following Code/PaymentManager patterns):
- *   1. MODULE HEADER - This documentation
- *   2. GLOBAL MENU FUNCTIONS - onOpen, handler entry points
- *   3. UIMENU MODULE - Public API and private helpers
- *      - PUBLIC API - User-facing batch operations
- *      - PRIVATE HANDLERS - Operation-specific logic
- *      - PRIVATE UTILITIES - Shared helper functions
- *   4. USER SETTINGS DELEGATION - MenuSetMyEmail, etc. (in _UserResolver.gs)
- *
- * DESIGN PATTERNS USED:
- *   • Module Pattern: Encapsulation via UIMenu object with public/private methods
- *   • Handler Dispatch: Delegates from global functions to module methods
- *   • Single Responsibility: Each handler focused on specific batch operation
- *   • Early Exit Pattern: Validation gates prevent unnecessary processing
- *   • Error Boundary: Try-catch with consistent audit logging
- *   • Performance Optimization: Phase 2 parameter passing (user caching)
- *
- * PERFORMANCE STRATEGY:
- * ━━━━━━━━━━━━━━━━━━
- * BATCH READ PATTERN:
- *   - Single batch read: getRange(...).getValues() (1 API call)
- *   - In-memory processing loop (zero redundant reads)
- *   - Collected writes in single batch operation
- *
- * USER RESOLUTION OPTIMIZATION (Phase 2):
- *   - Get user once before loop: UserResolver.getCurrentUser()
- *   - Pass through batch: buildDataObject(..., enteredBy)
- *   - Result: 99% reduction in UserResolver calls per batch
- *
- * CACHE INVALIDATION OPTIMIZATION:
- *   - Collect suppliers in Set during loop
- *   - Invalidate once per unique supplier after loop
- *   - Result: 50-90% reduction in redundant invalidations
- *
- * PROGRESS FEEDBACK:
- *   - Dynamic intervals: Targets ~10 updates regardless of batch size
- *   - Formula: interval = max(5, min(100, ceil(totalRows / 10)))
- *   - Minimal UI blocking during heavy processing
- *
- * MASTER DATABASE COMPATIBILITY:
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * - Connection mode tracked and logged (BATCH_POST_START)
- * - All reads from daily sheets (always local, fast)
- * - All writes via InvoiceManager/PaymentManager (Master DB aware)
- * - Performance metrics logged per operation mode
- * - Toast notifications show connection mode and expected performance
- * - Audit logging includes supplier cache invalidation count
- *
- * INTEGRATION POINTS:
- * ━━━━━━━━━━━━━━━━━
- * VALIDATION INTEGRATION (ValidationEngine.gs):
- *   - validatePostData(): Main validation for each row
- *   - validatePaymentTypeRules(): Payment type specific validation
- *
- * INVOICE INTEGRATION (InvoiceManager.gs):
- *   - createOrUpdateInvoice(): UPSERT operation during posting
- *
- * PAYMENT INTEGRATION (PaymentManager.gs):
- *   - processPayment(): Record payment transaction during posting
- *
- * BALANCE INTEGRATION (BalanceCalculator.gs):
- *   - updateBalanceCell(): Calculate balance after posting
- *
- * CACHE INTEGRATION (CacheManager.gs):
- *   - invalidateSupplierCache(): Surgical invalidation per supplier
- *   - Result: O(n) cache calls reduced to O(m) where m = unique suppliers
- *
- * USER RESOLUTION (UserResolver.gs):
- *   - getCurrentUser(): Get user once before batch loop
- *   - extractUsername(): Format for display in status column
- *   - User settings menu functions (menuSetMyEmail, menuShowUserInfo, etc.)
- *
- * AUDIT INTEGRATION (AuditLogger.gs):
- *   - BATCH_POST_START: Log connection mode at batch start
- *   - BATCH_POST_COMPLETE: Log performance metrics at completion
- *   - flush(): Batch audit operations into single write
- *
- * CONFIGURATION (CONFIG):
- *   - CONFIG.dataStartRow: First data row (7, 1-based; rows 1-6 are headers/titles, B3 = date)
- *   - CONFIG.totalColumns.daily: Column count for daily sheets
- *   - CONFIG.cols: Column index mappings
- *   - CONFIG.dailySheets: Array of valid sheet names (01-31)
- *   - CONFIG.colors: UI colors for status display
+ * - Menu management      : onOpen(), custom menu structure and delegates
+ * - Batch validation     : validateAllRows, validateSelectedRows, error collection
+ * - Batch posting        : postAllRows, postSelectedRows, cache invalidation, status updates
+ * - Utility operations   : clearCheckboxes, sheet management, reset operations
  *
  * DATA STRUCTURES:
- * ━━━━━━━━━━━━━━
- * VALIDATION RESULTS:
- *   {
- *     total: number,           // Total rows processed
- *     valid: number,           // Passed validation
- *     invalid: number,         // Failed validation
- *     skipped: number,         // Empty or already posted
- *     errors: Array<{
- *       row: number,           // Row number
- *       supplier: string,      // Supplier name
- *       invoiceNo: string,     // Invoice number
- *       error: string          // Error message
- *     }>
- *   }
  *
- * POSTING RESULTS (extends Validation Results):
- *   {
- *     ...validation results...
- *     posted: number,          // Successfully posted
- *     failed: number,          // Failed to post
- *     connectionMode: string,  // 'LOCAL' or 'MASTER'
- *     duration: number,        // Total time in ms
- *     avgTimePerRow: number    // Average ms per row
- *   }
+ * Validation Results:
+ *   { total, valid, invalid, skipped,
+ *     errors: [{ row, supplier, invoiceNo, error }] }
  *
- * Modular Architecture Dependencies:
- * - _Config.gs → global configuration
- * - _Utils.gs → date utilities (getDailySheetDate), ID generation
- * - _UserResolver.gs → user identification and menu functions
- * - ValidationEngine.gs → business rule validation
- * - InvoiceManager.gs → invoice CRUD operations
- * - PaymentManager.gs → payment processing
- * - BalanceCalculator.gs → balance calculations
- * - CacheManager.gs → cache invalidation operations
- * - AuditLogger.gs → audit trail operations
+ * Posting Results (extends Validation Results):
+ *   { ...validationResults, posted, failed,
+ *     connectionMode,   // 'LOCAL' or 'MASTER'
+ *     duration,         // total ms
+ *     avgTimePerRow }   // ms per posted row
+ *
+ * @see agent_docs/caching_architecture.md  — batch read + cache invalidation strategy
+ * @see agent_docs/master_database.md       — LOCAL/MASTER mode behaviour
+ * @see agent_docs/coding_patterns.md       — naming conventions, error handling patterns
+ *
+ * Dependencies: _Config.gs, _Utils.gs, _UserResolver.gs, ValidationEngine.gs,
+ *               InvoiceManager.gs, PaymentManager.gs, BalanceCalculator.gs,
+ *               CacheManager.gs, AuditLogger.gs
  */
 
 /**
