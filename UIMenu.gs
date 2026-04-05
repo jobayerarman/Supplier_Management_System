@@ -1407,7 +1407,15 @@ const UIMenu = {
     SpreadsheetApp.getUi().alert(title, message, SpreadsheetApp.getUi().ButtonSet.OK);
   },
 
-  /** @private Build the text body for the validation/posting results dialog. */
+  /**
+   * PRIVATE: Build the text body for the validation/posting results dialog.
+   *
+   * @param {Object}  results    - Results object with validation/posting data
+   * @param {boolean} isPosting  - True if posting operation, false if validation only
+   * @param {number}  maxErrors  - Maximum error entries to show before truncating
+   * @return {string} Formatted multi-line message string
+   * @private
+   */
   _buildValidationMessage: function(results, isPosting, maxErrors) {
     let message = `Total Rows Processed: ${results.total}\n`;
 
