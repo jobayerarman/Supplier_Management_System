@@ -92,6 +92,19 @@ Audited against current `<File>.gs` (<N> lines).
 
 ---
 
+## Verification Checklist
+
+Run after all tasks complete.
+
+- [ ] Zero parse errors (paste into target runtime environment, check for syntax errors)
+- [ ] No function exceeds target size (grep for oversized functions)
+- [ ] DRY targets eliminated: zero `<repeated pattern>` outside the helper
+- [ ] Lock/resource release preserved in `finally` block
+- [ ] Smoke test: <describe one end-to-end action that exercises the refactored path>
+- [ ] Smoke test: <describe a second action covering a different refactored path>
+
+---
+
 ## Task N: <Description> (Lines X–Y)
 
 **Files:**
