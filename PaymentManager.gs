@@ -661,7 +661,7 @@ const PaymentManager = {
 
       // ═══ STEP 4: WRITE PAID DATE TO SHEET ═══
       try {
-        this._writePaidDateToSheet(invoice, paidDate);
+        this._writePaidDateToSheet(invoice, paidDate, context.paymentType);
         // Log AFTER successful sheet write (inside try block)
         AuditLogger.log('INVOICE_FULLY_PAID', context.transactionData,
         `Invoice ${invoiceNo} ${successResult.message} | Invoice row ${invoice.row} | Total Paid: ${balanceInfo.totalPaid}/${balanceInfo.totalAmount} | Payment: ${context.paymentId}`);
@@ -914,17 +914,36 @@ const PaymentManager = {
    * Helper: Write paid date to sheet with lock management
    * ✓ REFACTORED: Uses _withLock wrapper for standardized lock handling
    *
+   * Writes to Master DB (or local sheet in local mode). Local monthly files
+   * display InvoiceDatabase data via IMPORTRANGE — no secondary write needed.
+   *
+   * Read-back verification is performed only for Due payments, where the
+   * paid date update is known to be intermittently missing.
+   *
    * @private
    * @param {Object} invoice - Invoice object from InvoiceManager.findInvoice()
    * @param {Date} paidDate - Date to set as paid date
+   * @param {string} [paymentType] - Payment type (e.g. 'Due', 'Regular', 'Partial')
    * @throws {Error} If unable to acquire lock
    */
-  _writePaidDateToSheet: function(invoice, paidDate) {
+  _writePaidDateToSheet: function(invoice, paidDate, paymentType) {
     return this._withLock('script', () => {
+      const paidDateCol = CONFIG.invoiceCols.paidDate + 1;
       const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
-      const col = CONFIG.invoiceCols;
-      invoiceSh.getRange(invoice.row, col.paidDate + 1).setValue(paidDate);
-      SpreadsheetApp.flush(); // Force commit to external Master DB before lock release
+
+      invoiceSh.getRange(invoice.row, paidDateCol).setValue(paidDate);
+      SpreadsheetApp.flush(); // Force commit before lock release
+
+      // Read-back verification for Due payments only
+      if (paymentType === 'Due') {
+        const writtenValue = invoiceSh.getRange(invoice.row, paidDateCol).getValue();
+        if (!writtenValue) {
+          const formula = invoiceSh.getRange(invoice.row, paidDateCol).getFormula();
+          AuditLogger.logWarning('PaymentManager._writePaidDateToSheet',
+            `Paid date write failed: row ${invoice.row} col ${paidDateCol} | ` +
+            `wrote="${paidDate}" (${typeof paidDate}) | read="${writtenValue}" | formula="${formula}"`);
+        }
+      }
     }, 'paid date update');
   },
 

@@ -10,6 +10,29 @@
 
 ---
 
+## Self-test: 2026-04-05
+
+Audited against current `UIMenu.gs` (1869 lines). Results:
+
+| Task | Status | Notes |
+|------|--------|-------|
+| Task 1 | ⬜ pending | Header still 156 lines |
+| Task 2 | ⬜ pending | `_handleBatchPosting` still monolithic (lines 867–1099) |
+| Task 3 | ⬜ pending | `_handleBatchValidation` still monolithic (lines 736–845) |
+| Task 4 | ⬜ pending | `_handleDeleteDailySheets` still monolithic (lines 1393–1469) |
+| Task 5 | ⬜ pending | `_showValidationResults` still monolithic (line 1614) |
+| Task 6 | ⬜ pending | `_confirmOperation` does not exist |
+| Task 7 | ⬜ pending | 4 `SpreadsheetApp.getActiveSpreadsheet().toast(` calls remain |
+| Task 8 | ⬜ pending | Section comments not yet updated |
+
+**Corrections applied in this revision:**
+- Updated all line number references to match current file
+- **Task 2**: Added `try/finally` to `_runBatchPostLoop` to preserve lock release via `LockManager.releaseLock()`; fixed `results.errors.push` to use `validation.errors.join(', ')` (not `errorMsg`)
+- **Task 4**: `_handleDeleteDailySheets` and `_collectSheetsToDelete` updated to preserve `_getDaysInMonth()` dynamic-range logic and `CONFIG.sheets.daily` references
+- **Task 7**: Corrected expected occurrence count (~7, not ~13)
+
+---
+
 ## Files
 
 | Action | File | What changes |
@@ -80,13 +103,17 @@ git commit -m "refactor(UIMenu): compress 156-line header to ~40 lines"
 
 ---
 
-## Task 2: Decompose `_handleBatchPosting` (Lines 862–1086)
+## Task 2: Decompose `_handleBatchPosting` (Lines 867–1099)
 
 **Files:**
-- Modify: `UIMenu.gs:862-1086`
+- Modify: `UIMenu.gs:867-1099`
 
-The 234-line function splits into a ~30-line orchestrator + 5 co-located phase helpers.
+The 233-line function splits into a ~30-line orchestrator + 5 co-located phase helpers.
 The helpers are placed **immediately below** the orchestrator, before `_handleClearCheckboxes`.
+
+> **Lock-release note:** The current function wraps the row loop in `try/finally` to release
+> the batch lock (`LockManager.releaseLock(batchContext.batchLock)`) even on error.
+> This MUST be preserved — `_runBatchPostLoop` carries the `try/finally`.
 
 - [ ] **Step 1: Replace `_handleBatchPosting` with the orchestrator + 5 phase helpers**
 
@@ -150,78 +177,85 @@ Replace the entire `_handleBatchPosting` function (from its opening `/**` commen
             results, suppliersToInvalidate, pendingStatusUpdates,
             progressInterval, enteredBy, batchContext } = context;
 
-    for (let i = 0; i < allData.length; i++) {
-      const rowNum  = startRow + i;
-      const rowData = allData[i];
+    try {
+      for (let i = 0; i < allData.length; i++) {
+        const rowNum  = startRow + i;
+        const rowData = allData[i];
 
-      if ((i + 1) % progressInterval === 0) {
-        SpreadsheetApp.getActiveSpreadsheet().toast(
-          `Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2
-        );
-      }
+        if ((i + 1) % progressInterval === 0) {
+          SpreadsheetApp.getActiveSpreadsheet().toast(
+            `Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2
+          );
+        }
 
-      if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
+        if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
 
-      const status = rowData[CONFIG.cols.status];
-      if (status && status.toString().toUpperCase() === 'POSTED') { results.skipped++; continue; }
+        const status = rowData[CONFIG.cols.status];
+        if (status && status.toString().toUpperCase() === 'POSTED') { results.skipped++; continue; }
 
-      try {
-        const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
-        const validation = validatePostData(data);
+        try {
+          const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
+          const validation = validatePostData(data);
 
-        if (!validation.valid) {
+          if (!validation.valid) {
+            results.failed++;
+            results.errors.push({ row: rowNum, supplier: data.supplier,
+                                  invoiceNo: data.invoiceNo || 'N/A',
+                                  error: validation.error || validation.errors.join(', ') });
+
+            const errorMsg = validation.error ||
+              (validation.errors && validation.errors.length > 0 ? validation.errors[0] : 'Validation failed');
+            pendingStatusUpdates.push({
+              rowNum, keepChecked: false,
+              status:  `ERROR: ${errorMsg.substring(0, 100)}`,
+              user:    UserResolver.extractUsername(data.enteredBy),
+              time:    data.timestamp, bgColor: CONFIG.colors.error
+            });
+            AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
+            continue;
+          }
+
+          if (!data.sysId) {
+            data.sysId = IDGenerator.generateUUID();
+            sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
+          }
+
+          const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
+          data.invoiceId = invoiceResult.invoiceId;
+
+          if (this._shouldProcessPayment(data)) {
+            PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
+          }
+
+          BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+
+          pendingStatusUpdates.push({
+            rowNum, keepChecked: true, status: 'POSTED',
+            user:    UserResolver.extractUsername(data.enteredBy),
+            time:    data.timestamp, bgColor: CONFIG.colors.success
+          });
+
+          suppliersToInvalidate.add(data.supplier);
+          results.posted++;
+
+        } catch (error) {
           results.failed++;
-          const errorMsg = validation.error ||
-            (validation.errors && validation.errors.length > 0 ? validation.errors[0] : 'Validation failed');
-          results.errors.push({ row: rowNum, supplier: data.supplier,
-                                invoiceNo: data.invoiceNo || 'N/A', error: errorMsg });
+          results.errors.push({
+            row: rowNum, supplier: rowData[CONFIG.cols.supplier],
+            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
+          });
           pendingStatusUpdates.push({
             rowNum, keepChecked: false,
-            status:  `ERROR: ${errorMsg.substring(0, 100)}`,
-            user:    UserResolver.extractUsername(data.enteredBy),
-            time:    data.timestamp, bgColor: CONFIG.colors.error
+            status:  `ERROR: ${error.message.substring(0, 100)}`,
+            user:    UserResolver.extractUsername(enteredBy),
+            time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error
           });
-          AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
-          continue;
+          AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
         }
-
-        if (!data.sysId) {
-          data.sysId = IDGenerator.generateUUID();
-          sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
-        }
-
-        const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
-        data.invoiceId = invoiceResult.invoiceId;
-
-        if (this._shouldProcessPayment(data)) {
-          PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
-        }
-
-        BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
-
-        pendingStatusUpdates.push({
-          rowNum, keepChecked: true, status: 'POSTED',
-          user:    UserResolver.extractUsername(data.enteredBy),
-          time:    data.timestamp, bgColor: CONFIG.colors.success
-        });
-
-        suppliersToInvalidate.add(data.supplier);
-        results.posted++;
-
-      } catch (error) {
-        results.failed++;
-        results.errors.push({
-          row: rowNum, supplier: rowData[CONFIG.cols.supplier],
-          invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
-        });
-        pendingStatusUpdates.push({
-          rowNum, keepChecked: false,
-          status:  `ERROR: ${error.message.substring(0, 100)}`,
-          user:    UserResolver.extractUsername(enteredBy),
-          time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error
-        });
-        AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
       }
+    } finally {
+      // Release batch lock immediately after loop — post-loop work does not need it.
+      LockManager.releaseLock(batchContext ? batchContext.batchLock : null);
     }
   },
 
@@ -271,10 +305,10 @@ git commit -m "refactor(UIMenu): decompose _handleBatchPosting into 5 phase help
 
 ---
 
-## Task 3: Decompose `_handleBatchValidation` (Lines 731–840)
+## Task 3: Decompose `_handleBatchValidation` (Lines 736–845)
 
 **Files:**
-- Modify: `UIMenu.gs:731-840`
+- Modify: `UIMenu.gs:736-845`
 
 Splits into a ~10-line orchestrator + 2 phase helpers.
 Place helpers **immediately below** the orchestrator.
@@ -386,12 +420,17 @@ git commit -m "refactor(UIMenu): decompose _handleBatchValidation into 2 phase h
 
 ---
 
-## Task 4: Decompose `_handleDeleteDailySheets` (Lines 1342–1415)
+## Task 4: Decompose `_handleDeleteDailySheets` (Lines 1393–1469)
 
 **Files:**
-- Modify: `UIMenu.gs:1342-1415`
+- Modify: `UIMenu.gs:1393-1469`
 
-Splits into a ~20-line orchestrator + 2 co-located helpers.
+Splits into a ~25-line orchestrator + 2 co-located helpers.
+
+> **Dynamic range note:** The current function calls `this._getDaysInMonth(ss)` to determine which
+> sheets are valid for the current month (e.g. only 02–28 in February). This MUST be preserved.
+> Do NOT hardcode `02-31`. `_collectSheetsToDelete` takes `daysInMonth` so the orchestrator
+> computes it once and shares it with both the dialog message and the helper.
 
 - [ ] **Step 1: Replace `_handleDeleteDailySheets` with orchestrator + 2 helpers**
 
@@ -402,19 +441,22 @@ Replace the entire function (keeping its existing JSDoc if any) with:
     const ui = SpreadsheetApp.getUi();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
+    const daysInMonth = this._getDaysInMonth(ss);
+    const lastSheet   = CONFIG.dailySheets[daysInMonth - 1] || '31';
+
     const response = ui.alert(
       '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
-      'This will delete ONLY daily transaction sheets (02-31).\n\n' +
+      `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\n` +
       'Protected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?',
       ui.ButtonSet.YES_NO
     );
     if (response !== ui.Button.YES) return;
 
     try {
-      const sheetsToDelete = this._collectSheetsToDelete(ss);
+      const sheetsToDelete = this._collectSheetsToDelete(ss, daysInMonth);
 
       if (sheetsToDelete.length === 0) {
-        ui.alert('No daily sheets (02-31) found to delete.');
+        ui.alert(`No daily sheets (02-${lastSheet}) found to delete.`);
         return;
       }
 
@@ -441,16 +483,16 @@ Replace the entire function (keeping its existing JSDoc if any) with:
     }
   },
 
-  /** @private Collect names of deletable daily sheets (02-31, not in protectedSheets). */
-  _collectSheetsToDelete: function(ss) {
+  /** @private Collect names of deletable daily sheets for this month (02–<lastDay>, not in protectedSheets). */
+  _collectSheetsToDelete: function(ss, daysInMonth) {
     const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard',
                              'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
+    // Only sheets that exist in this month's valid range (e.g. 02–28 for February)
+    const validDailySet = new Set(CONFIG.dailySheets.slice(1, daysInMonth));
     const sheetsToDelete = [];
     ss.getSheets().forEach(function(sheet) {
       const name = sheet.getName();
-      if (CONFIG.dailySheets.includes(name) &&
-          name !== '01' &&
-          !protectedSheets.includes(name)) {
+      if (validDailySet.has(name) && !protectedSheets.includes(name)) {
         sheetsToDelete.push(name);
       }
     });
@@ -475,7 +517,7 @@ Replace the entire function (keeping its existing JSDoc if any) with:
 
 - [ ] **Step 2: Verify**
 
-`_handleDeleteDailySheets` should be ~25 lines.
+`_handleDeleteDailySheets` should be ~28 lines.
 Confirm `_collectSheetsToDelete` and `_deleteSheetsWithFeedback` appear immediately after it.
 
 - [ ] **Step 3: Commit**
@@ -487,12 +529,12 @@ git commit -m "refactor(UIMenu): decompose _handleDeleteDailySheets into 2 helpe
 
 ---
 
-## Task 5: Decompose `_showValidationResults` (Lines 1549–1601)
+## Task 5: Decompose `_showValidationResults` (Line 1614)
 
 **Files:**
-- Modify: `UIMenu.gs:1549-1601`
+- Modify: `UIMenu.gs:1614`
 
-Splits into a ~15-line display function + 1 string-building helper.
+Splits into a ~5-line display function + 1 string-building helper.
 
 - [ ] **Step 1: Replace `_showValidationResults` with the two functions below**
 
@@ -591,7 +633,7 @@ Find the `_validateDailySheet` function in the PRIVATE UTILITIES section. Insert
 
 For each call site below, replace the multi-line `ui.alert` + `if (response !== ...)` block with the one-liner shown. Also remove the `const ui = SpreadsheetApp.getUi()` declaration if it is no longer used anywhere else in that function after the replacement.
 
-**Site 1 — `batchValidateAllRows`** (≈ line 346)
+**Site 1 — `batchValidateAllRows`** (≈ line 363)
 ```js
 // BEFORE (6 lines):
 const ui = SpreadsheetApp.getUi();
@@ -607,14 +649,14 @@ if (response !== ui.Button.YES) { return; }
 if (!this._confirmOperation('Batch Validate All Rows', 'This will validate all rows in the current sheet. Continue?')) return;
 ```
 
-**Site 2 — `batchPostAllRows`** (≈ line 382)
+**Site 2 — `batchPostAllRows`** (≈ line 397)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Batch Post All Valid Rows',
   'This will validate and post all valid rows in the current sheet.\n\nWARNING: This action cannot be undone. Continue?')) return;
 ```
 
-**Site 3 — `batchPostSelectedRows`** (≈ line 451)
+**Site 3 — `batchPostSelectedRows`** (≈ line 478)
 ```js
 // NOTE: batchPostSelectedRows also uses ui.alert for selection validation — KEEP `const ui`.
 // Replace only the confirmation block:
@@ -622,62 +664,63 @@ if (!this._confirmOperation('Batch Post Selected Rows',
   `This will validate and post ${numRows} selected row(s).\n\nWARNING: This action cannot be undone. Continue?`)) return;
 ```
 
-**Site 4 — `clearAllPostCheckboxes`** (≈ line 498)
+**Site 4 — `clearAllPostCheckboxes`** (≈ line 513)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Clear All Post Checkboxes',
   'This will uncheck all post checkboxes (Column J) in the current sheet. Continue?')) return;
 ```
 
-**Site 5 — `createDailySheets`** (≈ line 530)
+**Site 5 — `createDailySheets`** (≈ line 538)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Create All Daily Sheets (02-31)',
   'This will create sheets 02-31 using sheet 01 as a template and update all formulas.\n\nContinue?')) return;
 ```
 
-**Site 6 — `createMissingSheets`** (≈ line 555)
+**Site 6 — `createMissingSheets`** (≈ line 563)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Create Missing Sheets Only',
   'This will create only missing daily sheets (02-31) that don\'t already exist.\n\nContinue?')) return;
 ```
 
-**Site 7 — `organizeSheets`** (≈ line 580)
+**Site 7 — `organizeSheets`** (≈ line 588)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Reorganize Sheets',
   'This will reorder all sheets to place daily sheets (01-31) first in numerical order.\n\nContinue?')) return;
 ```
 
-**Site 8 — `fixDateFormulasOnly`** (≈ line 605)
+**Site 8 — `fixDateFormulasOnly`** (≈ line 613)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Fix Date Formulas Only',
   'This will update all date formulas in daily sheets (02-31) to correctly reference sheet 01.\n\nContinue?')) return;
 ```
 
-**Site 9 — `resetInputCellsToZero`** (≈ line 631)
+**Site 9 — `resetInputCellsToZero`** (≈ line 644)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Reset Current Sheet to Zero',
   `This will clear all transaction data from sheet "${sheet.getName()}" while preserving formulas and formatting.\n\nContinue?`)) return;
 ```
 
-**Site 10 — `resetAllDailySheetsToZero`** (≈ line 661)
+**Site 10 — `resetAllDailySheetsToZero`** (≈ line 669)
 ```js
 // AFTER (1 line — also remove `const ui`):
 if (!this._confirmOperation('Reset All Daily Sheets to Zero',
   'This will clear all transaction data from ALL daily sheets (01-31) while preserving formulas and formatting.\n\nWARNING: This cannot be undone. Continue?')) return;
 ```
 
-**Site 11 — `_handleDeleteDailySheets`** (initial confirmation only, ≈ line 1342)
+**Site 11 — `_handleDeleteDailySheets`** (initial confirmation, ≈ line 1403 before Task 4 rewrite / wherever it lands after Task 4)
 ```js
 // NOTE: _handleDeleteDailySheets still uses ui for other alerts — KEEP `const ui`.
-// The _handleDeleteDailySheets function was already rewritten in Task 4 with an inline
-// ui.alert for the first confirmation. Replace it now:
+// Task 4 already rewrites this function with an inline ui.alert for the first confirmation.
+// Replace it now:
 if (!this._confirmOperation('🗑️ DELETE DAILY SHEETS (SAFE MODE)',
-  'This will delete ONLY daily transaction sheets (02-31).\n\nProtected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?')) return;
+  `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\n` +
+  'Protected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?')) return;
 // And remove the `const response =` declaration that preceded it.
 ```
 
@@ -685,10 +728,10 @@ if (!this._confirmOperation('🗑️ DELETE DAILY SHEETS (SAFE MODE)',
 
 Search for `ui.alert(` in UIMenu.gs. It should now only appear:
 - Inside `_confirmOperation` itself (1 occurrence)
-- Inside `_handleDeleteDailySheets` for the "No sheets found" and "Deletion cancelled" alerts (2 occurrences — these are NOT confirmation dialogs, they have no YES/NO choice)
-- Inside `batchValidateSelectedRows` and `batchPostSelectedRows` for the "Invalid Selection" alert (these are NOT confirmation dialogs)
+- Inside `_handleDeleteDailySheets` for the "No sheets found" and "Deletion cancelled" alerts (2 occurrences — these are NOT confirmation dialogs)
+- Inside `batchValidateSelectedRows` and `batchPostSelectedRows` for the "Invalid Selection" alert (NOT confirmation dialogs)
 - Inside `_validateDailySheet` for its error alert
-- Inside `_showValidationResults` for the results dialog
+- Inside `_showValidationResults` for the results dialog (until superseded by Task 5)
 
 All YES/NO confirmation patterns should be gone from call sites.
 
@@ -708,6 +751,12 @@ git commit -m "refactor(UIMenu): extract _confirmOperation, replace 11 inline di
 
 This task shortens the verbose `SpreadsheetApp.getActiveSpreadsheet().toast(...)` chain
 to a single-line `this._toast(...)` call across the file.
+
+After Tasks 2–5 introduce new phase helpers, there are approximately **7 occurrences** of
+`SpreadsheetApp.getActiveSpreadsheet().toast(` in the file:
+- `_initBatchValidationSetup` (1), `_runBatchValidationLoop` (1)
+- `_initBatchPostSetup` (1), `_runBatchPostLoop` (1), `_reportBatchPostResults` (1)
+- `_handleClearCheckboxes` (1), `_handleQuickResetCurrentSheet` (1)
 
 - [ ] **Step 1: Add `_toast` to PRIVATE UTILITIES (before `_validateDailySheet`)**
 
@@ -753,7 +802,7 @@ this._toast(`Starting validation of ${numRows} rows...`, 'Validating', 3);
 - [ ] **Step 3: Verify**
 
 Search for `SpreadsheetApp.getActiveSpreadsheet().toast(` — zero results expected.
-Search for `this._toast(` — should find approximately 13 occurrences.
+Search for `this._toast(` — should find approximately 7 occurrences.
 
 - [ ] **Step 4: Commit**
 
@@ -811,12 +860,13 @@ PRIVATE UTILITIES section
   _updateDateFormulas
   _getDayOffset
   _isDailySheet
+  _getDaysInMonth                  ← already exists, remains in place
   _organizeSheetOrder
 ```
 
 - [ ] **Step 2: Update the PRIVATE HANDLERS section comment**
 
-Find the decorative divider comment above the PRIVATE HANDLERS section and add one line:
+Find the decorative divider comment above the PRIVATE HANDLERS section and update it:
 
 ```js
   /**
@@ -831,7 +881,7 @@ Find the decorative divider comment above the PRIVATE HANDLERS section and add o
 
 Scan the file and confirm no function exceeds 120 lines.
 Expected largest functions after refactor:
-- `_runBatchPostLoop` ≈ 70 lines
+- `_runBatchPostLoop` ≈ 75 lines (includes try/finally)
 - `_initBatchPostSetup` ≈ 40 lines
 - `_runBatchValidationLoop` ≈ 50 lines
 - `_buildValidationMessage` ≈ 35 lines
@@ -855,10 +905,12 @@ Run after all 8 tasks are complete. No test runner — all checks are manual via
 3. **Function size:** No function body exceeds 120 lines.
 4. **DRY — confirm dialogs:** Search `ui.alert(` — only appears in `_confirmOperation`, `_validateDailySheet`, the two non-confirmation alerts in `_handleDeleteDailySheets`, and the selection-validation alerts in `batchValidateSelectedRows` / `batchPostSelectedRows`.
 5. **DRY — toasts:** Search `getActiveSpreadsheet().toast(` — zero results.
-6. **Smoke — batch validate:** Open a daily sheet with data rows → menu → Batch Validate All Rows → progress toast appears → results dialog shows correct counts.
-7. **Smoke — batch post:** Run Batch Post All Rows on a test sheet → status columns update to POSTED, PaymentLog entry created, balance cell updated, completion toast shows duration.
-8. **Smoke — delete sheets:** Run Delete Daily Sheets → first confirmation dialog appears → Cancel aborts with no changes.
-9. **Smoke — confirm cancel:** Run Batch Post All Rows → click NO in the dialog → function exits with no changes to sheet.
+6. **Lock release:** Confirm `LockManager.releaseLock(` appears inside `_runBatchPostLoop` in a `finally` block.
+7. **Dynamic range:** Confirm `_collectSheetsToDelete` calls `_getDaysInMonth` (via the `daysInMonth` parameter passed from the orchestrator) — no hardcoded `31`.
+8. **Smoke — batch validate:** Open a daily sheet with data rows → menu → Batch Validate All Rows → progress toast appears → results dialog shows correct counts.
+9. **Smoke — batch post:** Run Batch Post All Rows on a test sheet → status columns update to POSTED, PaymentLog entry created, balance cell updated, completion toast shows duration.
+10. **Smoke — delete sheets:** Run Delete Daily Sheets → first confirmation dialog appears → Cancel aborts with no changes.
+11. **Smoke — confirm cancel:** Run Batch Post All Rows → click NO in the dialog → function exits with no changes to sheet.
 
 ---
 
