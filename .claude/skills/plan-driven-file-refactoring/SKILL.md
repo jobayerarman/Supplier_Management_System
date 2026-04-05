@@ -71,6 +71,17 @@ Audited against current `<File>.gs` (<N> lines).
 | Task 1 | ⬜ pending | <what currently exists at the target location> |
 | Task 2 | ⬜ pending | ... |
 
+## Task Sequence
+
+| Order | Task | Type | Rationale |
+|-------|------|------|-----------|
+| 1 | Decompose <large function> | decompose | Must exist before helpers can be DRY-extracted |
+| 2 | Extract <utility helper> | extract | Isolate before replacing call sites |
+| 3 | DRY <repeated pattern> | DRY | Replace call sites after helper is verified |
+| 4 | Final reorganization | polish | Comments, co-location, size spot-check |
+
+> **Rule:** Decompose before extract. Extract before DRY. DRY before polish.
+
 ---
 
 ## Files
