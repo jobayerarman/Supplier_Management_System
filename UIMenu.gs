@@ -614,78 +614,60 @@ const UIMenu = {
    * @private
    */
   _handleBatchValidation: function(sheet, startRow = null, endRow = null) {
-    const sheetName = sheet.getName();
+    const context = this._initBatchValidationSetup(sheet, startRow, endRow);
+    if (!context) return this._createEmptyResults();
+    this._runBatchValidationLoop(context);
+    return context.results;
+  },
+
+  /** @private Phase 1: validate row bounds, show toast, init results object. Returns null if sheet is empty. */
+  _initBatchValidationSetup: function(sheet, startRow, endRow) {
+    const sheetName    = sheet.getName();
     const dataStartRow = CONFIG.dataStartRow;
-    const lastRow = sheet.getLastRow();
+    const lastRow      = sheet.getLastRow();
 
-    // Set default row range
     if (startRow === null) startRow = dataStartRow;
-    if (endRow === null) endRow = lastRow;
+    if (endRow   === null) endRow   = lastRow;
 
-    // Validate row range
-    if (lastRow < dataStartRow) {
-      return this._createEmptyResults();
-    }
-
-    // Adjust end row if needed
-    if (endRow > lastRow) endRow = lastRow;
-    if (startRow > endRow) {
-      return this._createEmptyResults();
-    }
+    if (lastRow < dataStartRow)  return null;
+    if (endRow  > lastRow)       endRow = lastRow;
+    if (startRow > endRow)       return null;
 
     const numRows = endRow - startRow + 1;
 
-    // UX FEEDBACK: Show initial toast
     SpreadsheetApp.getActiveSpreadsheet().toast(
-      `Starting validation of ${numRows} rows...`,
-      'Validating',
-      3
+      `Starting validation of ${numRows} rows...`, 'Validating', 3
     );
 
-    const results = {
-      total: numRows,
-      valid: 0,
-      invalid: 0,
-      skipped: 0,
-      errors: []
+    return {
+      sheet, sheetName, startRow, endRow, numRows,
+      results: { total: numRows, valid: 0, invalid: 0, skipped: 0, errors: [] }
     };
+  },
+
+  /** @private Phase 2: batch-read rows, validate each, collect errors into context.results. */
+  _runBatchValidationLoop: function(context) {
+    const { sheet, sheetName, startRow, numRows, results } = context;
 
     try {
-      // Read all data at once for performance
-      const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
-      const allData = dataRange.getValues();
-
-      // PHASE 2 OPTIMIZATION: Get user once before loop
-      const enteredBy = UserResolver.getCurrentUser();
-
-      // Dynamic progress interval
+      const allData = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily).getValues();
+      const enteredBy        = UserResolver.getCurrentUser();
       const progressInterval = this._calculateProgressInterval(numRows);
 
-      // Validate each row
       for (let i = 0; i < allData.length; i++) {
-        const rowNum = startRow + i;
+        const rowNum  = startRow + i;
         const rowData = allData[i];
 
-        // UX FEEDBACK: Dynamic progress toast
         if ((i + 1) % progressInterval === 0) {
           SpreadsheetApp.getActiveSpreadsheet().toast(
-            `Validated ${i + 1} of ${numRows} rows...`,
-            'Progress',
-            2
+            `Validated ${i + 1} of ${numRows} rows...`, 'Progress', 2
           );
         }
 
-        // Skip empty rows (no supplier)
-        if (!rowData[CONFIG.cols.supplier]) {
-          results.skipped++;
-          continue;
-        }
+        if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
 
         try {
-          // Build validation data object (pass enteredBy to avoid redundant calls)
           const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
-
-          // Validate
           const validation = validatePostData(data);
 
           if (validation.valid) {
@@ -693,14 +675,12 @@ const UIMenu = {
           } else {
             results.invalid++;
             results.errors.push({
-              row: rowNum,
-              supplier: data.supplier,
+              row: rowNum, supplier: data.supplier,
               invoiceNo: data.invoiceNo || 'N/A',
               error: validation.error || validation.errors.join(', ')
             });
           }
         } catch (rowError) {
-          // Handle individual row validation errors
           results.invalid++;
           results.errors.push({
             row: rowNum,
@@ -711,17 +691,12 @@ const UIMenu = {
         }
       }
     } catch (error) {
-      // Handle critical errors (sheet access, config issues, etc.)
       Logger.log(`Critical error in validateRowsInSheet: ${error.message}`);
       results.errors.push({
-        row: 'N/A',
-        supplier: 'SYSTEM',
-        invoiceNo: 'N/A',
+        row: 'N/A', supplier: 'SYSTEM', invoiceNo: 'N/A',
         error: `System error: ${error.message}`
       });
     }
-
-    return results;
   },
 
   /**
