@@ -19,7 +19,6 @@
  * 3. PaymentManager Core Workflow (internal orchestration)
  * 4. PaymentManager Helper Functions (utilities)
  * 5. PaymentManager Result Builders (immutable constructors)
- * 6. Backward Compatibility Functions (legacy support)
  *
  * NOTE: Constants moved to CONFIG.constants in _Config.gs for centralization
  */
@@ -246,7 +245,7 @@ const PaymentCache = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 3: PAYMENT MANAGER - PUBLIC API
+// SECTION 2: PAYMENT MANAGER - PUBLIC API
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PaymentManager = {
@@ -499,7 +498,7 @@ const PaymentManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 4: PAYMENT MANAGER - CORE WORKFLOW (PRIVATE)
+  // SECTION 3: PAYMENT MANAGER - CORE WORKFLOW (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -725,7 +724,7 @@ const PaymentManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 5: PAYMENT MANAGER - HELPER FUNCTIONS (PRIVATE)
+  // SECTION 4: PAYMENT MANAGER - HELPER FUNCTIONS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -1024,7 +1023,7 @@ const PaymentManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SECTION 6: PAYMENT MANAGER - RESULT BUILDERS (PRIVATE)
+  // SECTION 5: PAYMENT MANAGER - RESULT BUILDERS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
