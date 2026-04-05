@@ -598,10 +598,9 @@ const PaymentManager = {
    * 1. Find invoice (uses cached if provided)
    * 2. Calculate balance (via _calculateBalanceInfo)
    * 3. Check if fully paid (early return if partial)
-   * 4. Check if paid date already set (via _isPaidDateAlreadySet)
-   * 5. Write paid date (via _writePaidDateToSheet with lock management)
-   * 6. Update cache if written
-   * 7. Return result with audit logging
+   * 4. Write paid date (via _writePaidDateToSheet with lock management)
+   * 5. Update cache if written
+   * 6. Return result with audit logging
    *
    * @typedef {Object} PaidStatusResult
    * @property {boolean} attempted - Whether paid status update was attempted
@@ -671,7 +670,7 @@ const PaymentManager = {
         return result;
       }
 
-      // ═══ STEP 6: UPDATE CACHE ═══
+      // ═══ STEP 5: UPDATE CACHE ═══
       // PERF: paidDate is not a SUMIFS field — patch it directly in memory
       // instead of re-reading the row from MASTER DB (~500ms saved).
       // SUMIFS fields (totalPaid, balanceDue) are refreshed by
@@ -684,7 +683,7 @@ const PaymentManager = {
         CacheManager.updateInvoiceInCache(supplier, invoiceNo);
       }
 
-      // ═══ STEP 7: RETURN SUCCESS ═══
+      // ═══ STEP 6: RETURN SUCCESS ═══
       return successResult;
 
     } catch (error) {
