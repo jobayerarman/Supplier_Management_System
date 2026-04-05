@@ -1402,8 +1402,13 @@ const UIMenu = {
    * @private
    */
   _showValidationResults: function(results, isPosting) {
-    const ui = SpreadsheetApp.getUi();
+    const message = this._buildValidationMessage(results, isPosting, 10);
+    const title   = isPosting ? 'Batch Posting Results' : 'Batch Validation Results';
+    SpreadsheetApp.getUi().alert(title, message, SpreadsheetApp.getUi().ButtonSet.OK);
+  },
 
+  /** @private Build the text body for the validation/posting results dialog. */
+  _buildValidationMessage: function(results, isPosting, maxErrors) {
     let message = `Total Rows Processed: ${results.total}\n`;
 
     if (isPosting) {
@@ -1416,7 +1421,6 @@ const UIMenu = {
 
     message += `Skipped (empty or already posted): ${results.skipped}\n`;
 
-    // MASTER DB AWARENESS: Show connection mode and performance
     if (isPosting && results.connectionMode) {
       message += `\n--- Performance ---\n`;
       message += `Connection Mode: ${results.connectionMode}\n`;
@@ -1432,27 +1436,20 @@ const UIMenu = {
 
     message += '\n';
 
-    // Show errors if any
     if (results.errors && results.errors.length > 0) {
       message += '--- Errors ---\n';
-      const maxErrors = 10; // Limit to 10 errors in dialog
       const errorsToShow = results.errors.slice(0, maxErrors);
-
-      errorsToShow.forEach(err => {
+      errorsToShow.forEach(function(err) {
         message += `Row ${err.row}: ${err.supplier} - ${err.invoiceNo}\n`;
         message += `  Error: ${err.error}\n\n`;
       });
-
       if (results.errors.length > maxErrors) {
         message += `... and ${results.errors.length - maxErrors} more errors.\n`;
         message += 'Check the Status column (K) for details.\n';
       }
     }
 
-    // Determine title and button
-    const title = isPosting ? 'Batch Posting Results' : 'Batch Validation Results';
-
-    ui.alert(title, message, ui.ButtonSet.OK);
+    return message;
   },
 
   /**
