@@ -330,7 +330,7 @@ const PaymentManager = {
    * @returns {boolean} True if payment should be recorded
    */
   shouldRecordPayment: function(data) {
-    return data.paymentAmt > 0 || data.paymentType === 'Regular';
+    return data.paymentAmt > 0;
   },
 
   /**

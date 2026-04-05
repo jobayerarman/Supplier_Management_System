@@ -611,7 +611,7 @@ const Code = {
         return;
       }
 
-      if (this._shouldProcessPayment(data)) {
+      if (PaymentManager.shouldRecordPayment(data)) {
         const paymentResult = PaymentManager.processPayment(data, invoiceResult.invoiceId);
         if (!paymentResult.success) {
           writePostStatus(sheet, rowNum, `ERROR: ${paymentResult.error}`, "SYSTEM", timeStr, false, colors.error);
@@ -771,13 +771,6 @@ const Code = {
     }
   },
 
-  /**
-   * PRIVATE: Determine if payment should be processed
-   * @private
-   */
-  _shouldProcessPayment: function(data) {
-    return shouldProcessPayment(data);
-  }
 };
 
 /**

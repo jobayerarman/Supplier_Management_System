@@ -292,9 +292,16 @@ const InvoiceManager = {
    */
   createOrUpdateInvoice: function(data, batchContext = null) {
     try {
-      // Skip for Due payments without invoice
+      // Due payments target prevInvoice (not a new invoice).
+      // Look up prevInvoice so its invoiceId is recorded on the PaymentLog row —
+      // the same invoice can receive multiple payments, and invoice numbers are
+      // not unique across suppliers, so invoiceId is the only reliable link.
       if (data.paymentType === this.CONSTANTS.PAYMENT_TYPE.DUE && !data.invoiceNo) {
-        return { success: true, action: 'none', invoiceId: null };
+        const prevInvoice = data.prevInvoice
+          ? this.findInvoice(data.supplier, data.prevInvoice)
+          : null;
+        const invoiceId = prevInvoice ? prevInvoice.data[CONFIG.invoiceCols.sysId] : null;
+        return { success: true, action: 'none', invoiceId: invoiceId };
       }
 
       // Check existence using cached data
