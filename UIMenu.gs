@@ -239,7 +239,8 @@ const UIMenu = {
     }
 
     // Confirm action
-    if (!this._confirmOperation('Batch Validate All Rows', 'This will validate all rows in the current sheet. Continue?')) return;
+    if (!this._confirmOperation('Batch Validate All Rows',
+      'This will validate all rows in the current sheet. Continue?')) return;
 
     const results = this._handleBatchValidation(sheet);
     this._showValidationResults(results, false);
