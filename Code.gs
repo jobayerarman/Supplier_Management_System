@@ -81,76 +81,6 @@ function onEditInstallable(e) {
 
 const Code = {
   // ═══════════════════════════════════════════════════════════════════════════
-  // PUBLIC API - CORE TRANSACTION PROCESSING
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Process Posted Row - Full Transaction Workflow
-   *
-   * Orchestrates the complete transaction workflow for a posted row:
-   *   1. Validates post data (early exit if invalid - no lock acquired)
-   *   2. Creates or updates invoice
-   *   3. Records payment (if applicable)
-   *   4. Updates balance
-   *   5. Invalidates cache
-   *   6. Batches all writes (minimum API calls)
-   *
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
-   * @param {number} rowNum - Row number to process (1-based)
-   * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
-   * @param {Date} invoiceDate - Invoice date for transaction
-   * @param {string} enteredBy - User email of person posting transaction
-   * @returns {void} Updates sheet in-place, logs to AuditLog
-   */
-  processPostedRow: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
-    this._processPostedRowInternal(sheet, rowNum, rowData, invoiceDate, enteredBy);
-  },
-
-  /**
-   * Clear Payment Fields for Type Change
-   *
-   * Clears only necessary fields based on payment type selection.
-   *
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
-   * @param {number} row - Row number (1-based)
-   * @param {string} newPaymentType - New payment type selected
-   * @returns {void} Updates sheet in-place
-   */
-  clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
-    this._clearPaymentFieldsForTypeChange(sheet, row, newPaymentType);
-  },
-
-  /**
-   * Populate Due Payment Amount
-   *
-   * Fills payment amount with the outstanding balance of selected invoice.
-   *
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
-   * @param {number} row - Row number (1-based)
-   * @param {string} supplier - Supplier name for invoice lookup
-   * @param {string} prevInvoice - Previous invoice number selected
-   * @returns {number|string} Outstanding balance or empty string
-   */
-  populateDuePaymentAmount: function(sheet, row, supplier, prevInvoice) {
-    return this._populateDuePaymentAmount(sheet, row, supplier, prevInvoice);
-  },
-
-  /**
-   * Populate Payment Fields
-   *
-   * Fills payment fields for Regular and Partial payment types.
-   *
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
-   * @param {number} row - Row number (1-based)
-   * @param {string} paymentType - Payment type (Regular or Partial)
-   * @param {Array} rowData - Pre-read row values
-   * @returns {Object} Result object with {paymentAmt, prevInvoice}
-   */
-  populatePaymentFields: function(sheet, row, paymentType, rowData) {
-    return this._populatePaymentFields(sheet, row, paymentType, rowData);
-  },
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE: TRIGGER HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -430,14 +360,28 @@ const Code = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVATE: TRANSACTION PROCESSING INTERNALS
+  // TRANSACTION PROCESSING
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * PRIVATE: Main transaction processing logic
-   * @private
+   * Process Posted Row - Full Transaction Workflow
+   *
+   * Orchestrates the complete transaction workflow for a posted row:
+   *   1. Validates post data (early exit if invalid - no lock acquired)
+   *   2. Creates or updates invoice
+   *   3. Records payment (if applicable)
+   *   4. Updates balance
+   *   5. Invalidates cache
+   *   6. Batches all writes (minimum API calls)
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} rowNum - Row number to process (1-based)
+   * @param {Array} rowData - Pre-read row values from sheet.getRange().getValues()[0]
+   * @param {Date} invoiceDate - Invoice date for transaction
+   * @param {string} enteredBy - User email of person posting transaction
+   * @returns {void} Updates sheet in-place, logs to AuditLog
    */
-  _processPostedRowInternal: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
+  processPostedRow: function(sheet, rowNum, rowData, invoiceDate, enteredBy) {
     const cols = CONFIG.cols;
     const totalCols = CONFIG.totalColumns.daily;
     const colors = CONFIG.colors;
@@ -539,14 +483,20 @@ const Code = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVATE: FIELD POPULATION INTERNALS
+  // FIELD POPULATION
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * PRIVATE: Clear payment fields implementation
-   * @private
+   * Clear Payment Fields for Type Change
+   *
+   * Clears only necessary fields based on payment type selection.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} newPaymentType - New payment type selected
+   * @returns {void} Updates sheet in-place
    */
-  _clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
+  clearPaymentFieldsForTypeChange: function(sheet, row, newPaymentType) {
     try {
       const cols = CONFIG.cols;
       const paymentAmtCol  = cols.paymentAmt  + 1;
@@ -581,10 +531,17 @@ const Code = {
   },
 
   /**
-   * PRIVATE: Populate due payment amount implementation
-   * @private
+   * Populate Due Payment Amount
+   *
+   * Fills payment amount with the outstanding balance of selected invoice.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} supplier - Supplier name for invoice lookup
+   * @param {string} prevInvoice - Previous invoice number selected
+   * @returns {number|string} Outstanding balance or empty string
    */
-  _populateDuePaymentAmount: function(sheet, row, supplier, prevInvoice) {
+  populateDuePaymentAmount: function(sheet, row, supplier, prevInvoice) {
     try {
       if (!prevInvoice || !String(prevInvoice).trim()) {
         return '';
@@ -620,10 +577,17 @@ const Code = {
   },
 
   /**
-   * PRIVATE: Populate payment fields implementation
-   * @private
+   * Populate Payment Fields
+   *
+   * Fills payment fields for Regular and Partial payment types.
+   *
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet object
+   * @param {number} row - Row number (1-based)
+   * @param {string} paymentType - Payment type (Regular or Partial)
+   * @param {Array} rowData - Pre-read row values
+   * @returns {Object} Result object with {paymentAmt, prevInvoice}
    */
-  _populatePaymentFields: function(sheet, row, paymentType, rowData) {
+  populatePaymentFields: function(sheet, row, paymentType, rowData) {
     try {
       const invoiceNo = rowData[CONFIG.cols.invoiceNo];
       const receivedAmt = rowData[CONFIG.cols.receivedAmt];
