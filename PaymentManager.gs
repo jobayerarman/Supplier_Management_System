@@ -639,7 +639,13 @@ const PaymentManager = {
       }
 
       // ═══ STEP 2: CALCULATE BALANCE ═══
-      const balanceInfo = this._calculateBalanceInfo(invoice, currentPaymentAmount);
+      // When cachedInvoice is non-null it came from _updateCacheAndFetchInvoice which
+      // uses forceRead=true — the SUMIFS already include the current payment, so
+      // pass 0 to avoid double-counting currentPaymentAmount in _calculateBalanceInfo.
+      // When cachedInvoice is null (cache update failed) the cache still holds
+      // pre-payment values, so currentPaymentAmount must be added manually.
+      const pendingAmount = cachedInvoice ? 0 : currentPaymentAmount;
+      const balanceInfo = this._calculateBalanceInfo(invoice, pendingAmount);
 
       // ═══ STEP 3: CHECK IF FULLY PAID ═══
       if (!balanceInfo.fullyPaid) {
@@ -837,14 +843,14 @@ const PaymentManager = {
     const col = CONFIG.invoiceCols;
     const totalAmount = Number(invoice.data[col.totalAmount]) || 0;
 
-    // The cache is always pre-payment at this point: markPaymentWritten causes
-    // updateSingleInvoice to defer the sheet read (100ms SUMIFS guard), so
-    // the cached values never include the payment just recorded.
-    // Subtract currentPaymentAmount from the cached pre-payment state to derive
-    // the accurate post-payment balance.
+    // currentPaymentAmount is non-zero only when the caller holds pre-payment cache
+    // state (cache update failed fallback). When the cache was refreshed post-payment
+    // via forceRead=true (normal path), the caller passes 0 and SUMIFS values are
+    // used directly.
     //
     // Formula strings are a special case: the invoice was cached before SUMIFS
-    // ever evaluated (new invoice). Prior totalPaid = 0; apply current payment only.
+    // ever evaluated (new invoice, cache update failed). Prior totalPaid = 0;
+    // apply current payment only.
     let rawTotalPaid = invoice.data[col.totalPaid];
     if (typeof rawTotalPaid === 'string' && rawTotalPaid.startsWith('=')) {
       // New invoice: no prior payments in cache — use currentPaymentAmount directly.

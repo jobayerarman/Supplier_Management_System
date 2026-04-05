@@ -429,6 +429,13 @@ const CacheManager = {
       this.inactiveSupplierIndex.set(supplier, []);
     }
     this.inactiveSupplierIndex.get(supplier).push(inactiveIndex);
+
+    // Sync globalIndexMap.index to the new inactive position.
+    // Without this, findInvoice reads the stale active index from inactiveData,
+    // returning the wrong invoice row after an active→inactive transition.
+    if (this.globalIndexMap.has(key)) {
+      this.globalIndexMap.get(key).index = inactiveIndex;
+    }
   },
 
   /**
@@ -469,6 +476,11 @@ const CacheManager = {
       this.activeSupplierIndex.set(supplier, []);
     }
     this.activeSupplierIndex.get(supplier).push(activeIndex);
+
+    // Sync globalIndexMap.index to the new active position.
+    if (this.globalIndexMap.has(key)) {
+      this.globalIndexMap.get(key).index = activeIndex;
+    }
   },
 
   /**
@@ -604,7 +616,6 @@ const CacheManager = {
         : MasterDatabaseUtils.getSourceSheet('invoice');
 
       const col = CONFIG.invoiceCols;
-      let updatedCount = 0;
       let partitionTransitions = 0;
 
       // Process all invoices for this supplier (both partitions)
