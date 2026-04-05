@@ -231,7 +231,6 @@ const UIMenu = {
    *   4. Display results dialog
    */
   batchValidateAllRows: function() {
-    const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSheet();
 
     // Early exit: invalid sheet
@@ -240,15 +239,7 @@ const UIMenu = {
     }
 
     // Confirm action
-    const response = ui.alert(
-      'Batch Validate All Rows',
-      'This will validate all rows in the current sheet. Continue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Batch Validate All Rows', 'This will validate all rows in the current sheet. Continue?')) return;
 
     const results = this._handleBatchValidation(sheet);
     this._showValidationResults(results, false);
@@ -265,7 +256,6 @@ const UIMenu = {
    *   4. Display results dialog with performance metrics
    */
   batchPostAllRows: function() {
-    const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSheet();
 
     // Early exit: invalid sheet
@@ -274,16 +264,8 @@ const UIMenu = {
     }
 
     // Confirm action
-    const response = ui.alert(
-      'Batch Post All Valid Rows',
-      'This will validate and post all valid rows in the current sheet.\n\n' +
-      'WARNING: This action cannot be undone. Continue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Batch Post All Valid Rows',
+      'This will validate and post all valid rows in the current sheet.\n\nWARNING: This action cannot be undone. Continue?')) return;
 
     const results = this._handleBatchPosting(sheet);
     this._showValidationResults(results, true);
@@ -355,16 +337,8 @@ const UIMenu = {
     }
 
     // Confirm action
-    const response = ui.alert(
-      'Batch Post Selected Rows',
-      `This will validate and post ${numRows} selected row(s).\n\n` +
-      'WARNING: This action cannot be undone. Continue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Batch Post Selected Rows',
+      `This will validate and post ${numRows} selected row(s).\n\nWARNING: This action cannot be undone. Continue?`)) return;
 
     const results = this._handleBatchPosting(sheet, startRow, startRow + numRows - 1);
     this._showValidationResults(results, true);
@@ -381,7 +355,6 @@ const UIMenu = {
    *   4. Show success toast
    */
   clearAllPostCheckboxes: function() {
-    const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSheet();
 
     // Early exit: invalid sheet
@@ -390,15 +363,8 @@ const UIMenu = {
     }
 
     // Confirm action
-    const response = ui.alert(
-      'Clear All Post Checkboxes',
-      'This will uncheck all post checkboxes (Column J) in the current sheet. Continue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Clear All Post Checkboxes',
+      'This will uncheck all post checkboxes (Column J) in the current sheet. Continue?')) return;
 
     this._handleClearCheckboxes(sheet);
   },
@@ -413,17 +379,8 @@ const UIMenu = {
    *   3. Show success message
    */
   createDailySheets: function() {
-    const ui = SpreadsheetApp.getUi();
-
-    const response = ui.alert(
-      'Create All Daily Sheets (02-31)',
-      'This will create sheets 02-31 using sheet 01 as a template and update all formulas.\n\nContinue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Create All Daily Sheets (02-31)',
+      'This will create sheets 02-31 using sheet 01 as a template and update all formulas.\n\nContinue?')) return;
 
     this._handleCreateDailySheets();
   },
@@ -438,17 +395,8 @@ const UIMenu = {
    *   3. Show results
    */
   createMissingSheets: function() {
-    const ui = SpreadsheetApp.getUi();
-
-    const response = ui.alert(
-      'Create Missing Sheets Only',
-      'This will create only missing daily sheets (02-31) that don\'t already exist.\n\nContinue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Create Missing Sheets Only',
+      'This will create only missing daily sheets (02-31) that don\'t already exist.\n\nContinue?')) return;
 
     this._handleCreateMissingSheets();
   },
@@ -463,17 +411,8 @@ const UIMenu = {
    *   3. Show success message
    */
   organizeSheets: function() {
-    const ui = SpreadsheetApp.getUi();
-
-    const response = ui.alert(
-      'Reorganize Sheets',
-      'This will reorder all sheets to place daily sheets (01-31) first in numerical order.\n\nContinue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Reorganize Sheets',
+      'This will reorder all sheets to place daily sheets (01-31) first in numerical order.\n\nContinue?')) return;
 
     this._handleOrganizeSheets();
   },
@@ -488,17 +427,8 @@ const UIMenu = {
    *   3. Show completion message
    */
   fixDateFormulasOnly: function() {
-    const ui = SpreadsheetApp.getUi();
-
-    const response = ui.alert(
-      'Fix Date Formulas Only',
-      'This will update all date formulas in daily sheets (02-31) to correctly reference sheet 01.\n\nContinue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Fix Date Formulas Only',
+      'This will update all date formulas in daily sheets (02-31) to correctly reference sheet 01.\n\nContinue?')) return;
 
     this._handleFixDateFormulas();
   },
@@ -514,22 +444,14 @@ const UIMenu = {
    *   4. Show success message
    */
   resetInputCellsToZero: function() {
-    const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSheet();
 
     if (!this._validateDailySheet(sheet)) {
       return;
     }
 
-    const response = ui.alert(
-      'Reset Current Sheet to Zero',
-      `This will clear all transaction data from sheet "${sheet.getName()}" while preserving formulas and formatting.\n\nContinue?`,
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Reset Current Sheet to Zero',
+      `This will clear all transaction data from sheet "${sheet.getName()}" while preserving formulas and formatting.\n\nContinue?`)) return;
 
     this._handleResetCurrentSheet();
   },
@@ -544,17 +466,8 @@ const UIMenu = {
    *   3. Show completion message
    */
   resetAllDailySheetsToZero: function() {
-    const ui = SpreadsheetApp.getUi();
-
-    const response = ui.alert(
-      'Reset All Daily Sheets to Zero',
-      'This will clear all transaction data from ALL daily sheets (01-31) while preserving formulas and formatting.\n\nWARNING: This cannot be undone. Continue?',
-      ui.ButtonSet.YES_NO
-    );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (!this._confirmOperation('Reset All Daily Sheets to Zero',
+      'This will clear all transaction data from ALL daily sheets (01-31) while preserving formulas and formatting.\n\nWARNING: This cannot be undone. Continue?')) return;
 
     this._handleResetAllSheets();
   },
@@ -1188,13 +1101,9 @@ const UIMenu = {
     const daysInMonth = this._getDaysInMonth(ss);
     const lastSheet   = CONFIG.dailySheets[daysInMonth - 1] || '31';
 
-    const response = ui.alert(
-      '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
+    if (!this._confirmOperation('🗑️ DELETE DAILY SHEETS (SAFE MODE)',
       `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\n` +
-      'Protected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?',
-      ui.ButtonSet.YES_NO
-    );
-    if (response !== ui.Button.YES) return;
+      'Protected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?')) return;
 
     try {
       const sheetsToDelete = this._collectSheetsToDelete(ss, daysInMonth);
@@ -1263,6 +1172,18 @@ const UIMenu = {
    * PRIVATE UTILITIES - Shared Helper Functions
    * ═══════════════════════════════════════════════════════════════════════════
    */
+
+  /**
+   * PRIVATE: Show a YES/NO confirmation dialog. Returns true if the user clicked YES.
+   * @param {string} title - Dialog title
+   * @param {string} message - Dialog body text
+   * @return {boolean}
+   * @private
+   */
+  _confirmOperation: function(title, message) {
+    const ui = SpreadsheetApp.getUi();
+    return ui.alert(title, message, ui.ButtonSet.YES_NO) === ui.Button.YES;
+  },
 
   /**
    * PRIVATE: Validate that the current sheet is a daily sheet (01-31)
