@@ -549,9 +549,7 @@ const UIMenu = {
 
     const numRows = endRow - startRow + 1;
 
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      `Starting validation of ${numRows} rows...`, 'Validating', 3
-    );
+    this._toast(`Starting validation of ${numRows} rows...`, 'Validating', 3);
 
     return {
       sheet, sheetName, startRow, endRow, numRows,
@@ -573,9 +571,7 @@ const UIMenu = {
         const rowData = allData[i];
 
         if ((i + 1) % progressInterval === 0) {
-          SpreadsheetApp.getActiveSpreadsheet().toast(
-            `Validated ${i + 1} of ${numRows} rows...`, 'Progress', 2
-          );
+          this._toast(`Validated ${i + 1} of ${numRows} rows...`, 'Progress', 2);
         }
 
         if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
@@ -659,10 +655,7 @@ const UIMenu = {
 
     const numRows = endRow - startRow + 1;
 
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      `Starting batch post of ${numRows} rows (${connectionMode} mode)...`,
-      'Processing', 3
-    );
+    this._toast(`Starting batch post of ${numRows} rows (${connectionMode} mode)...`, 'Processing', 3);
 
     const allData = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily).getValues();
 
@@ -696,9 +689,7 @@ const UIMenu = {
         const rowData = allData[i];
 
         if ((i + 1) % progressInterval === 0) {
-          SpreadsheetApp.getActiveSpreadsheet().toast(
-            `Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2
-          );
+          this._toast(`Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2);
         }
 
         if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
@@ -795,7 +786,7 @@ const UIMenu = {
     results.avgTimePerRow = results.posted > 0
       ? Math.round(results.duration / results.posted) : 0;
 
-    SpreadsheetApp.getActiveSpreadsheet().toast(
+    this._toast(
       `Completed in ${(results.duration / 1000).toFixed(1)}s (${connectionMode} mode): ` +
       `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
       'Success', 5
@@ -826,11 +817,7 @@ const UIMenu = {
     const range = sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1);
     range.uncheck();
 
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      'All post checkboxes cleared successfully.',
-      'Success',
-      5
-    );
+    this._toast('All post checkboxes cleared successfully.', 'Success', 5);
   },
 
   /**
@@ -1078,11 +1065,7 @@ const UIMenu = {
 
     try {
       this._clearSheetData(sheet);
-      SpreadsheetApp.getActiveSpreadsheet().toast(
-        `Quick reset of "${sheet.getName()}" complete.`,
-        'Success',
-        3
-      );
+      this._toast(`Quick reset of "${sheet.getName()}" complete.`, 'Success', 3);
     } catch (error) {
       ui.alert(`Error in quick reset: ${error.message}`);
     }
@@ -1173,6 +1156,17 @@ const UIMenu = {
    * PRIVATE UTILITIES - Shared Helper Functions
    * ═══════════════════════════════════════════════════════════════════════════
    */
+
+  /**
+   * PRIVATE: Convenience wrapper for spreadsheet toast notifications.
+   * @param {string} message - Toast body
+   * @param {string} title   - Toast title
+   * @param {number} [duration=3] - Display duration in seconds
+   * @private
+   */
+  _toast: function(message, title, duration) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(message, title, duration || 3);
+  },
 
   /**
    * PRIVATE: Show a YES/NO confirmation dialog. Returns true if the user clicked YES.
