@@ -510,6 +510,7 @@ const UIMenu = {
   /**
    * ═══════════════════════════════════════════════════════════════════════════
    * PRIVATE HANDLERS - Operation-Specific Logic
+   * Each complex handler is an orchestrator followed by its co-located phase helpers.
    * ═══════════════════════════════════════════════════════════════════════════
    */
 
