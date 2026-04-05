@@ -1184,79 +1184,78 @@ const UIMenu = {
   _handleDeleteDailySheets: function() {
     const ui = SpreadsheetApp.getUi();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard', 'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
 
-    // Determine valid range for this month before prompting
     const daysInMonth = this._getDaysInMonth(ss);
-    const validDailySet = new Set(CONFIG.sheets.daily.slice(1, daysInMonth)); // '02'…last day
-    const lastSheet = CONFIG.sheets.daily[daysInMonth - 1] || '31';
+    const lastSheet   = CONFIG.dailySheets[daysInMonth - 1] || '31';
 
     const response = ui.alert(
       '🗑️ DELETE DAILY SHEETS (SAFE MODE)',
-      `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\nProtected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?`,
+      `This will delete ONLY daily transaction sheets (02-${lastSheet}).\n\n` +
+      'Protected sheets (01, InvoiceDatabase, etc.) will not be affected.\n\nContinue?',
       ui.ButtonSet.YES_NO
     );
-
-    if (response !== ui.Button.YES) {
-      return;
-    }
+    if (response !== ui.Button.YES) return;
 
     try {
-      const sheetsToDelete = [];
-      const allSheets = ss.getSheets();
-
-      // Identify sheets to delete: must be in this month's valid range and not protected
-      allSheets.forEach(sheet => {
-        const sheetName = sheet.getName();
-
-        if (validDailySet.has(sheetName) && !protectedSheets.includes(sheetName)) {
-          sheetsToDelete.push(sheetName);
-        }
-      });
+      const sheetsToDelete = this._collectSheetsToDelete(ss, daysInMonth);
 
       if (sheetsToDelete.length === 0) {
         ui.alert(`No daily sheets (02-${lastSheet}) found to delete.`);
         return;
       }
 
-      // Confirm deletion
       const confirmResponse = ui.alert(
         'CONFIRM DELETION',
         `The following ${sheetsToDelete.length} sheets will be deleted:\n\n• ${sheetsToDelete.join('\n• ')}\n\nContinue?`,
         ui.ButtonSet.YES_NO
       );
-
       if (confirmResponse !== ui.Button.YES) {
         ui.alert('Deletion cancelled.');
         return;
       }
 
-      // Delete sheets
-      let deletedCount = 0;
-      let errors = [];
-
-      sheetsToDelete.forEach(sheetName => {
-        try {
-          const sheet = ss.getSheetByName(sheetName);
-          if (sheet) {
-            ss.deleteSheet(sheet);
-            deletedCount++;
-          }
-        } catch (error) {
-          errors.push(`Failed to delete ${sheetName}: ${error.message}`);
-        }
-      });
+      const { deletedCount, errors } = this._deleteSheetsWithFeedback(sheetsToDelete, ss);
 
       let resultMessage = `✅ Deleted ${deletedCount} daily sheets.`;
       if (errors.length > 0) {
         resultMessage += `\n\n❌ ${errors.length} errors:\n• ${errors.join('\n• ')}`;
       }
-
       ui.alert('DELETION COMPLETE', resultMessage, ui.ButtonSet.OK);
 
     } catch (error) {
       ui.alert(`Critical Error: ${error.message}`);
     }
+  },
+
+  /** @private Collect names of deletable daily sheets for this month (02–<lastDay>, not in protectedSheets). */
+  _collectSheetsToDelete: function(ss, daysInMonth) {
+    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard',
+                             'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
+    // Only sheets that exist in this month's valid range (e.g. 02–28 for February)
+    const validDailySet = new Set(CONFIG.dailySheets.slice(1, daysInMonth));
+    const sheetsToDelete = [];
+    ss.getSheets().forEach(function(sheet) {
+      const name = sheet.getName();
+      if (validDailySet.has(name) && !protectedSheets.includes(name)) {
+        sheetsToDelete.push(name);
+      }
+    });
+    return sheetsToDelete;
+  },
+
+  /** @private Delete each sheet in the list, collect errors. Returns {deletedCount, errors}. */
+  _deleteSheetsWithFeedback: function(sheetsToDelete, ss) {
+    let deletedCount = 0;
+    const errors = [];
+    sheetsToDelete.forEach(function(sheetName) {
+      try {
+        const sheet = ss.getSheetByName(sheetName);
+        if (sheet) { ss.deleteSheet(sheet); deletedCount++; }
+      } catch (error) {
+        errors.push(`Failed to delete ${sheetName}: ${error.message}`);
+      }
+    });
+    return { deletedCount, errors };
   },
 
   /**
