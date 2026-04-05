@@ -1165,7 +1165,7 @@ const UIMenu = {
    * @private
    */
   _toast: function(message, title, duration) {
-    SpreadsheetApp.getActiveSpreadsheet().toast(message, title, duration || 3);
+    SpreadsheetApp.getActiveSpreadsheet().toast(message, title, duration == null ? 3 : duration);
   },
 
   /**
