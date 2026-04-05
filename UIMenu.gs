@@ -745,236 +745,172 @@ const UIMenu = {
    * @private
    */
   _handleBatchPosting: function(sheet, startRow = null, endRow = null) {
-    // PERFORMANCE TRACKING: Start timer
-    const batchStartTime = Date.now();
+    const context = this._initBatchPostSetup(sheet, startRow, endRow);
+    if (!context) return this._createEmptyPostResults(CONFIG.isMasterMode() ? 'MASTER' : 'LOCAL');
+    this._runBatchPostLoop(context);
+    this._invalidateBatchCaches(context);
+    this._flushBatchStatusUpdates(context);
+    return this._reportBatchPostResults(context);
+  },
 
+  /** @private Phase 1: initialise context for a batch post run. Returns null if sheet is empty. */
+  _initBatchPostSetup: function(sheet, startRow, endRow) {
+    const startTime = Date.now();
     const sheetName = sheet.getName();
     const dataStartRow = CONFIG.dataStartRow;
     const lastRow = sheet.getLastRow();
-
-    // MASTER DB AWARENESS: Log connection mode
     const connectionMode = CONFIG.isMasterMode() ? 'MASTER' : 'LOCAL';
-    // AuditLogger.logInfo('BATCH_POST_START', `Starting batch post in ${connectionMode} mode (${sheetName})`);
 
-    // Set default row range
     if (startRow === null) startRow = dataStartRow;
-    if (endRow === null) endRow = lastRow;
+    if (endRow   === null) endRow   = lastRow;
 
-    // Validate row range
-    if (lastRow < dataStartRow) {
-      return this._createEmptyPostResults(connectionMode);
-    }
-
-    // Adjust end row if needed
-    if (endRow > lastRow) endRow = lastRow;
-    if (startRow > endRow) {
-      return this._createEmptyPostResults(connectionMode);
-    }
+    if (lastRow < dataStartRow)  return null;
+    if (endRow  > lastRow)       endRow = lastRow;
+    if (startRow > endRow)       return null;
 
     const numRows = endRow - startRow + 1;
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // UX FEEDBACK: Show initial toast with connection mode
-    ss.toast(
+    SpreadsheetApp.getActiveSpreadsheet().toast(
       `Starting batch post of ${numRows} rows (${connectionMode} mode)...`,
-      'Processing',
-      3
+      'Processing', 3
     );
 
-    // Read all data at once for performance
-    const dataRange = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily);
-    const allData = dataRange.getValues();
+    const allData = sheet.getRange(startRow, 1, numRows, CONFIG.totalColumns.daily).getValues();
 
     const results = {
-      total: numRows,
-      posted: 0,
-      failed: 0,
-      skipped: 0,
-      errors: [],
-      connectionMode: connectionMode,
-      duration: 0,
-      avgTimePerRow: 0
+      total: numRows, posted: 0, failed: 0, skipped: 0,
+      errors: [], connectionMode: connectionMode, duration: 0, avgTimePerRow: 0
     };
 
-    // BATCH OPTIMIZATION: Collect suppliers for cache invalidation
-    const suppliersToInvalidate = new Set();
+    return {
+      sheet, sheetName, connectionMode,
+      startRow, endRow, numRows, allData,
+      results,
+      suppliersToInvalidate: new Set(),
+      pendingStatusUpdates:  [],
+      progressInterval: this._calculateProgressInterval(numRows),
+      enteredBy:    UserResolver.getCurrentUser(),
+      batchContext: this._initBatchContext(),
+      startTime
+    };
+  },
 
-    // PERF FIX: Accumulate status updates; write all rows in one setValues() call
-    // after the loop instead of per-row API calls.
-    const pendingStatusUpdates = [];
+  /** @private Phase 2: iterate rows, validate, invoice, payment, queue status updates. */
+  _runBatchPostLoop: function(context) {
+    const { sheet, sheetName, allData, startRow, numRows,
+            results, suppliersToInvalidate, pendingStatusUpdates,
+            progressInterval, enteredBy, batchContext } = context;
 
-    // Dynamic progress interval
-    const progressInterval = this._calculateProgressInterval(numRows);
-
-    // PHASE 2 OPTIMIZATION: Get user once before loop
-    const enteredBy = UserResolver.getCurrentUser();
-
-    // PERF FIX: Pre-fetch Master DB sheet references and last-row counts once
-    // before the loop so createInvoice / _recordPayment skip their per-row
-    // getLastRow() calls (each is a ~500ms remote call in MASTER mode).
-    const batchContext = this._initBatchContext();
-
-    // Process each row — single batch lock held across the whole loop so
-    // createInvoice() and _recordPayment() skip their per-row lock acquisitions.
-    // Lock is released in the finally block immediately after the loop.
     try {
       for (let i = 0; i < allData.length; i++) {
-        const rowNum = startRow + i;
+        const rowNum  = startRow + i;
         const rowData = allData[i];
 
-        // UX FEEDBACK: Dynamic progress toast
         if ((i + 1) % progressInterval === 0) {
-          ss.toast(
-            `Processed ${i + 1} of ${numRows} rows...`,
-            'Progress',
-            2
+          SpreadsheetApp.getActiveSpreadsheet().toast(
+            `Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2
           );
         }
 
-        // Skip empty rows (no supplier)
-        if (!rowData[CONFIG.cols.supplier]) {
-          results.skipped++;
-          continue;
-        }
+        if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
 
-        // Skip already posted rows
         const status = rowData[CONFIG.cols.status];
-        if (status && status.toString().toUpperCase() === 'POSTED') {
-          results.skipped++;
-          continue;
-        }
+        if (status && status.toString().toUpperCase() === 'POSTED') { results.skipped++; continue; }
 
         try {
-          // Build data object (pass enteredBy to avoid redundant calls)
           const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
-
-          // Validate first
           const validation = validatePostData(data);
 
           if (!validation.valid) {
             results.failed++;
-            results.errors.push({
-              row: rowNum,
-              supplier: data.supplier,
-              invoiceNo: data.invoiceNo || 'N/A',
-              error: validation.error || validation.errors.join(', ')
-            });
+            results.errors.push({ row: rowNum, supplier: data.supplier,
+                                  invoiceNo: data.invoiceNo || 'N/A',
+                                  error: validation.error || validation.errors.join(', ') });
 
             const errorMsg = validation.error ||
-                             (validation.errors && validation.errors.length > 0
-                               ? validation.errors[0]
-                               : 'Validation failed');
+              (validation.errors && validation.errors.length > 0 ? validation.errors[0] : 'Validation failed');
             pendingStatusUpdates.push({
-              rowNum,
-              keepChecked: false,
+              rowNum, keepChecked: false,
               status:  `ERROR: ${errorMsg.substring(0, 100)}`,
               user:    UserResolver.extractUsername(data.enteredBy),
-              time:    data.timestamp,
-              bgColor: CONFIG.colors.error
+              time:    data.timestamp, bgColor: CONFIG.colors.error
             });
-
-            // Log error
             AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
             continue;
           }
 
-          // Generate system ID if needed
           if (!data.sysId) {
             data.sysId = IDGenerator.generateUUID();
             sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
           }
 
-          // Process invoice (create if new, update if exists)
           const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
           data.invoiceId = invoiceResult.invoiceId;
 
-          // Process payment if applicable
           if (this._shouldProcessPayment(data)) {
             PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
           }
 
-          // UPDATE BALANCE CELL
           BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
 
-          // Queue status update — flushed in one setValues() call after the loop
           pendingStatusUpdates.push({
-            rowNum,
-            keepChecked: true,
-            status:  'POSTED',
+            rowNum, keepChecked: true, status: 'POSTED',
             user:    UserResolver.extractUsername(data.enteredBy),
-            time:    data.timestamp,
-            bgColor: CONFIG.colors.success
+            time:    data.timestamp, bgColor: CONFIG.colors.success
           });
 
-          // Collect supplier for batch cache invalidation (done after loop)
           suppliersToInvalidate.add(data.supplier);
-
           results.posted++;
 
         } catch (error) {
           results.failed++;
           results.errors.push({
-            row: rowNum,
-            supplier: rowData[CONFIG.cols.supplier],
-            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A',
-            error: error.message
+            row: rowNum, supplier: rowData[CONFIG.cols.supplier],
+            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
           });
-
           pendingStatusUpdates.push({
-            rowNum,
-            keepChecked: false,
+            rowNum, keepChecked: false,
             status:  `ERROR: ${error.message.substring(0, 100)}`,
             user:    UserResolver.extractUsername(enteredBy),
-            time:    DateUtils.formatTimestamp(),
-            bgColor: CONFIG.colors.error
+            time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error
           });
-
-          // Log error
           AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
         }
       }
     } finally {
-      // Release the batch lock immediately after the loop — post-loop work
-      // (cache invalidation, status flush, metrics) does not need it.
+      // Release batch lock immediately after loop — post-loop work does not need it.
       LockManager.releaseLock(batchContext ? batchContext.batchLock : null);
     }
+  },
 
-    // BATCH CACHE INVALIDATION
-    // Invalidate cache once per unique supplier (instead of per row)
-    // PERFORMANCE: Reduces redundant invalidations by 50-90%
-    for (const supplier of suppliersToInvalidate) {
+  /** @private Phase 3: invalidate supplier cache once per unique supplier. */
+  _invalidateBatchCaches: function(context) {
+    for (const supplier of context.suppliersToInvalidate) {
       CacheManager.invalidateSupplierCache(supplier);
     }
+  },
 
-    // PERF FIX: Flush all status updates in one setValues() + 1-2 setBackground() calls
-    if (pendingStatusUpdates.length > 0) {
-      const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
-      sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
-      flushBackgroundUpdates(sheet, pendingStatusUpdates);
-    }
+  /** @private Phase 4: flush all queued status updates in a single setValues() call. */
+  _flushBatchStatusUpdates: function(context) {
+    const { sheet, allData, startRow, numRows, pendingStatusUpdates } = context;
+    if (pendingStatusUpdates.length === 0) return;
+    const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
+    sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
+    flushBackgroundUpdates(sheet, pendingStatusUpdates);
+  },
 
-    // PERFORMANCE TRACKING: Calculate metrics
-    const batchEndTime = Date.now();
-    results.duration = batchEndTime - batchStartTime;
+  /** @private Phase 5: calculate metrics, show completion toast, return results. */
+  _reportBatchPostResults: function(context) {
+    const { results, startTime, connectionMode } = context;
+    results.duration = Date.now() - startTime;
     results.avgTimePerRow = results.posted > 0
-      ? Math.round(results.duration / results.posted)
-      : 0;
+      ? Math.round(results.duration / results.posted) : 0;
 
-    // MASTER DB AWARENESS: Log completion with performance metrics
-    // AuditLogger.logInfo('BATCH_POST_COMPLETE',
-    //   `Batch post completed in ${connectionMode} mode: ` +
-    //   `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped | ` +
-    //   `Duration: ${results.duration}ms, Avg: ${results.avgTimePerRow}ms/row | ` +
-    //   `Suppliers invalidated: ${suppliersToInvalidate.size}`);
-
-    // UX FEEDBACK: Final completion toast with performance
-    ss.toast(
+    SpreadsheetApp.getActiveSpreadsheet().toast(
       `Completed in ${(results.duration / 1000).toFixed(1)}s (${connectionMode} mode): ` +
       `${results.posted} posted, ${results.failed} failed, ${results.skipped} skipped`,
-      'Success',
-      5
+      'Success', 5
     );
-
     return results;
   },
 
