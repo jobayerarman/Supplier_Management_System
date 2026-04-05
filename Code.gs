@@ -3,136 +3,26 @@
  * Code.gs - Main Application Entry Point and Event Handlers
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * OVERVIEW:
- * Central event handler module for all spreadsheet interactions.
- * Manages edit triggers (both simple and installable), field auto-population,
- * and transaction workflow orchestration.
+ * Central event handler for all spreadsheet interactions.
+ * Manages edit triggers, field auto-population, and transaction workflow.
  *
  * CORE RESPONSIBILITIES:
- * ━━━━━━━━━━━━━━━━━━━━
- * 1. EVENT HANDLING
- *    - onEdit(): Simple trigger for lightweight UI operations (no database access)
- *    - onEditInstallable(): Installable trigger for full database operations
- *    - triggerSetup/teardown functions for Master Database mode support
- *
- * 2. FIELD AUTO-POPULATION
- *    - Code.populatePaymentFields(): Copy Invoice No/Received Amt to payment fields
- *    - Code.populateDuePaymentAmount(): Fetch outstanding balance for Due payments
- *    - Code.clearPaymentFieldsForTypeChange(): Clear irrelevant fields when type changes
- *
- * 3. TRANSACTION PROCESSING
- *    - Code.processPostedRow(): Main workflow orchestration for posted rows
- *    - Validates, creates invoices, records payments, updates balances
- *    - Manages lock acquisition and error handling
- *
- * ARCHITECTURE & DESIGN PATTERNS:
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * MODULE ORGANIZATION (following PaymentManager/InvoiceManager patterns):
- *   1. MODULE HEADER - This documentation
- *   2. GLOBAL TRIGGER FUNCTIONS - onEdit, onEditInstallable (entry points)
- *   3. CODE MODULE - Public API and private helpers
- *      - PUBLIC API - Core transaction processing
- *      - EVENT HANDLERS - Per-column edit handlers
- *      - FIELD POPULATION - Auto-population helpers
- *      - INTERNAL UTILITIES - Private helper functions
- *   4. TRIGGER SETUP/TEARDOWN - Master Database configuration
- *
- * DESIGN PATTERNS USED:
- *   • Module Pattern: Encapsulation via Code object with public/private methods
- *   • Handler Dispatch: Switch-based routing to specific column handlers
- *   • Single Responsibility: Each handler focused on specific column edit
- *   • Early Exit Pattern: Return early to avoid nested blocks
- *   • Write-Through Updates: Cache invalidation after state changes
- *   • Error Boundary: Try-catch with consistent audit logging
- *
- * PERFORMANCE STRATEGY:
- * ━━━━━━━━━━━━━━━━━━━
- * - Single batch read per edit event (1 API call per trigger)
- * - Zero redundant cell reads (pass rowData through function chain)
- * - Parameter passing optimization (Phase 2 UserResolver)
- * - Optimized lock acquisition (only for critical POST operations)
- * - Early validation before lock acquisition (fail fast pattern)
- * - Surgical cache invalidation (supplier-specific only)
- *
- * CONCURRENCY STRATEGY:
- * ━━━━━━━━━━━━━━━━━━
- * - Document locks acquired ONLY for critical POST operations
- * - Non-POST edits execute without locks (better concurrency)
- * - Early validation exits before attempting lock (fail fast)
- * - Lock scope minimal (only during critical state changes)
- * - 60-70% reduction in lock contention vs previous implementation
+ * 1. EVENT HANDLING — onEdit() simple trigger (UI only), onEditInstallable() (full DB access)
+ * 2. FIELD AUTO-POPULATION — Invoice No, Received Amt, Due payment balance population
+ * 3. TRANSACTION PROCESSING — Lock-guarded POST workflow: validate → invoice → payment → balance
  *
  * DUAL TRIGGER SYSTEM:
- * ━━━━━━━━━━━━━━━━━━
- * SIMPLE TRIGGER (onEdit - global entry point):
- *   - Run for: Invoice No, Received Amount edits
- *   - Permissions: Limited (current spreadsheet only)
- *   - Purpose: Lightweight field copying (Invoice No → Prev Invoice, etc.)
- *   - Duration: ~5-10ms per edit
- *   - No lock required
- *   - Delegates to Code._handleSimpleTrigger() for processing
+ * - Simple (onEdit): Invoice No/Received Amt edits; ~5-10ms; no lock; no Master DB access
+ * - Installable (onEditInstallable): Payment Type/Post/Due edits; ~50-150ms; lock on POST only
+ * - Run setupInstallableEditTrigger() once per monthly file for Master Database mode
  *
- * INSTALLABLE TRIGGER (onEditInstallable - global entry point):
- *   - Run for: Payment Type, Post, Due Invoice selection, Payment Amount
- *   - Permissions: Full (can access Master Database)
- *   - Purpose: Database operations, cache access, balance calculations
- *   - Duration: ~50-150ms per edit
- *   - Lock acquired only for POST operations
- *   - Delegates to Code._handleInstallableTrigger() for processing
+ * MODULE ORGANIZATION:
+ *   1. MODULE HEADER — This documentation
+ *   2. GLOBAL TRIGGER FUNCTIONS — onEdit, onEditInstallable (entry points)
+ *   3. CODE MODULE — Public API + trigger handlers + column handlers + helpers
+ *   4. TRIGGER SETUP/TEARDOWN — Master Database trigger configuration
  *
- * MASTER DATABASE SUPPORT:
- * ━━━━━━━━━━━━━━━━━━━━
- * When using Master Database mode:
- *   1. Run setupInstallableEditTrigger() (one-time setup)
- *   2. Simple trigger (onEdit) continues to work for UI operations
- *   3. Installable trigger (onEditInstallable) accesses Master Database
- *   4. All writes routed automatically via InvoiceManager/PaymentManager
- *   5. Cache reads from local IMPORTRANGE (always fresh)
- *
- * INTEGRATION POINTS:
- * ━━━━━━━━━━━━━━━━━
- * VALIDATION INTEGRATION (ValidationEngine.gs):
- *   - validatePostData(): Main validation before processing
- *   - validatePaymentTypeRules(): Payment type specific rules
- *   - Early validation in onEditInstallable prevents lock acquisition
- *
- * INVOICE INTEGRATION (InvoiceManager.gs):
- *   - createOrUpdateInvoice(): Main invoice UPSERT operation
- *   - buildDuePaymentDropdown(): UI dropdown for Due payments
- *   - updateInvoiceInCache(): Sync cache after payment
- *
- * PAYMENT INTEGRATION (PaymentManager.gs):
- *   - processPayment(): Main payment recording with paid date workflow
- *   - PaymentCache: O(1) duplicate detection and query operations
- *
- * BALANCE INTEGRATION (BalanceCalculator.gs):
- *   - updateBalanceCell(): Calculate and display balance after transaction
- *   - Works with both pre-post preview and post-actual balance
- *
- * CACHE INTEGRATION (CacheManager.gs):
- *   - Automatic invalidation after state changes
- *   - Surgical supplier-specific invalidation reduces overhead
- *   - Write-through support for fresh data
- *
- * USER RESOLUTION (UserResolver.gs):
- *   - getCurrentUser(): Get actual logged-in user
- *   - Parameter passing optimization (Phase 2) reduces redundant calls
- *   - Dual-level caching: Execution-scoped + UserProperties
- *
- * AUDIT INTEGRATION (AuditLogger.gs):
- *   - All operations logged with timestamp and user tracking
- *   - Error logging for debugging and compliance
- *
- * Modular Architecture Dependencies:
- * - _Config.gs → global configuration
- * - _Utils.gs → string, date, sheet, ID generation utilities
- * - _UserResolver.gs → user identification system
- * - AuditLogger.gs → audit trail operations
- * - ValidationEngine.gs → business rule validation
- * - InvoiceManager.gs → invoice CRUD operations
- * - PaymentManager.gs → payment processing
- * - BalanceCalculator.gs → balance calculations
- * - CacheManager.gs → performance-critical caching
+ * See agent_docs/ for architecture, caching, coding patterns, and testing details.
  */
 
 /**
