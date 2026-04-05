@@ -197,6 +197,10 @@ digraph execute {
 - Run every verification step — a failing verify means the replacement didn't land correctly
 - Use the plan's commit message verbatim
 - Update `- [ ]` to `- [x]` after each completed step
+- Mark skipped tasks `⏭ skipped — <reason>` in the self-test table (never leave as ⬜).
+  Example: "header already compressed in prior session." Silent omission hides scope drift.
+- Fix/style commits that emerge during a task: update the task's Commit step in the plan to
+  reference both commits. The task is not ✅ until the last refinement commit is done.
 
 ---
 
