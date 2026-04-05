@@ -118,7 +118,13 @@ Run after all tasks complete.
 <exact replacement block>
 \```
 
-- [ ] **Step 2: Verify**
+- [ ] **Step 2a: Spot-check** *(extraction and DRY tasks only)*
+
+<one sentence: manually exercise the extracted helper to confirm behavior is identical to
+the inline code it replaced. For utility extractions, check edge cases such as falsy/zero
+argument values.>
+
+- [ ] **Step 2b: Verify**
 
 <assertion: line count, structural check, neighbor check>
 
