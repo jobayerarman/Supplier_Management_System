@@ -143,6 +143,12 @@ git commit -m "<type>(<scope>): <description>"
 - **Preserve resource guards** — if the original has `try/finally` or lock release, the replacement must too
 - **Phase helper placement** — new helpers go immediately below their orchestrator, before the next unrelated function
 - **Commit message** — Angular-style: `refactor(<scope>): <verb> <what>`
+- **Sub-commits are expected for extraction tasks** — if a post-extraction spot-check reveals
+  a bug or formatting issue, commit it separately using `fix` or `style` type. This is not a
+  violation of one-task-one-commit; the task is complete when its *last* refinement commit
+  lands and the task is marked ✅.
+- **DRY tasks come after their extraction tasks** — never replace call sites before the helper
+  exists and is spot-checked. Extraction commit must land before the DRY replacement commit.
 
 ---
 
