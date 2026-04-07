@@ -393,8 +393,13 @@ const InvoiceManager = {
         invoiceId: invoiceId,
       });
 
-      // ═══ WRITE TO SHEET ═══
-      invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
+      // ═══ WRITE TO SHEET (or defer to batch flush) ═══
+      if (batchContext && Array.isArray(batchContext.pendingInvoiceRows)) {
+        if (batchContext.invoiceFirstRow === null) batchContext.invoiceFirstRow = newRow;
+        batchContext.pendingInvoiceRows.push(newRowData);
+      } else {
+        invoiceSh.getRange(newRow, 1, 1, newRowData.length).setValues([newRowData]);
+      }
 
       // ═══ ADD TO CACHE (Write-Through) - KEY FIX ═══
       CacheManager.addInvoiceToCache(newRow, newRowData);
@@ -411,6 +416,21 @@ const InvoiceManager = {
     } finally {
       LockManager.releaseLock(ownLock);
     }
+  },
+
+  /**
+   * Flush buffered invoice rows to the sheet in a single write (deferred-write mode).
+   * Called once after _runUnpaidBatchPostLoop completes.
+   * No-op if buffer is empty.
+   *
+   * @param {Object} batchContext - Batch context with pendingInvoiceRows buffer
+   */
+  flushPendingInvoiceRows: function(batchContext) {
+    if (!batchContext?.pendingInvoiceRows?.length) return;
+    const rows      = batchContext.pendingInvoiceRows;
+    const firstRow  = batchContext.invoiceFirstRow;
+    const invoiceSh = batchContext.invoiceSheet;
+    invoiceSh.getRange(firstRow, 1, rows.length, rows[0].length).setValues(rows);
   },
 
 
