@@ -633,9 +633,20 @@ const UIMenu = {
   _handleBatchPosting: function(sheet, startRow = null, endRow = null) {
     const context = this._initBatchPostSetup(sheet, startRow, endRow);
     if (!context) return this._createEmptyPostResults(CONFIG.isMasterMode() ? 'MASTER' : 'LOCAL');
-    this._runBatchPostLoop(context);
+
+    const isUnpaid = this._isAllUnpaidBatch(context.allData);
+    context.batchContext = isUnpaid
+      ? this._initUnpaidBatchContext()
+      : this._initBatchContext();
+
+    if (isUnpaid) {
+      this._handleUnpaidBatchPosting(context);
+    } else {
+      this._runBatchPostLoop(context);
+      this._flushBatchStatusUpdates(context);
+    }
+
     this._invalidateBatchCaches(context);
-    this._flushBatchStatusUpdates(context);
     return this._reportBatchPostResults(context);
   },
 
@@ -673,7 +684,6 @@ const UIMenu = {
       pendingStatusUpdates:  [],
       progressInterval: this._calculateProgressInterval(numRows),
       enteredBy:    UserResolver.getCurrentUser(),
-      batchContext: this._initBatchContext(),
       startTime
     };
   },
@@ -1266,6 +1276,32 @@ const UIMenu = {
         `Failed to pre-fetch batch context: ${e.toString()}`);
       return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
     }
+  },
+
+  /** @private Initialise batch context for an all-Unpaid batch: acquires lock + pre-fetches invoice sheet. */
+  _initUnpaidBatchContext: function() {
+    const batchLock    = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
+    return {
+      batchLock,
+      invoiceSheet,
+      paymentSheet:       null,
+      invoiceNextRow:     invoiceSheet.getLastRow() + 1,
+      invoiceFirstRow:    null,
+      pendingInvoiceRows: [],
+      paymentNextRow:     null,
+    };
+  },
+
+  /** @private Returns true if every non-empty row in allData has paymentType === 'Unpaid'. */
+  _isAllUnpaidBatch: function(allData) {
+    const supplierCol    = CONFIG.cols.supplier;
+    const paymentTypeCol = CONFIG.cols.paymentType;
+    for (let i = 0; i < allData.length; i++) {
+      if (!allData[i][supplierCol]) continue;
+      if (allData[i][paymentTypeCol] !== 'Unpaid') return false;
+    }
+    return true;
   },
 
   /**
