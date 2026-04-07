@@ -1448,17 +1448,24 @@ const UIMenu = {
 
   /** @private Initialise batch context for an all-Unpaid batch: acquires lock + pre-fetches invoice sheet. */
   _initUnpaidBatchContext: function() {
-    const batchLock    = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
-    return {
-      batchLock,
-      invoiceSheet,
-      paymentSheet:       null,
-      invoiceNextRow:     invoiceSheet.getLastRow() + 1,
-      invoiceFirstRow:    null,
-      pendingInvoiceRows: [],
-      paymentNextRow:     null,
-    };
+    const batchLock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    try {
+      const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
+      return {
+        batchLock,
+        invoiceSheet,
+        paymentSheet:       null,
+        invoiceNextRow:     invoiceSheet.getLastRow() + 1,
+        invoiceFirstRow:    null,
+        pendingInvoiceRows: [],
+        paymentNextRow:     null,
+      };
+    } catch (e) {
+      LockManager.releaseLock(batchLock);
+      AuditLogger.logWarning('UIMenu._initUnpaidBatchContext',
+        `Failed to pre-fetch invoice sheet for Unpaid batch: ${e.toString()}`);
+      throw e;
+    }
   },
 
   /** @private Returns true if every non-empty row in allData has paymentType === 'Unpaid'. */
