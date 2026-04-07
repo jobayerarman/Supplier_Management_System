@@ -12,3 +12,6 @@ agent_docs/**
 # Clasp config itself
 .clasp.json
 .claspignore
+
+# Generated output
+graphify-out/**
