@@ -650,6 +650,13 @@ const UIMenu = {
     return this._reportBatchPostResults(context);
   },
 
+  /** @private Orchestrate the all-Unpaid fast path. */
+  _handleUnpaidBatchPosting: function(context) {
+    this._runUnpaidBatchPostLoop(context);
+    InvoiceManager.flushPendingInvoiceRows(context.batchContext);  // 1 remote write
+    this._flushUnpaidDailySheetUpdates(context);                   // 3 local writes
+  },
+
   /** @private Phase 1: initialise context for a batch post run. Returns null if sheet is empty. */
   _initBatchPostSetup: function(sheet, startRow, endRow) {
     const startTime = Date.now();
@@ -774,6 +781,99 @@ const UIMenu = {
     }
   },
 
+  /** @private Fast-path loop for all-Unpaid batch: zero API calls per row; defers writes. */
+  _runUnpaidBatchPostLoop: function(context) {
+    const { sheet, sheetName, allData, startRow, numRows,
+            results, suppliersToInvalidate, pendingStatusUpdates,
+            progressInterval, enteredBy, batchContext } = context;
+    context.pendingBalanceUpdates = [];
+
+    try {
+      for (let i = 0; i < allData.length; i++) {
+        const rowNum  = startRow + i;
+        const rowData = allData[i];
+
+        if ((i + 1) % progressInterval === 0) {
+          this._toast(`Processed ${i + 1} of ${numRows} rows...`, 'Progress', 2);
+        }
+
+        if (!rowData[CONFIG.cols.supplier]) { results.skipped++; continue; }
+
+        const status = rowData[CONFIG.cols.status];
+        if (status && status.toString().toUpperCase() === 'POSTED') {
+          results.skipped++; continue;
+        }
+
+        try {
+          const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
+
+          if (!data.sysId) data.sysId = IDGenerator.generateUUID();
+
+          const validation = validatePostData(data);
+          if (!validation.valid) {
+            results.failed++;
+            const errorMsg = validation.error ||
+              (validation.errors?.length ? validation.errors[0] : 'Validation failed');
+            results.errors.push({ row: rowNum, supplier: data.supplier,
+                                  invoiceNo: data.invoiceNo || 'N/A', error: errorMsg });
+            pendingStatusUpdates.push({
+              rowNum, keepChecked: false,
+              status:  `ERROR: ${errorMsg.substring(0, 100)}`,
+              user:    UserResolver.extractUsername(data.enteredBy),
+              time:    data.timestamp, bgColor: CONFIG.colors.error, sysId: null
+            });
+            AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
+            continue;
+          }
+
+          const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
+          if (!invoiceResult.success) {
+            results.failed++;
+            results.errors.push({ row: rowNum, supplier: data.supplier,
+                                  invoiceNo: data.invoiceNo || 'N/A',
+                                  error: invoiceResult.error });
+            pendingStatusUpdates.push({
+              rowNum, keepChecked: false,
+              status:  `ERROR: ${invoiceResult.error?.substring(0, 100)}`,
+              user:    UserResolver.extractUsername(data.enteredBy),
+              time:    data.timestamp, bgColor: CONFIG.colors.error, sysId: null
+            });
+            continue;
+          }
+
+          const balance = BalanceCalculator.getSupplierOutstanding(data.supplier);
+          context.pendingBalanceUpdates.push({ rowNum, balance });
+
+          pendingStatusUpdates.push({
+            rowNum, keepChecked: true, status: 'POSTED',
+            user:    UserResolver.extractUsername(data.enteredBy),
+            time:    data.timestamp, bgColor: CONFIG.colors.success,
+            sysId:   data.sysId
+          });
+
+          suppliersToInvalidate.add(data.supplier);
+          results.posted++;
+
+        } catch (error) {
+          results.failed++;
+          results.errors.push({
+            row: rowNum, supplier: rowData[CONFIG.cols.supplier],
+            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
+          });
+          pendingStatusUpdates.push({
+            rowNum, keepChecked: false,
+            status:  `ERROR: ${error.message?.substring(0, 100)}`,
+            user:    UserResolver.extractUsername(enteredBy),
+            time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error, sysId: null
+          });
+          AuditLogger.logError('UNPAID_BATCH_POST_FAILED', error, { row: rowNum });
+        }
+      }
+    } finally {
+      LockManager.releaseLock(batchContext?.batchLock);
+    }
+  },
+
   /** @private Phase 3: invalidate supplier cache once per unique supplier. */
   _invalidateBatchCaches: function(context) {
     for (const supplier of context.suppliersToInvalidate) {
@@ -788,6 +888,74 @@ const UIMenu = {
     const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
     sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
     flushBackgroundUpdates(sheet, pendingStatusUpdates);
+  },
+
+  /** @private Write balance col, status+sysId grid, and row backgrounds — 3 local API calls. */
+  _flushUnpaidDailySheetUpdates: function(context) {
+    const { sheet, allData, startRow, numRows,
+            pendingStatusUpdates, pendingBalanceUpdates } = context;
+    if (pendingStatusUpdates.length === 0) return;
+
+    const balanceGrid = this._buildBalanceGrid(allData, startRow, numRows, pendingBalanceUpdates);
+    sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(balanceGrid);
+
+    const statusGrid = this._buildUnpaidStatusGrid(allData, startRow, numRows, pendingStatusUpdates);
+    sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 5).setValues(statusGrid);
+
+    this._applyUnpaidBatchBackgrounds(sheet, startRow, numRows, pendingStatusUpdates);
+  },
+
+  /** @private Build balance column grid: computed value for posted rows, original for skipped. */
+  _buildBalanceGrid: function(allData, startRow, numRows, pendingBalanceUpdates) {
+    const balanceCol = CONFIG.cols.balance;
+    const updateMap  = new Map(pendingBalanceUpdates.map(u => [u.rowNum, u.balance]));
+    return Array.from({ length: numRows }, (_, i) => {
+      const rowNum = startRow + i;
+      return updateMap.has(rowNum)
+        ? [updateMap.get(rowNum)]
+        : [allData[i][balanceCol]];
+    });
+  },
+
+  /** @private 5-column status grid: post, status, user, time, sysId. */
+  _buildUnpaidStatusGrid: function(allData, startRow, numRows, pendingStatusUpdates) {
+    const cols      = CONFIG.cols;
+    const updateMap = new Map(pendingStatusUpdates.map(u => [u.rowNum, u]));
+    return Array.from({ length: numRows }, (_, i) => {
+      const rowNum = startRow + i;
+      const u      = updateMap.get(rowNum);
+      if (u) {
+        const timeStr = DateUtils.formatTime(u.time);
+        return [u.keepChecked, u.status, u.user, timeStr, u.sysId ?? allData[i][cols.sysId]];
+      }
+      return [allData[i][cols.post],      allData[i][cols.status],
+              allData[i][cols.enteredBy], allData[i][cols.timestamp],
+              allData[i][cols.sysId]];
+    });
+  },
+
+  /** @private Apply row backgrounds, grouping contiguous same-color rows into one setBackground call per group. */
+  _applyUnpaidBatchBackgrounds: function(sheet, startRow, numRows, pendingStatusUpdates) {
+    const updateMap = new Map(pendingStatusUpdates.map(u => [u.rowNum, u.bgColor]));
+    let groupStart = null, groupColor = null;
+
+    const flushGroup = (endRow) => {
+      if (groupStart !== null) {
+        sheet.getRange(groupStart, 2, endRow - groupStart + 1, CONFIG.totalColumns.daily - 1)
+             .setBackground(groupColor);
+      }
+    };
+
+    for (let i = 0; i < numRows; i++) {
+      const rowNum = startRow + i;
+      const color  = updateMap.get(rowNum) ?? null;
+      if (color !== groupColor) {
+        flushGroup(rowNum - 1);
+        groupStart = color ? rowNum : null;
+        groupColor = color;
+      }
+    }
+    flushGroup(startRow + numRows - 1);
   },
 
   /** @private Phase 5: calculate metrics, show completion toast, return results. */
