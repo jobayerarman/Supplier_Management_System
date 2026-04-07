@@ -427,6 +427,7 @@ const InvoiceManager = {
    */
   flushPendingInvoiceRows: function(batchContext) {
     if (!batchContext?.pendingInvoiceRows?.length) return;
+    if (batchContext.invoiceFirstRow === null) return;  // defensive: rows present but firstRow unset
     const rows      = batchContext.pendingInvoiceRows;
     const firstRow  = batchContext.invoiceFirstRow;
     const invoiceSh = batchContext.invoiceSheet;

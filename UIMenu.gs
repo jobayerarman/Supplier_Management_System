@@ -870,6 +870,7 @@ const UIMenu = {
         }
       }
     } finally {
+      // Release batch lock immediately after loop — post-loop flush does not need it.
       LockManager.releaseLock(batchContext?.batchLock);
     }
   },
@@ -896,8 +897,10 @@ const UIMenu = {
             pendingStatusUpdates, pendingBalanceUpdates } = context;
     if (pendingStatusUpdates.length === 0) return;
 
-    const balanceGrid = this._buildBalanceGrid(allData, startRow, numRows, pendingBalanceUpdates);
-    sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(balanceGrid);
+    if (pendingBalanceUpdates.length > 0) {
+      const balanceGrid = this._buildBalanceGrid(allData, startRow, numRows, pendingBalanceUpdates);
+      sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(balanceGrid);
+    }
 
     const statusGrid = this._buildUnpaidStatusGrid(allData, startRow, numRows, pendingStatusUpdates);
     sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 5).setValues(statusGrid);
@@ -941,7 +944,7 @@ const UIMenu = {
 
     const flushGroup = (endRow) => {
       if (groupStart !== null) {
-        sheet.getRange(groupStart, 2, endRow - groupStart + 1, CONFIG.totalColumns.daily - 1)
+        sheet.getRange(groupStart, 2, endRow - groupStart + 1, CONFIG.totalColumns.daily - 5)
              .setBackground(groupColor);
       }
     };
@@ -1468,15 +1471,17 @@ const UIMenu = {
     }
   },
 
-  /** @private Returns true if every non-empty row in allData has paymentType === 'Unpaid'. */
+  /** @private Returns true if every non-empty row in allData has paymentType === 'Unpaid'. Returns false for all-blank selections. */
   _isAllUnpaidBatch: function(allData) {
+    let hasData = false;
     const supplierCol    = CONFIG.cols.supplier;
     const paymentTypeCol = CONFIG.cols.paymentType;
     for (let i = 0; i < allData.length; i++) {
       if (!allData[i][supplierCol]) continue;
+      hasData = true;
       if (allData[i][paymentTypeCol] !== 'Unpaid') return false;
     }
-    return true;
+    return hasData;
   },
 
   /**
