@@ -712,31 +712,33 @@ const CacheManager = {
     const inactiveCount = this.inactiveData ? this.inactiveData.length - 1 : 0;
     const totalCount = activeCount + inactiveCount;
 
-    const activePercentage = totalCount > 0
-      ? (activeCount / totalCount * 100).toFixed(1)
-      : 0;
+    const activePercent = totalCount > 0 ? activeCount / totalCount * 100 : 0;
+    const inactivePercent = totalCount > 0 ? inactiveCount / totalCount * 100 : 0;
 
     const totalPartitionHits = this.stats.activePartitionHits + this.stats.inactivePartitionHits;
-    const activeHitRate = totalPartitionHits > 0
-      ? (this.stats.activePartitionHits / totalPartitionHits * 100).toFixed(1)
+    const activeHitPercent = totalPartitionHits > 0
+      ? this.stats.activePartitionHits / totalPartitionHits * 100
+      : 0;
+    const inactiveHitPercent = totalPartitionHits > 0
+      ? this.stats.inactivePartitionHits / totalPartitionHits * 100
       : 0;
 
     return {
       active: {
         count: activeCount,
-        percentage: activePercentage,
+        percentage: activePercent.toFixed(1),
         hitCount: this.stats.activePartitionHits,
-        hitRate: activeHitRate
+        hitRate: activeHitPercent.toFixed(1)
       },
       inactive: {
         count: inactiveCount,
-        percentage: (100 - activePercentage).toFixed(1),
+        percentage: inactivePercent.toFixed(1),
         hitCount: this.stats.inactivePartitionHits,
-        hitRate: (100 - activeHitRate).toFixed(1)
+        hitRate: inactiveHitPercent.toFixed(1)
       },
       total: totalCount,
       transitions: this.stats.partitionTransitions,
-      memoryReduction: `${(100 - parseFloat(activePercentage)).toFixed(0)}% (inactive invoices separated)`
+      memoryReduction: `${inactivePercent.toFixed(0)}% (inactive invoices separated)`
     };
   }
 };
