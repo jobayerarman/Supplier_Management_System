@@ -117,34 +117,7 @@ const CacheManager = {
       const key = `${supplier}|${invoiceNo}`;
       const sheetRow = i + 1; // Convert array index to sheet row (1-based)
       const isActive = this._isActiveInvoice(data[i]);
-
-      if (isActive) {
-        // Add to active partition
-        const activeArrayIndex = this.activeData.length;
-        this.activeData.push(data[i]);
-        this.activeIndexMap.set(key, activeArrayIndex);
-
-        if (!this.activeSupplierIndex.has(supplier)) {
-          this.activeSupplierIndex.set(supplier, []);
-        }
-        this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
-
-        // Global index for cross-partition lookups + sheet row tracking
-        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex, sheetRow: sheetRow });
-      } else {
-        // Add to inactive partition
-        const inactiveArrayIndex = this.inactiveData.length;
-        this.inactiveData.push(data[i]);
-        this.inactiveIndexMap.set(key, inactiveArrayIndex);
-
-        if (!this.inactiveSupplierIndex.has(supplier)) {
-          this.inactiveSupplierIndex.set(supplier, []);
-        }
-        this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
-
-        // Global index for cross-partition lookups + sheet row tracking
-        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex, sheetRow: sheetRow });
-      }
+      this._addRowToPartition(key, supplier, data[i], isActive, sheetRow);
     }
 
     this.stats.fullReloads++;
@@ -172,6 +145,39 @@ const CacheManager = {
 
     // Normal case: numeric evaluated value
     return Math.abs(Number(balanceDue) || 0) > 0.01;
+  },
+
+  /**
+   * Add a row to the appropriate partition (active or inactive).
+   * Updates indexMap, supplierIndex, and globalIndexMap atomically.
+   *
+   * @private
+   * @param {string}  key      - "SUPPLIER|INVOICE_NO" lookup key
+   * @param {string}  supplier - Normalized supplier name
+   * @param {Array}   rowData  - Invoice row data array
+   * @param {boolean} isActive - True → active partition, false → inactive
+   * @param {number}  sheetRow - 1-based sheet row number for future re-reads
+   */
+  _addRowToPartition: function(key, supplier, rowData, isActive, sheetRow) {
+    if (isActive) {
+      const idx = this.activeData.length;
+      this.activeData.push(rowData);
+      this.activeIndexMap.set(key, idx);
+      if (!this.activeSupplierIndex.has(supplier)) {
+        this.activeSupplierIndex.set(supplier, []);
+      }
+      this.activeSupplierIndex.get(supplier).push(idx);
+      this.globalIndexMap.set(key, { partition: 'active', index: idx, sheetRow: sheetRow });
+    } else {
+      const idx = this.inactiveData.length;
+      this.inactiveData.push(rowData);
+      this.inactiveIndexMap.set(key, idx);
+      if (!this.inactiveSupplierIndex.has(supplier)) {
+        this.inactiveSupplierIndex.set(supplier, []);
+      }
+      this.inactiveSupplierIndex.get(supplier).push(idx);
+      this.globalIndexMap.set(key, { partition: 'inactive', index: idx, sheetRow: sheetRow });
+    }
   },
 
   /**
@@ -209,34 +215,10 @@ const CacheManager = {
     try {
       const key = `${supplier}|${invoiceNo}`;
       const isActive = this._isActiveInvoice(rowData);
-
+      this._addRowToPartition(key, supplier, rowData, isActive, rowNumber);
       if (isActive) {
-        // Add to active partition
-        const activeArrayIndex = this.activeData.length;
-        this.activeData.push(rowData);
-        this.activeIndexMap.set(key, activeArrayIndex);
-
-        if (!this.activeSupplierIndex.has(supplier)) {
-          this.activeSupplierIndex.set(supplier, []);
-        }
-        this.activeSupplierIndex.get(supplier).push(activeArrayIndex);
-
-        // Update global index with sheet row tracking
-        this.globalIndexMap.set(key, { partition: 'active', index: activeArrayIndex, sheetRow: rowNumber });
         this.stats.activePartitionHits++;
       } else {
-        // Add to inactive partition
-        const inactiveArrayIndex = this.inactiveData.length;
-        this.inactiveData.push(rowData);
-        this.inactiveIndexMap.set(key, inactiveArrayIndex);
-
-        if (!this.inactiveSupplierIndex.has(supplier)) {
-          this.inactiveSupplierIndex.set(supplier, []);
-        }
-        this.inactiveSupplierIndex.get(supplier).push(inactiveArrayIndex);
-
-        // Update global index with sheet row tracking
-        this.globalIndexMap.set(key, { partition: 'inactive', index: inactiveArrayIndex, sheetRow: rowNumber });
         this.stats.inactivePartitionHits++;
       }
 
