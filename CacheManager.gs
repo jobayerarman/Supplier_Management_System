@@ -28,8 +28,6 @@
  */
 
 const CacheManager = {
-  // ═══ PARTITION-ONLY CACHE (SIMPLIFIED) ═══
-  // Removed unified cache for reduced complexity and better scalability
   timestamp: null,      // Cache creation timestamp for TTL
 
   // Active partition: Unpaid and Partial invoices (hot data - 10-30% of total)
@@ -62,7 +60,6 @@ const CacheManager = {
 
   /**
    * Get cached data if valid (within TTL)
-   * SIMPLIFIED: Returns partition-only data (no backward compatibility)
    *
    * @returns {{activeData:Array, activeIndexMap:Map, activeSupplierIndex:Map, inactiveData:Array, inactiveIndexMap:Map, inactiveSupplierIndex:Map, globalIndexMap:Map}|null}
    */
@@ -87,7 +84,6 @@ const CacheManager = {
 
   /**
    * Set new cache with partition-only indexing
-   * SIMPLIFIED: Builds only partition structures (no unified cache)
    *
    * @param {Array[]} data - Sheet data array
    */
@@ -215,9 +211,7 @@ const CacheManager = {
   },
 
   /**
-   * ADD INVOICE TO CACHE (Partition-Only Write-Through)
-   *
-   * SIMPLIFIED: Direct partition write without redundant reads or unified cache
+   * ADD INVOICE TO CACHE (Write-Through)
    *
    * STRATEGY:
    * - Trusts pre-calculated data (no sheet re-read)
@@ -266,9 +260,7 @@ const CacheManager = {
   },
 
   /**
-   * UPDATE INVOICE IN CACHE (Partition-Only)
-   *
-   * SIMPLIFIED: Direct delegation to updateSingleInvoice
+   * UPDATE INVOICE IN CACHE
    *
    * @param {string} supplier - Supplier name
    * @param {string} invoiceNo - Invoice number
@@ -309,9 +301,7 @@ const CacheManager = {
   },
 
   /**
-   * UPDATE SINGLE INVOICE (Partition-Only Incremental Update)
-   *
-   * SIMPLIFIED: Uses globalIndexMap for partition-aware updates
+   * UPDATE SINGLE INVOICE (Incremental Update)
    *
    * Updates only one invoice row without invalidating entire cache.
    * Handles partition transitions automatically.
@@ -696,8 +686,6 @@ const CacheManager = {
     // OPTIMIZED: Read only used range
     const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
     this.set(data);
-
-    // ✅ Return partition-only data (backward compatibility removed)
     return {
       activeData: this.activeData,
       activeIndexMap: this.activeIndexMap,
