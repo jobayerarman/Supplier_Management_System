@@ -310,211 +310,6 @@ const InvoiceManager = {
   },
 
   // ═════════════════════════════════════════════════════════════════════════════
-  // SECTION 5: INTERNAL HELPERS - DATA BUILDING
-  // ═════════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Build invoice formulas for a specific row
-   * Replaces {row} placeholder with actual row number in formula templates
-   *
-   * @private
-   * @param {number} rowNum - Row number to generate formulas for
-   * @returns {{totalPaid: string, balanceDue: string, status: string, daysOutstanding: string}} Object with formula properties
-   */
-  _buildInvoiceFormulas: function(rowNum) {
-    return {
-      totalPaid: this.CONSTANTS.FORMULA.TOTAL_PAID.replace(/{row}/g, rowNum),
-      balanceDue: this.CONSTANTS.FORMULA.BALANCE_DUE.replace(/{row}/g, rowNum),
-      status: this.CONSTANTS.FORMULA.STATUS.replace(/{row}/g, rowNum),
-      daysOutstanding: this.CONSTANTS.FORMULA.DAYS_OUTSTANDING.replace(/{row}/g, rowNum),
-    };
-  },
-
-  /**
-   * Build complete invoice row data array
-   * Creates the full row of data and formulas for insertion into InvoiceDatabase
-   *
-   * @private
-   * @param {Object} invoice - Invoice data object with properties:
-   *   - invoiceDate: Invoice date
-   *   - supplier: Supplier name
-   *   - invoiceNo: Invoice number
-   *   - receivedAmt: Received amount
-   *   - rowNum: Target row number (for formula generation)
-   *   - sheetName: Origin sheet name
-   *   - enteredBy: User who entered the invoice
-   *   - timestamp: Timestamp of entry
-   *   - invoiceId: Invoice system ID
-   * @returns {Array} Complete row array for setValues()
-   */
-  _buildInvoiceRowData: function(invoice) {
-    const formulas = this._buildInvoiceFormulas(invoice.rowNum);
-    return [
-      invoice.invoiceDate,                                    // A - invoiceDate
-      invoice.supplier,                                       // B - supplier
-      invoice.invoiceNo,                                      // C - invoiceNo
-      invoice.receivedAmt,                                    // D - totalAmount
-      formulas.totalPaid,                                     // E - totalPaid (formula)
-      formulas.balanceDue,                                    // F - balanceDue (formula)
-      formulas.status,                                        // G - status (formula)
-      '',                                                      // H - paidDate (empty at creation)
-      formulas.daysOutstanding,                               // I - daysOutstanding (formula)
-      invoice.sheetName,                                      // J - originDay
-      invoice.enteredBy,                                      // K - enteredBy
-      invoice.timestamp,                                      // L - timestamp
-      invoice.invoiceId,                                      // M - sysId
-    ];
-  },
-
-  // ═════════════════════════════════════════════════════════════════════════════
-  // SECTION 6: INTERNAL HELPERS - UTILITIES
-  // ═════════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Higher-order function: Execute operation with lock management
-   * Wraps operation with lock acquisition, execution, and guaranteed cleanup
-   *
-   * Reduces boilerplate by ~50% compared to inline lock management
-   * Guarantees lock release even on error via finally block
-   *
-   * @private
-   * @param {Function} operation - Synchronous function to execute under lock
-   *                                Should return result object with {success, ...}
-   * @param {Object} context - Operation context (optional)
-   *   - operationType: {string} Name of operation for error messages
-   *   - errorHandler: {Function} Custom error handler (receives error, returns result)
-   * @returns {Object} Operation result (format depends on operation parameter)
-   */
-  _withLock: function(operation, context = {}) {
-    // Acquire lock before executing operation
-    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
-    if (!lock) {
-      // Lock acquisition failed - use error builder
-      return this._buildLockError(context.operationType || 'invoice operation');
-    }
-
-    try {
-      // Execute the business logic operation
-      // Operation should handle its own try/catch if needed
-      return operation();
-    } catch (error) {
-      // Use custom error handler if provided, otherwise use generic builder
-      if (context.errorHandler) {
-        return context.errorHandler(error);
-      }
-      return this._buildGenericError(context.operationType || 'operation', error);
-    } finally {
-      // CRITICAL: Always release lock, even on error
-      LockManager.releaseLock(lock);
-    }
-  },
-
-  /**
-   * Set formulas for an invoice row in a non-destructive way.
-   * This function now only targets the specific formula columns.
-   * Used by the repairAllFormulas() utility.
-   * 
-   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
-   * @param {number} row - Row number to apply formulas to
-   * @returns {void}
-   */
-  applyInvoiceFormulas: function (sheet, row) {
-    try {
-      const col = CONFIG.invoiceCols;
-
-      // TARGETED UPDATE: Set formula for 'Total Paid' (Column E)
-      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid
-      sheet.getRange(row, col.totalPaid + 1)
-        .setFormula(`=IF(C${row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${row}, PaymentLog!B:B,B${row}),0))`);
-
-      // TARGETED UPDATE: Set formula for 'Balance Due' (Column F)
-      sheet.getRange(row, col.balanceDue + 1)
-        .setFormula(`=IF(D${row}="","", D${row} - E${row})`);
-
-      // TARGETED UPDATE: Set formula for 'Status' (Column G)
-      sheet.getRange(row, col.status + 1)
-        .setFormula(`=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`);
-
-      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column I)
-      sheet.getRange(row, col.daysOutstanding + 1)
-        .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
-
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager.applyInvoiceFormulas',
-        `Failed to set formulas for row ${row}: ${error.toString()}`);
-      throw error;
-    }
-  },
-
-  /**
-   * Validate dropdown request parameters
-   * Pure function for request validation logic
-   *
-   * @private
-   * @param {string} paymentType - Payment type to check
-   * @param {string} supplier - Supplier name to check
-   * @returns {{valid: boolean, reason?: string}} Validation result with optional reason
-   */
-  _validateDropdownRequest: function(paymentType, supplier) {
-    if (paymentType !== this.CONSTANTS.PAYMENT_TYPE.DUE) {
-      return { valid: false, reason: 'Not a Due payment type' };
-    }
-    if (StringUtils.isEmpty(supplier)) {
-      return { valid: false, reason: 'Supplier is empty' };
-    }
-    return { valid: true };
-  },
-
-  /**
-   * Build data validation rule for dropdown
-   * Pure function for UI rule creation
-   *
-   * @private
-   * @param {Array} invoiceNumbers - List of invoice numbers
-   * @returns {GoogleAppsScript.Spreadsheet.DataValidation} Data validation rule
-   */
-  _buildDropdownRule: function(invoiceNumbers) {
-    return SpreadsheetApp.newDataValidation()
-      .requireValueInList(invoiceNumbers, true)
-      .setAllowInvalid(true)
-      .build();
-  },
-
-  /**
-   * Apply dropdown to cell with proper ordering
-   * Pure function for cell update logic (critical fix: set dropdown FIRST)
-   *
-   * @private
-   * @param {GoogleAppsScript.Spreadsheet.Range} targetCell - Cell to apply dropdown to
-   * @param {Array<string>} invoiceNumbers - List of valid invoice numbers
-   * @returns {boolean} True if dropdown applied successfully, false otherwise
-   */
-  _applyDropdownToCell: function(targetCell, invoiceNumbers, currentValue = null) {
-    try {
-      const rule = this._buildDropdownRule(invoiceNumbers);
-      const resolvedValue = currentValue !== null ? currentValue : targetCell.getValue();
-      const isValidValue = invoiceNumbers.includes(String(resolvedValue));
-
-      // CRITICAL FIX: Set dropdown FIRST, then clear content
-      // This prevents the clearContent() edit event from interfering with the dropdown
-      targetCell
-        .setDataValidation(rule)
-        .setBackground(CONFIG.colors.info);
-
-      // Clear content and note ONLY if current value is invalid or empty
-      if (!isValidValue || !resolvedValue) {
-        targetCell.clearContent().clearNote();
-      } else {
-        targetCell.clearNote();
-      }
-      return true;
-    } catch (error) {
-      AuditLogger.logError('InvoiceManager._applyDropdownToCell', error.toString());
-      return false;
-    }
-  },
-
-  // ═════════════════════════════════════════════════════════════════════════════
   // SECTION 3: PUBLIC API - QUERIES & ANALYSIS
   // ═════════════════════════════════════════════════════════════════════════════
 
@@ -889,6 +684,211 @@ const InvoiceManager = {
     } catch (error) {
       AuditLogger.logError('InvoiceManager.repairAllFormulas', error.toString());
       return { success: false, error: error.toString() };
+    }
+  },
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 5: INTERNAL HELPERS - DATA BUILDING
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Build invoice formulas for a specific row
+   * Replaces {row} placeholder with actual row number in formula templates
+   *
+   * @private
+   * @param {number} rowNum - Row number to generate formulas for
+   * @returns {{totalPaid: string, balanceDue: string, status: string, daysOutstanding: string}} Object with formula properties
+   */
+  _buildInvoiceFormulas: function(rowNum) {
+    return {
+      totalPaid: this.CONSTANTS.FORMULA.TOTAL_PAID.replace(/{row}/g, rowNum),
+      balanceDue: this.CONSTANTS.FORMULA.BALANCE_DUE.replace(/{row}/g, rowNum),
+      status: this.CONSTANTS.FORMULA.STATUS.replace(/{row}/g, rowNum),
+      daysOutstanding: this.CONSTANTS.FORMULA.DAYS_OUTSTANDING.replace(/{row}/g, rowNum),
+    };
+  },
+
+  /**
+   * Build complete invoice row data array
+   * Creates the full row of data and formulas for insertion into InvoiceDatabase
+   *
+   * @private
+   * @param {Object} invoice - Invoice data object with properties:
+   *   - invoiceDate: Invoice date
+   *   - supplier: Supplier name
+   *   - invoiceNo: Invoice number
+   *   - receivedAmt: Received amount
+   *   - rowNum: Target row number (for formula generation)
+   *   - sheetName: Origin sheet name
+   *   - enteredBy: User who entered the invoice
+   *   - timestamp: Timestamp of entry
+   *   - invoiceId: Invoice system ID
+   * @returns {Array} Complete row array for setValues()
+   */
+  _buildInvoiceRowData: function(invoice) {
+    const formulas = this._buildInvoiceFormulas(invoice.rowNum);
+    return [
+      invoice.invoiceDate,                                    // A - invoiceDate
+      invoice.supplier,                                       // B - supplier
+      invoice.invoiceNo,                                      // C - invoiceNo
+      invoice.receivedAmt,                                    // D - totalAmount
+      formulas.totalPaid,                                     // E - totalPaid (formula)
+      formulas.balanceDue,                                    // F - balanceDue (formula)
+      formulas.status,                                        // G - status (formula)
+      '',                                                      // H - paidDate (empty at creation)
+      formulas.daysOutstanding,                               // I - daysOutstanding (formula)
+      invoice.sheetName,                                      // J - originDay
+      invoice.enteredBy,                                      // K - enteredBy
+      invoice.timestamp,                                      // L - timestamp
+      invoice.invoiceId,                                      // M - sysId
+    ];
+  },
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // SECTION 6: INTERNAL HELPERS - UTILITIES
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Higher-order function: Execute operation with lock management
+   * Wraps operation with lock acquisition, execution, and guaranteed cleanup
+   *
+   * Reduces boilerplate by ~50% compared to inline lock management
+   * Guarantees lock release even on error via finally block
+   *
+   * @private
+   * @param {Function} operation - Synchronous function to execute under lock
+   *                                Should return result object with {success, ...}
+   * @param {Object} context - Operation context (optional)
+   *   - operationType: {string} Name of operation for error messages
+   *   - errorHandler: {Function} Custom error handler (receives error, returns result)
+   * @returns {Object} Operation result (format depends on operation parameter)
+   */
+  _withLock: function(operation, context = {}) {
+    // Acquire lock before executing operation
+    const lock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
+    if (!lock) {
+      // Lock acquisition failed - use error builder
+      return this._buildLockError(context.operationType || 'invoice operation');
+    }
+
+    try {
+      // Execute the business logic operation
+      // Operation should handle its own try/catch if needed
+      return operation();
+    } catch (error) {
+      // Use custom error handler if provided, otherwise use generic builder
+      if (context.errorHandler) {
+        return context.errorHandler(error);
+      }
+      return this._buildGenericError(context.operationType || 'operation', error);
+    } finally {
+      // CRITICAL: Always release lock, even on error
+      LockManager.releaseLock(lock);
+    }
+  },
+
+  /**
+   * Set formulas for an invoice row in a non-destructive way.
+   * This function now only targets the specific formula columns.
+   * Used by the repairAllFormulas() utility.
+   * 
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Invoice sheet
+   * @param {number} row - Row number to apply formulas to
+   * @returns {void}
+   */
+  applyInvoiceFormulas: function (sheet, row) {
+    try {
+      const col = CONFIG.invoiceCols;
+
+      // TARGETED UPDATE: Set formula for 'Total Paid' (Column E)
+      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid
+      sheet.getRange(row, col.totalPaid + 1)
+        .setFormula(`=IF(C${row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${row}, PaymentLog!B:B,B${row}),0))`);
+
+      // TARGETED UPDATE: Set formula for 'Balance Due' (Column F)
+      sheet.getRange(row, col.balanceDue + 1)
+        .setFormula(`=IF(D${row}="","", D${row} - E${row})`);
+
+      // TARGETED UPDATE: Set formula for 'Status' (Column G)
+      sheet.getRange(row, col.status + 1)
+        .setFormula(`=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`);
+
+      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column I)
+      sheet.getRange(row, col.daysOutstanding + 1)
+        .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
+
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager.applyInvoiceFormulas',
+        `Failed to set formulas for row ${row}: ${error.toString()}`);
+      throw error;
+    }
+  },
+
+  /**
+   * Validate dropdown request parameters
+   * Pure function for request validation logic
+   *
+   * @private
+   * @param {string} paymentType - Payment type to check
+   * @param {string} supplier - Supplier name to check
+   * @returns {{valid: boolean, reason?: string}} Validation result with optional reason
+   */
+  _validateDropdownRequest: function(paymentType, supplier) {
+    if (paymentType !== this.CONSTANTS.PAYMENT_TYPE.DUE) {
+      return { valid: false, reason: 'Not a Due payment type' };
+    }
+    if (StringUtils.isEmpty(supplier)) {
+      return { valid: false, reason: 'Supplier is empty' };
+    }
+    return { valid: true };
+  },
+
+  /**
+   * Build data validation rule for dropdown
+   * Pure function for UI rule creation
+   *
+   * @private
+   * @param {Array} invoiceNumbers - List of invoice numbers
+   * @returns {GoogleAppsScript.Spreadsheet.DataValidation} Data validation rule
+   */
+  _buildDropdownRule: function(invoiceNumbers) {
+    return SpreadsheetApp.newDataValidation()
+      .requireValueInList(invoiceNumbers, true)
+      .setAllowInvalid(true)
+      .build();
+  },
+
+  /**
+   * Apply dropdown to cell with proper ordering
+   * Pure function for cell update logic (critical fix: set dropdown FIRST)
+   *
+   * @private
+   * @param {GoogleAppsScript.Spreadsheet.Range} targetCell - Cell to apply dropdown to
+   * @param {Array<string>} invoiceNumbers - List of valid invoice numbers
+   * @returns {boolean} True if dropdown applied successfully, false otherwise
+   */
+  _applyDropdownToCell: function(targetCell, invoiceNumbers, currentValue = null) {
+    try {
+      const rule = this._buildDropdownRule(invoiceNumbers);
+      const resolvedValue = currentValue !== null ? currentValue : targetCell.getValue();
+      const isValidValue = invoiceNumbers.includes(String(resolvedValue));
+
+      // CRITICAL FIX: Set dropdown FIRST, then clear content
+      // This prevents the clearContent() edit event from interfering with the dropdown
+      targetCell
+        .setDataValidation(rule)
+        .setBackground(CONFIG.colors.info);
+
+      // Clear content and note ONLY if current value is invalid or empty
+      if (!isValidValue || !resolvedValue) {
+        targetCell.clearContent().clearNote();
+      } else {
+        targetCell.clearNote();
+      }
+      return true;
+    } catch (error) {
+      AuditLogger.logError('InvoiceManager._applyDropdownToCell', error.toString());
+      return false;
     }
   },
 
