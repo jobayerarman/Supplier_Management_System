@@ -67,15 +67,7 @@ const CacheManager = {
     const now = Date.now();
     if (this.activeData && this.timestamp && (now - this.timestamp) < CONFIG.rules.CACHE_TTL_MS) {
       this.stats.cacheHits++;
-      return {
-        activeData: this.activeData,
-        activeIndexMap: this.activeIndexMap,
-        activeSupplierIndex: this.activeSupplierIndex,
-        inactiveData: this.inactiveData,
-        inactiveIndexMap: this.inactiveIndexMap,
-        inactiveSupplierIndex: this.inactiveSupplierIndex,
-        globalIndexMap: this.globalIndexMap
-      };
+      return this._snapshot();
     }
     // Expired or not initialized
     this.stats.cacheMisses++;
@@ -208,6 +200,25 @@ const CacheManager = {
       }
       return false;
     }
+  },
+
+  /**
+   * Build the standard partition-data result object from current state.
+   * Called by get() on cache hit and by getInvoiceData() after a cache miss load.
+   *
+   * @private
+   * @returns {{activeData:Array, activeIndexMap:Map, activeSupplierIndex:Map, inactiveData:Array, inactiveIndexMap:Map, inactiveSupplierIndex:Map, globalIndexMap:Map}}
+   */
+  _snapshot: function() {
+    return {
+      activeData: this.activeData,
+      activeIndexMap: this.activeIndexMap,
+      activeSupplierIndex: this.activeSupplierIndex,
+      inactiveData: this.inactiveData,
+      inactiveIndexMap: this.inactiveIndexMap,
+      inactiveSupplierIndex: this.inactiveSupplierIndex,
+      globalIndexMap: this.globalIndexMap
+    };
   },
 
   /**
@@ -687,15 +698,7 @@ const CacheManager = {
     // OPTIMIZED: Read only used range
     const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
     this.set(data);
-    return {
-      activeData: this.activeData,
-      activeIndexMap: this.activeIndexMap,
-      activeSupplierIndex: this.activeSupplierIndex,
-      inactiveData: this.inactiveData,
-      inactiveIndexMap: this.inactiveIndexMap,
-      inactiveSupplierIndex: this.inactiveSupplierIndex,
-      globalIndexMap: this.globalIndexMap
-    };
+    return this._snapshot();
   },
 
   /**
