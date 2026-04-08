@@ -928,8 +928,7 @@ const UIMenu = {
       const rowNum = startRow + i;
       const u      = updateMap.get(rowNum);
       if (u) {
-        const timeStr = DateUtils.formatTime(u.time);
-        return [u.keepChecked, u.status, u.user, timeStr, u.sysId ?? allData[i][cols.sysId]];
+        return [u.keepChecked, u.status, u.user, u.time, u.sysId ?? allData[i][cols.sysId]];
       }
       return [allData[i][cols.post],      allData[i][cols.status],
               allData[i][cols.enteredBy], allData[i][cols.timestamp],
