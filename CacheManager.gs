@@ -50,7 +50,6 @@ const CacheManager = {
   stats: {
     incrementalUpdates: 0,      // Count of incremental updates
     fullReloads: 0,             // Count of full cache reloads
-    updateTimes: [],            // Array of update times (ms)
     cacheHits: 0,               // Cache hit count
     cacheMisses: 0,             // Cache miss count
     partitionTransitions: 0,    // Count of active→inactive transitions
