@@ -1,8 +1,25 @@
-// ==================== MODULE: Config.gs ====================
 /**
- * 
- * 
-*/
+ * ═══════════════════════════════════════════════════════════════════════════
+ * _Config.gs — Central Configuration and Validation
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Single source of truth for all sheet names, column indices, business rules,
+ * UI colors, and Master Database settings. All modules read from CONFIG —
+ * nothing is hardcoded elsewhere.
+ *
+ * KEY FEATURES:
+ * - dailySheetsSet  — O(1) Set lookup for daily sheet name checks
+ * - isMasterMode()  — switches write target between local file and Master DB
+ * - validate()      — checks sheet existence, column counts, and Master DB
+ *                     accessibility; call once via initializeConfiguration()
+ *
+ * ORGANIZATION:
+ * 1. CONFIG object  — constants, sheet names, column maps, rules, colors,
+ *                     Master DB config, utility methods
+ * 2. initializeConfiguration() — one-shot validation entry point
+ *
+ * See agent_docs/master_database.md for Master DB setup and IMPORTRANGE config.
+ */
 
 /**
  * Enhanced configuration object with validation
@@ -33,6 +50,9 @@ const CONFIG = {
   dailySheets: ['01','02','03','04','05','06','07','08','09','10',
                 '11','12','13','14','15','16','17','18','19','20',
                 '21','22','23','24','25','26','27','28','29','30','31'],
+  dailySheetsSet: new Set(['01','02','03','04','05','06','07','08','09','10',
+                           '11','12','13','14','15','16','17','18','19','20',
+                           '21','22','23','24','25','26','27','28','29','30','31']),
   invoiceSheet: 'InvoiceDatabase',
   paymentSheet: 'PaymentLog',
   supplierLedger: 'SupplierLedger',

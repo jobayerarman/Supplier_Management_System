@@ -7,48 +7,27 @@
  * Manages edit triggers, field auto-population, and transaction workflow.
  *
  * CORE RESPONSIBILITIES:
- * 1. EVENT HANDLING — onEdit() simple trigger (UI only), onEditInstallable() (full DB access)
+ * 1. EVENT HANDLING — onEditInstallable() handles all edit events with full DB access
  * 2. FIELD AUTO-POPULATION — Invoice No, Received Amt, Due payment balance population
  * 3. TRANSACTION PROCESSING — Lock-guarded POST workflow: validate → invoice → payment → balance
  *
- * DUAL TRIGGER SYSTEM:
- * - Simple (onEdit): Invoice No/Received Amt edits; ~5-10ms; no lock; no Master DB access
- * - Installable (onEditInstallable): Payment Type/Post/Due edits; ~50-150ms; lock on POST only
+ * UNIFIED TRIGGER SYSTEM:
+ * - Installable (onEditInstallable): All edit events; handles col C/D/E/F/G/J/L edits
  * - Run setupInstallableEditTrigger() once per monthly file for Master Database mode
  *
  * MODULE ORGANIZATION:
- *   1. MODULE HEADER — This documentation
- *   2. GLOBAL TRIGGER FUNCTIONS — onEdit, onEditInstallable (entry points)
- *   3. CODE MODULE — Public API + trigger handlers + column handlers + helpers
- *   4. TRIGGER SETUP/TEARDOWN — Master Database trigger configuration
+ *   1. GLOBAL TRIGGER FUNCTIONS — onEditInstallable (entry point)
+ *   2. CODE MODULE — Public API + trigger handlers + column handlers + helpers
+ *   3. TRIGGER SETUP/TEARDOWN — Master Database trigger configuration
  *
  * See agent_docs/ for architecture, caching, coding patterns, and testing details.
  */
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 2: GLOBAL TRIGGER FUNCTIONS (Entry Points)
+ * SECTION 1: GLOBAL TRIGGER FUNCTIONS (Entry Points)
  * ═══════════════════════════════════════════════════════════════════════════
  */
-
-/**
- * Simple Edit Trigger - Lightweight UI Operations Only
- *
- * Automatically triggered by Google Sheets when a user edits a cell.
- * Delegates to Code module for processing.
- *
- * RESTRICTIONS:
- * - Cannot access other spreadsheets (no Master Database access)
- * - Cannot call SpreadsheetApp.openById()
- * - Limited permissions (AuthMode.LIMITED)
- * - 30-second execution limit
- *
- * @param {GoogleAppsScript.Events.SheetsOnEditEvent} e - Edit event object
- * @returns {void}
- */
-function onEdit(e) {
-  Code._handleSimpleTrigger(e);
-}
 
 /**
  * Installable Edit Trigger - Full Database and Cache Operations
@@ -75,7 +54,7 @@ function onEditInstallable(e) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 3: CODE MODULE - Main Logic and Handlers
+ * SECTION 2: CODE MODULE - Main Logic and Handlers
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -83,51 +62,6 @@ const Code = {
   // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE: TRIGGER HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * PRIVATE: Handle simple trigger events
-   * @private
-   */
-  _handleSimpleTrigger: function(e) {
-    if (!e || !e.range) return;
-
-    const sheet = e.range.getSheet();
-    const sheetName = sheet.getName();
-    const row = e.range.getRow();
-    const col = e.range.getColumn();
-
-    if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
-
-    // Optimization A: Early column guard — exit before any API call
-    // Simple trigger only handles invoiceNo (col C=3) and receivedAmt (col D=4).
-    const configCols = CONFIG.cols;
-    const invoiceNoCol   = configCols.invoiceNo + 1;    // 3 (col C)
-    const receivedAmtCol = configCols.receivedAmt + 1;  // 4 (col D)
-    if (col !== invoiceNoCol && col !== receivedAmtCol) return;
-
-    try {
-      // Optimization B: Minimal batch read — from edited col through paymentType col.
-      // Reads 2 cells (col D→E) or 3 cells (col C→E) instead of all 14.
-      // Avoids e.value which is undefined for multi-cell pastes.
-      const paymentTypeCol = configCols.paymentType + 1;  // 5 (col E)
-      const numCols = paymentTypeCol - col + 1;            // 3 for col C, 2 for col D
-      const rangeValues = sheet.getRange(row, col, 1, numCols).getValues()[0];
-      const editedValue = rangeValues[0];
-      const paymentType = rangeValues[numCols - 1];
-
-      switch (col) {
-        case invoiceNoCol:
-          this._handleInvoiceNoEdit(sheet, row, paymentType, editedValue);
-          break;
-
-        case receivedAmtCol:
-          this._handleReceivedAmtEdit(sheet, row, paymentType, editedValue);
-          break;
-      }
-    } catch (error) {
-      AuditLogger.logError("onEdit", error.toString());
-    }
-  },
 
   /**
    * PRIVATE: Handle installable trigger events
@@ -141,7 +75,7 @@ const Code = {
     const row = e.range.getRow();
     const col = e.range.getColumn();
 
-    if (row < CONFIG.dataStartRow || !CONFIG.dailySheets.includes(sheetName)) return;
+    if (row < CONFIG.dataStartRow || !CONFIG.dailySheetsSet.has(sheetName)) return;
 
     // Optimization A: Early column guard — exit before any API call
     // for non-monitored columns (A, H, I, K, L, M, N = 7 of 14 columns).
@@ -187,8 +121,13 @@ const Code = {
           updateBalance = paymentType !== 'Unpaid';
           break;
 
-        case configCols.receivedAmt + 1:
         case configCols.invoiceNo + 1:
+          this._handleInvoiceNoEdit(sheet, row, paymentType, editedValue);
+          updateBalance = true;
+          break;
+
+        case configCols.receivedAmt + 1:
+          this._handleReceivedAmtEdit(sheet, row, paymentType, editedValue);
           updateBalance = true;
           break;
 
@@ -197,7 +136,11 @@ const Code = {
       }
 
       if (updateBalance) {
-        BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        const supplier    = rowValues[configCols.supplier];
+        const paymentType = rowValues[configCols.paymentType];
+        if (supplier && String(supplier).trim() && paymentType) {
+          BalanceCalculator.updateBalanceCell(sheet, row, false, rowValues);
+        }
       }
     } catch (error) {
       AuditLogger.logError("onEditInstallable", error.toString());
@@ -521,6 +464,8 @@ const Code = {
       switch (newPaymentType) {
         case 'Regular':
         case 'Partial':
+          // clearContent+clearNote+clearDataValidations preserve borders, fonts, number format.
+          // clear() (no args) would destroy all formatting — do not use it here.
           sheet.getRange(row, prevInvoiceCol)
             .clearContent().clearNote().clearDataValidations().setBackground(null);
           break;
@@ -642,12 +587,12 @@ const Code = {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * SECTION 4: TRIGGER SETUP/TEARDOWN
+ * SECTION 3: TRIGGER SETUP/TEARDOWN
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Manages trigger lifecycle for Master Database mode.
- * When using Master Database, onEdit must be an INSTALLABLE trigger
- * (not a simple trigger) to access other spreadsheets.
+ * Run setupInstallableEditTrigger() once per monthly file to register
+ * onEditInstallable as an installable trigger (required for Master DB access).
  */
 
 /**
