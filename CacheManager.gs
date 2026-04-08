@@ -852,8 +852,7 @@ const PaymentCache = {
    */
   addPaymentToCache: function(rowNumber, rowData) {
     if (!this.data || !this.invoiceIndex || !this.supplierIndex || !this.combinedIndex || !this.paymentIdIndex) {
-      AuditLogger.logWarning('PaymentCache.addPaymentToCache', 'Cache not initialized, skipping write-through');
-      return;
+      return; // Cache cold (single-row or onEdit path) — payment is on the sheet; skip write-through
     }
 
     const col = CONFIG.paymentCols;
