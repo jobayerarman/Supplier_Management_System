@@ -749,7 +749,7 @@ const UIMenu = {
             PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
           }
 
-          BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData);
+          BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData, false); // bg deferred to flushBackgroundUpdates
 
           pendingStatusUpdates.push({
             rowNum, keepChecked: true, status: 'POSTED',

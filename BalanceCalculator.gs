@@ -130,7 +130,7 @@ const BalanceCalculator = {
    * @param {boolean} afterPost - Whether this is after posting
    * @param {Array} rowData - Pre-read row values (REQUIRED - no fallback reads)
    */
-  updateBalanceCell: function(sheet, row, afterPost, rowData) {
+  updateBalanceCell: function(sheet, row, afterPost, rowData, renderBg = true) {
     if (!rowData) {
       AuditLogger.logError('BalanceCalculator.updateBalanceCell',
         'rowData parameter is required');
@@ -144,7 +144,7 @@ const BalanceCalculator = {
     }
 
     const balanceInfo = this._computeBalanceInfo(rowData, afterPost);
-    this._renderBalanceCell(sheet, row, balanceInfo);
+    this._renderBalanceCell(sheet, row, balanceInfo, renderBg);
   },
 
   /**
@@ -444,11 +444,11 @@ const BalanceCalculator = {
    * @param {number} row - Row number
    * @param {BalanceDisplayInfo} balanceInfo - Balance display info
    */
-  _renderBalanceCell: function(sheet, row, balanceInfo) {
-    sheet.getRange(row, CONFIG.cols.balance + 1)
+  _renderBalanceCell: function(sheet, row, balanceInfo, renderBg = true) {
+    const range = sheet.getRange(row, CONFIG.cols.balance + 1)
       .setValue(balanceInfo.balance)
-      .setNote(balanceInfo.note)
-      .setBackground(balanceInfo.bgColor);
+      .setNote(balanceInfo.note);
+    if (renderBg) range.setBackground(balanceInfo.bgColor);
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
