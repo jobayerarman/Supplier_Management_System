@@ -878,62 +878,6 @@ const InvoiceManager = {
   // ═════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Build successful invoice creation result
-   * Guaranteed complete result object for all creation scenarios
-   *
-   * @private
-   * @param {string} invoiceId - Generated invoice ID (sysId)
-   * @param {number} row - Row number where invoice was created
-   * @param {string} action - Action performed (default: 'created')
-   * @returns {{success: boolean, action: string, invoiceId: string, row: number, timestamp: Date}} Complete result object
-   */
-  _buildCreationResult: function(invoiceId, row, action = 'created') {
-    return {
-      success: true,
-      action: action,
-      invoiceId: invoiceId,
-      row: row,
-      timestamp: new Date(),
-    };
-  },
-
-  /**
-   * Build successful invoice update result
-   * Guaranteed complete result object for all update scenarios
-   *
-   * @private
-   * @param {number} row - Row number of updated invoice
-   * @param {string} action - Action performed (e.g., 'updated', 'no_change')
-   * @returns {{success: boolean, action: string, row: number, timestamp: Date}} Complete result object
-   */
-  _buildUpdateResult: function(row, action = 'updated') {
-    return {
-      success: true,
-      action: action,
-      row: row,
-      timestamp: new Date(),
-    };
-  },
-
-  /**
-   * Build error result for duplicate invoice
-   * Returned when attempting to create invoice that already exists
-   *
-   * @private
-   * @param {string} invoiceNo - Invoice number of duplicate
-   * @param {number} existingRow - Row number of existing invoice
-   * @returns {{success: boolean, error: string, existingRow: number, timestamp: Date}} Error object with existing row
-   */
-  _buildDuplicateError: function(invoiceNo, existingRow) {
-    return {
-      success: false,
-      error: `Invoice ${invoiceNo} already exists at row ${existingRow}`,
-      existingRow: existingRow,
-      timestamp: new Date(),
-    };
-  },
-
-  /**
    * Build error result for lock acquisition failure
    * Returned when unable to acquire lock for critical operation
    *
@@ -945,23 +889,6 @@ const InvoiceManager = {
     return {
       success: false,
       error: `Unable to acquire lock for ${operation}`,
-      timestamp: new Date(),
-    };
-  },
-
-  /**
-   * Build error result for validation failure
-   * Returned when invoice data fails validation
-   *
-   * @private
-   * @param {string} invoiceNo - Invoice number that failed validation
-   * @param {string} reason - Reason for validation failure
-   * @returns {{success: boolean, error: string, timestamp: Date}} Validation error object
-   */
-  _buildValidationError: function(invoiceNo, reason) {
-    return {
-      success: false,
-      error: `Validation failed for invoice ${invoiceNo}: ${reason}`,
       timestamp: new Date(),
     };
   },
