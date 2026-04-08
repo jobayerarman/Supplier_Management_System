@@ -245,41 +245,6 @@ const BalanceCalculator = {
   },
 
   /**
-   * Get total outstanding balance for supplier with detailed result
-   * Enhanced API that returns diagnostic information along with balance
-   *
-   * @typedef {Object} SupplierBalanceResult
-   * @property {boolean} success - Whether calculation succeeded
-   * @property {number} balance - Balance amount (0 if failed)
-   * @property {string} supplier - Supplier name
-   * @property {number} [invoiceCount] - Number of active invoices (if successful)
-   * @property {number} [skippedRows] - Number of rows skipped during calculation
-   * @property {string} [error] - Error message if failed
-   * @property {string} [reason] - Reason code (invalid_supplier, no_data, error)
-   *
-   * @param {string} supplier - Supplier name
-   * @returns {SupplierBalanceResult} Detailed result with balance and diagnostics
-   */
-  getSupplierOutstandingDetailed: function(supplier) {
-    if (!this._validateSupplier(supplier)) {
-      return this._buildInvalidSupplierResult(supplier);
-    }
-
-    try {
-      const activeInvoices = this._getActiveInvoicesForSupplier(supplier);
-      if (!activeInvoices) {
-        return this._buildNoDataResult(supplier);
-      }
-
-      const total = this._sumInvoiceBalances(activeInvoices, supplier);
-      return this._buildBalanceSuccessResult(supplier, total, activeInvoices.rows.length, 0);
-
-    } catch (error) {
-      return this._buildBalanceErrorResult(supplier, error);
-    }
-  },
-
-  /**
    * Get balance due for a specific invoice
    *
    * @param {string} invoiceNo - Invoice number
@@ -613,74 +578,4 @@ const BalanceCalculator = {
     };
   },
 
-  /**
-   * Result Builder: Invalid supplier result
-   * @private
-   * @param {string} supplier - Supplier name
-   * @returns {SupplierBalanceResult} Error result
-   */
-  _buildInvalidSupplierResult: function(supplier) {
-    return {
-      success: false,
-      balance: 0,
-      supplier: supplier,
-      error: 'Invalid supplier name',
-      reason: 'invalid_supplier'
-    };
-  },
-
-  /**
-   * Result Builder: No data available result
-   * @private
-   * @param {string} supplier - Supplier name
-   * @returns {SupplierBalanceResult} Error result
-   */
-  _buildNoDataResult: function(supplier) {
-    return {
-      success: false,
-      balance: 0,
-      supplier: supplier,
-      error: 'No active invoices found for supplier',
-      reason: 'no_data'
-    };
-  },
-
-  /**
-   * Result Builder: Balance calculation success result
-   * @private
-   * @param {string} supplier - Supplier name
-   * @param {number} balance - Calculated balance
-   * @param {number} invoiceCount - Number of invoices processed
-   * @param {number} skippedRows - Number of rows skipped
-   * @returns {SupplierBalanceResult} Success result
-   */
-  _buildBalanceSuccessResult: function(supplier, balance, invoiceCount, skippedRows) {
-    return {
-      success: true,
-      balance: balance,
-      supplier: supplier,
-      invoiceCount: invoiceCount,
-      skippedRows: skippedRows
-    };
-  },
-
-  /**
-   * Result Builder: Balance calculation error result
-   * @private
-   * @param {string} supplier - Supplier name
-   * @param {Error} error - Error that occurred
-   * @returns {SupplierBalanceResult} Error result
-   */
-  _buildBalanceErrorResult: function(supplier, error) {
-    AuditLogger.logError('BalanceCalculator._buildBalanceErrorResult',
-      `Balance calculation failed for "${supplier}": ${error.toString()}`);
-
-    return {
-      success: false,
-      balance: 0,
-      supplier: supplier,
-      error: error.toString(),
-      reason: 'error'
-    };
-  }
 };
