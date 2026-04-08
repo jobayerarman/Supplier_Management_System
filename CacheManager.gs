@@ -31,7 +31,6 @@ const CacheManager = {
   // ═══ PARTITION-ONLY CACHE (SIMPLIFIED) ═══
   // Removed unified cache for reduced complexity and better scalability
   timestamp: null,      // Cache creation timestamp for TTL
-  TTL: CONFIG.rules.CACHE_TTL_MS,  // Time-to-live in milliseconds
 
   // Active partition: Unpaid and Partial invoices (hot data - 10-30% of total)
   activeData: null,         // Active invoices array
@@ -69,7 +68,7 @@ const CacheManager = {
    */
   get: function () {
     const now = Date.now();
-    if (this.activeData && this.timestamp && (now - this.timestamp) < this.TTL) {
+    if (this.activeData && this.timestamp && (now - this.timestamp) < CONFIG.rules.CACHE_TTL_MS) {
       this.stats.cacheHits++;
       return {
         activeData: this.activeData,
