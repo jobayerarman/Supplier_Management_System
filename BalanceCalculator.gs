@@ -304,36 +304,6 @@ const BalanceCalculator = {
     }
   },
 
-  /**
-   * Get balance summary for supplier
-   *
-   * @typedef {Object} SupplierSummary
-   * @property {string} supplier - Supplier name
-   * @property {number} outstanding - Total outstanding balance
-   * @property {number} unpaidInvoiceCount - Number of unpaid invoices
-   * @property {Array} unpaidInvoices - Array of unpaid invoice objects
-   *
-   * @param {string} supplier - Supplier name
-   * @returns {SupplierSummary|null} Summary object or null on error
-   */
-  getSupplierSummary: function(supplier) {
-    try {
-      const outstanding = this.getSupplierOutstanding(supplier);
-      const unpaidInvoices = InvoiceManager.getUnpaidForSupplier(supplier);
-
-      return {
-        supplier: supplier,
-        outstanding: outstanding,
-        unpaidInvoiceCount: unpaidInvoices.length,
-        unpaidInvoices: unpaidInvoices
-      };
-    } catch (error) {
-      AuditLogger.logError('BalanceCalculator.getSupplierSummary',
-        `Failed to get summary for ${supplier}: ${error.toString()}`);
-      return null;
-    }
-  },
-
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 4: BALANCE CALCULATOR - CORE CALCULATIONS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
