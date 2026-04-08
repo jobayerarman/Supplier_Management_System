@@ -545,19 +545,20 @@ const CacheManager = {
 
       const col = CONFIG.invoiceCols;
 
-      // Process all invoices for this supplier (both partitions)
-      const allInvoices = [
-        ...activeRows.map(idx => ({ partition: 'active', index: idx })),
-        ...inactiveRows.map(idx => ({ partition: 'inactive', index: idx }))
-      ];
-
-      // ── PERF FIX: collect all sheet-row numbers first, then read the entire
-      //    range in a single API call instead of one getValues() per invoice.
+      // Collect sheet-row numbers for both partitions in a single pass.
+      // One batch API read covers all rows regardless of N invoices.
       const invoiceEntries = [];
-      for (const { partition, index } of allInvoices) {
-        const currentData = partition === 'active'
-          ? this.activeData[index]
-          : this.inactiveData[index];
+      for (const idx of activeRows) {
+        const currentData = this.activeData[idx];
+        if (!currentData) continue;
+        const invoiceNo = StringUtils.normalize(currentData[col.invoiceNo]);
+        const key = `${normalizedSupplier}|${invoiceNo}`;
+        const location = this.globalIndexMap.get(key);
+        if (!location) continue;
+        invoiceEntries.push({ key, location });
+      }
+      for (const idx of inactiveRows) {
+        const currentData = this.inactiveData[idx];
         if (!currentData) continue;
         const invoiceNo = StringUtils.normalize(currentData[col.invoiceNo]);
         const key = `${normalizedSupplier}|${invoiceNo}`;
