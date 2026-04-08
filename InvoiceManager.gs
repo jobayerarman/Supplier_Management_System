@@ -444,12 +444,11 @@ const InvoiceManager = {
     }
 
     try {
-      // Use partition-aware supplier indices
-      const cacheData = CacheManager.getInvoiceData();
-      const col = CONFIG.invoiceCols;
+      const cacheData          = CacheManager.getInvoiceData();
+      const col                = CONFIG.invoiceCols;
       const normalizedSupplier = StringUtils.normalize(supplier);
 
-      const activeRows = cacheData.activeSupplierIndex?.get(normalizedSupplier) || [];
+      const activeRows   = cacheData.activeSupplierIndex?.get(normalizedSupplier)   || [];
       const inactiveRows = cacheData.inactiveSupplierIndex?.get(normalizedSupplier) || [];
 
       const invoices = [];
@@ -458,24 +457,7 @@ const InvoiceManager = {
       for (const i of activeRows) {
         const row = cacheData.activeData[i];
         if (!row) continue;
-
-        const balanceDue = Number(row[col.balanceDue]) || 0;
-
-        invoices.push({
-          invoiceNo: row[col.invoiceNo],
-          invoiceDate: row[col.invoiceDate],
-          totalAmount: row[col.totalAmount],
-          totalPaid: row[col.totalPaid],
-          balanceDue: balanceDue,
-          status: row[col.status],
-          paidDate: row[col.paidDate],
-          daysOutstanding: row[col.daysOutstanding],
-          originDay: row[col.originDay],
-          enteredBy: row[col.enteredBy],
-          timestamp: row[col.timestamp],
-          sysId: row[col.sysId],
-          partition: 'active'
-        });
+        invoices.push(this._rowToInvoiceObject(row, col, 'active'));
       }
 
       // Process inactive partition (paid invoices) if requested
@@ -483,24 +465,7 @@ const InvoiceManager = {
         for (const i of inactiveRows) {
           const row = cacheData.inactiveData[i];
           if (!row) continue;
-
-          const balanceDue = Number(row[col.balanceDue]) || 0;
-
-          invoices.push({
-            invoiceNo: row[col.invoiceNo],
-            invoiceDate: row[col.invoiceDate],
-            totalAmount: row[col.totalAmount],
-            totalPaid: row[col.totalPaid],
-            balanceDue: balanceDue,
-            status: row[col.status],
-            paidDate: row[col.paidDate],
-            daysOutstanding: row[col.daysOutstanding],
-            originDay: row[col.originDay],
-            enteredBy: row[col.enteredBy],
-            timestamp: row[col.timestamp],
-            sysId: row[col.sysId],
-            partition: 'inactive'
-          });
+          invoices.push(this._rowToInvoiceObject(row, col, 'inactive'));
         }
       }
 
@@ -742,6 +707,33 @@ const InvoiceManager = {
       invoice.timestamp,                                      // L - timestamp
       invoice.invoiceId,                                      // M - sysId
     ];
+  },
+
+  /**
+   * Build an invoice summary object from a raw cache row.
+   *
+   * @private
+   * @param {Array}  row       - Raw cache row array
+   * @param {Object} col       - CONFIG.invoiceCols column-index map
+   * @param {string} partition - 'active' or 'inactive'
+   * @returns {Object} Structured invoice summary object
+   */
+  _rowToInvoiceObject: function(row, col, partition) {
+    return {
+      invoiceNo:       row[col.invoiceNo],
+      invoiceDate:     row[col.invoiceDate],
+      totalAmount:     row[col.totalAmount],
+      totalPaid:       row[col.totalPaid],
+      balanceDue:      Number(row[col.balanceDue]) || 0,
+      status:          row[col.status],
+      paidDate:        row[col.paidDate],
+      daysOutstanding: row[col.daysOutstanding],
+      originDay:       row[col.originDay],
+      enteredBy:       row[col.enteredBy],
+      timestamp:       row[col.timestamp],
+      sysId:           row[col.sysId],
+      partition:       partition,
+    };
   },
 
   // ═════════════════════════════════════════════════════════════════════════════
