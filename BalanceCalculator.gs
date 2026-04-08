@@ -9,6 +9,11 @@
  * - Centralized calculation logic reduces duplication
  * - Single source of truth for all balance operations
  *
+ * PUBLIC API:
+ * - updateBalanceCell()      — render balance cell (preview or posted)
+ * - getSupplierOutstanding() — total outstanding for a supplier
+ * - getInvoiceOutstanding()  — balance due for a specific invoice
+ *
  * ORGANIZATION:
  * 1. Payment Type Configuration (Internal)
  * 2. Helper Classes
@@ -385,12 +390,9 @@ const BalanceCalculator = {
    * @returns {BalanceDisplayInfo} Balance display info
    */
   _buildPostedBalanceInfo: function(supplier) {
-    const balance = this.getSupplierOutstanding(supplier);
-    const note = ``;
-
     return {
-      balance: balance,
-      note: note,
+      balance: this.getSupplierOutstanding(supplier),
+      note:    ``,
       bgColor: CONFIG.colors.success
     };
   },
