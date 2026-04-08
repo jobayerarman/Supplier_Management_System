@@ -46,6 +46,9 @@ const CacheManager = {
   // Global lookup map for finding invoices across partitions
   globalIndexMap: null,     // "SUPPLIER|INVOICE NO" -> {partition: 'active'|'inactive', index: number}
 
+  // Recent write timestamps for 100ms SUMIFS deferral (see markPaymentWritten)
+  _recentWrites: new Map(),
+
   // ═══ PERFORMANCE STATISTICS ═══
   stats: {
     incrementalUpdates: 0,      // Count of incremental updates
@@ -238,7 +241,6 @@ const CacheManager = {
       }
 
       // Track write time for smart refresh deferral
-      this._recentWrites = this._recentWrites || new Map();
       this._recentWrites.set(key, Date.now());
 
     } catch (error) {
@@ -334,7 +336,6 @@ const CacheManager = {
 
       // Defer read if recently written (avoid reading before SUMIFS evaluates)
       const now = Date.now();
-      this._recentWrites = this._recentWrites || new Map();
       const writeTime = this._recentWrites.get(key);
 
       if (writeTime && (now - writeTime) < 100 && !forceRead) {
@@ -648,7 +649,6 @@ const CacheManager = {
   markPaymentWritten: function(supplier, invoiceNo) {
     if (!supplier || !invoiceNo) return;
     const key = `${StringUtils.normalize(supplier)}|${StringUtils.normalize(invoiceNo)}`;
-    this._recentWrites = this._recentWrites || new Map();
     this._recentWrites.set(key, Date.now());
   },
 
@@ -669,6 +669,9 @@ const CacheManager = {
 
     // Global cross-partition index
     this.globalIndexMap = null;
+
+    // Recent write timestamps (reset to bound memory growth)
+    this._recentWrites = new Map();
   },
 
   /**
