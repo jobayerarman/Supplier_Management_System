@@ -9,18 +9,6 @@
  * - Centralized calculation logic reduces duplication
  * - Single source of truth for all balance operations
  *
- * REFACTORED FOR MAINTAINABILITY (Phase 2):
- * - Extracted helper functions for improved clarity (68 lines → 15 lines)
- * - Single Responsibility Principle applied throughout
- * - Reduced cyclomatic complexity (8-10 → 2-3 per function)
- * - Improved testability with isolated helper functions
- *
- * CONFIGURATION-DRIVEN (Phase 3):
- * - Payment type logic externalized to internal configuration
- * - Result builder pattern for consistent object construction
- * - Enhanced APIs with detailed result objects
- * - Easy to extend with new payment types
- *
  * ORGANIZATION:
  * 1. Payment Type Configuration (Internal)
  * 2. Helper Classes
