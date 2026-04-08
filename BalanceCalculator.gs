@@ -200,9 +200,6 @@ const BalanceCalculator = {
    * Update balance cell in daily sheet
    * Shows preview before post, actual balance after post
    *
-   * ✓ REFACTORED: Orchestration function with extracted helpers for clarity
-   * ✓ REDUCED: 61 lines → 12 lines main function + 6 helpers
-   *
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Active sheet
    * @param {number} row - Row number
    * @param {boolean} afterPost - Whether this is after posting
@@ -227,10 +224,6 @@ const BalanceCalculator = {
 
   /**
    * Get total outstanding balance for a supplier
-   *
-   * ✓ REFACTORED: Extracted helper functions for improved clarity
-   * ✓ REDUCED: 68 lines → 15 lines main function + 4 helpers
-   * ✓ COMPLEXITY: 8-10 → 2-3 per function
    *
    * @performance Uses active partition cache for 70-90% faster iteration
    * See CLAUDE.md "Cache Partitioning" for optimization details
@@ -390,10 +383,6 @@ const BalanceCalculator = {
   /**
    * Calculate transaction impact on balance
    * INTERNAL: Core calculation logic used by both calculate() and calculatePreview()
-   *
-   * ✓ REFACTORED: Configuration-driven using PAYMENT_TYPE_CONFIG
-   * ✓ REDUCED: Switch statement replaced with config lookup
-   * ✓ EXTENSIBLE: Easy to add new payment types via config
    *
    * @private
    * @typedef {Object} TransactionImpact
