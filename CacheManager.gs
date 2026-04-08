@@ -219,7 +219,7 @@ const CacheManager = {
    * - Updates global index for cross-partition lookups
    * - Tracks write time for smart refresh deferral
    *
-   * @param {number} rowNumber - Sheet row number (1-based, NOT USED in partition-only mode)
+   * @param {number} rowNumber - Sheet row number (1-based) stored for targeted re-reads
    * @param {Array} rowData - Invoice row data (pre-calculated values)
    */
   addInvoiceToCache: function (rowNumber, rowData) {
