@@ -892,10 +892,11 @@ const PaymentManager = {
    */
   _writePaidDateToSheet: function(invoice, paidDate, paymentType) {
     return this._withLock('script', () => {
-      const paidDateCol = CONFIG.invoiceCols.paidDate + 1;
+      const col = CONFIG.invoiceCols;
+      const paidDateCol = col.paidDate + 1;
       const invoiceSh = MasterDatabaseUtils.getTargetSheet('invoice');
 
-      invoiceSh.getRange(invoice.row, paidDateCol).setValue(paidDate);
+      invoiceSh.getRange(invoice.row, paidDateCol, 1, 1).setValues([[paidDate]]);
       SpreadsheetApp.flush(); // Force commit before lock release
 
       // Read-back verification for Due payments only
@@ -904,7 +905,7 @@ const PaymentManager = {
         if (!writtenValue) {
           const formula = invoiceSh.getRange(invoice.row, paidDateCol).getFormula();
           AuditLogger.logWarning('PaymentManager._writePaidDateToSheet',
-            `Paid date write failed: row ${invoice.row} col ${paidDateCol} | ` +
+            `POST-WRITE row ${invoice.row} col ${paidDateCol}: ` +
             `wrote="${paidDate}" (${typeof paidDate}) | read="${writtenValue}" | formula="${formula}"`);
         }
       }
