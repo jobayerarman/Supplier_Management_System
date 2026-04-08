@@ -798,24 +798,13 @@ const InvoiceManager = {
    */
   applyInvoiceFormulas: function (sheet, row) {
     try {
-      const col = CONFIG.invoiceCols;
+      const col      = CONFIG.invoiceCols;
+      const formulas = this._buildInvoiceFormulas(row);
 
-      // TARGETED UPDATE: Set formula for 'Total Paid' (Column E)
-      // NEW STRUCTURE: A=invoiceDate, B=supplier, C=invoiceNo, D=totalAmount, E=totalPaid
-      sheet.getRange(row, col.totalPaid + 1)
-        .setFormula(`=IF(C${row}="","",IFERROR(SUMIFS(PaymentLog!E:E, PaymentLog!C:C,C${row}, PaymentLog!B:B,B${row}),0))`);
-
-      // TARGETED UPDATE: Set formula for 'Balance Due' (Column F)
-      sheet.getRange(row, col.balanceDue + 1)
-        .setFormula(`=IF(D${row}="","", D${row} - E${row})`);
-
-      // TARGETED UPDATE: Set formula for 'Status' (Column G)
-      sheet.getRange(row, col.status + 1)
-        .setFormula(`=IFS(F${row}=0,"Paid", F${row}=D${row},"Unpaid", F${row}<D${row},"Partial")`);
-
-      // TARGETED UPDATE: Set formula for 'Days Outstanding' (Column I)
-      sheet.getRange(row, col.daysOutstanding + 1)
-        .setFormula(`=IF(F${row}=0, 0, TODAY() - A${row})`);
+      sheet.getRange(row, col.totalPaid       + 1).setFormula(formulas.totalPaid);
+      sheet.getRange(row, col.balanceDue      + 1).setFormula(formulas.balanceDue);
+      sheet.getRange(row, col.status          + 1).setFormula(formulas.status);
+      sheet.getRange(row, col.daysOutstanding + 1).setFormula(formulas.daysOutstanding);
 
     } catch (error) {
       AuditLogger.logError('InvoiceManager.applyInvoiceFormulas',
