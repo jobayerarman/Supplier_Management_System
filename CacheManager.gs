@@ -484,40 +484,6 @@ const CacheManager = {
   },
 
   /**
-   * Log cache performance statistics
-   * INTERNAL helper for monitoring
-   *
-   * @private
-   */
-  _logStatistics: function () {
-    const avgUpdateTime = this.stats.updateTimes.length > 0
-      ? this.stats.updateTimes.reduce((a, b) => a + b, 0) / this.stats.updateTimes.length
-      : 0;
-
-    const hitRate = this.stats.cacheHits + this.stats.cacheMisses > 0
-      ? (this.stats.cacheHits / (this.stats.cacheHits + this.stats.cacheMisses) * 100).toFixed(2)
-      : 0;
-
-    const totalPartitionHits = this.stats.activePartitionHits + this.stats.inactivePartitionHits;
-    const activeHitRate = totalPartitionHits > 0
-      ? (this.stats.activePartitionHits / totalPartitionHits * 100).toFixed(1)
-      : 0;
-
-    AuditLogger.logInfo('CacheManager.statistics',
-      `Incremental Updates: ${this.stats.incrementalUpdates} | ` +
-      `Full Reloads: ${this.stats.fullReloads} | ` +
-      `Avg Update Time: ${avgUpdateTime.toFixed(2)}ms | ` +
-      `Cache Hit Rate: ${hitRate}% | ` +
-      `Partition Transitions: ${this.stats.partitionTransitions} | ` +
-      `Active Partition Hit Rate: ${activeHitRate}%`);
-
-    // Reset update times array to prevent memory growth
-    if (this.stats.updateTimes.length > 1000) {
-      this.stats.updateTimes = this.stats.updateTimes.slice(-100);
-    }
-  },
-
-  /**
    * Invalidate cache based on operation type
    *
    * ENHANCED: Now supports incremental updates for specific operations
