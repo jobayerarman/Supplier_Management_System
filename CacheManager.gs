@@ -574,7 +574,7 @@ const CacheManager = {
         const key = `${normalizedSupplier}|${invoiceNo}`;
         const location = this.globalIndexMap.get(key);
         if (!location) continue;
-        invoiceEntries.push({ partition, index, key, location });
+        invoiceEntries.push({ key, location });
       }
 
       // One batch read covering minRow..maxRow  (1 API call regardless of N invoices)
