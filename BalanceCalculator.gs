@@ -117,57 +117,6 @@ class RowProcessingTracker {
 
 const BalanceCalculator = {
   /**
-   * Calculate balance preview (before post)
-   * Shows what the balance will be after transaction is posted
-   *
-   * @typedef {Object} BalancePreviewResult
-   * @property {number} balance - Projected balance after transaction
-   * @property {string} note - Human-readable preview note with transaction description
-   *
-   * @param {string} supplier - Supplier name
-   * @param {string} paymentType - Payment type
-   * @param {number} receivedAmt - Received amount
-   * @param {number} paymentAmt - Payment amount
-   * @param {string} prevInvoice - Previous invoice reference
-   * @returns {BalancePreviewResult} Balance preview with note
-   */
-  calculatePreview: function(supplier, paymentType, receivedAmt, paymentAmt, prevInvoice) {
-    if (StringUtils.isEmpty(supplier) || !paymentType) {
-      return {
-        balance: 0,
-        note: "⚠️ Supplier and payment type required"
-      };
-    }
-
-    const currentOutstanding = this.getSupplierOutstanding(supplier);
-
-    // Calculate impact using centralized logic
-    const impact = this._calculateTransactionImpact(
-      paymentType,
-      receivedAmt,
-      paymentAmt,
-      prevInvoice
-    );
-
-    // Handle errors
-    if (impact.error) {
-      return {
-        balance: currentOutstanding,
-        note: `⚠️ ${impact.error}`
-      };
-    }
-
-    const projectedBalance = currentOutstanding + impact.change;
-
-    let note = `Preview: ${impact.description}`;
-
-    return {
-      balance: projectedBalance,
-      note: note
-    };
-  },
-
-  /**
    * Update balance cell in daily sheet
    * Shows preview before post, actual balance after post
    *
@@ -246,7 +195,7 @@ const BalanceCalculator = {
 
   /**
    * Calculate transaction impact on balance
-   * INTERNAL: Core calculation logic used by both calculate() and calculatePreview()
+   * INTERNAL: Core calculation logic used by updateBalanceCell() preview path
    *
    * @private
    * @typedef {Object} TransactionImpact
@@ -453,25 +402,22 @@ const BalanceCalculator = {
    * @returns {BalanceDisplayInfo} Balance display info
    */
   _buildPreviewBalanceInfo: function(rowData) {
-    const supplier = rowData[CONFIG.cols.supplier];
+    const supplier    = rowData[CONFIG.cols.supplier];
     const paymentType = rowData[CONFIG.cols.paymentType];
     const prevInvoice = rowData[CONFIG.cols.prevInvoice];
     const receivedAmt = parseFloat(rowData[CONFIG.cols.receivedAmt]) || 0;
-    const paymentAmt = parseFloat(rowData[CONFIG.cols.paymentAmt]) || 0;
+    const paymentAmt  = parseFloat(rowData[CONFIG.cols.paymentAmt])  || 0;
 
-    const preview = this.calculatePreview(
-      supplier, paymentType, receivedAmt, paymentAmt, prevInvoice
-    );
+    const outstanding = this.getSupplierOutstanding(supplier);
+    const impact = this._calculateTransactionImpact(paymentType, receivedAmt, paymentAmt, prevInvoice);
 
-    const note = `${preview.note}\nTime: ${DateUtils.formatDateTime(new Date())}`;
-    const bgColor = preview.note.includes('⚠️')
-      ? CONFIG.colors.warning
-      : CONFIG.colors.info;
+    const previewNote    = impact.error ? `⚠️ ${impact.error}` : `Preview: ${impact.description}`;
+    const previewBalance = impact.error ? outstanding : outstanding + impact.change;
 
     return {
-      balance: preview.balance,
-      note: note,
-      bgColor: bgColor
+      balance: previewBalance,
+      note:    `${previewNote}\nTime: ${DateUtils.formatDateTime(new Date())}`,
+      bgColor: previewNote.includes('⚠️') ? CONFIG.colors.warning : CONFIG.colors.info
     };
   },
 
