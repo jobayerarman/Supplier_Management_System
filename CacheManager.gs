@@ -27,8 +27,21 @@
  * - Cache partitioning for hot/cold data separation
  */
 
+/**
+ * Shared index helper for CacheManager and PaymentCache.
+ * Appends value to the array stored at index[key], creating it if absent.
+ * @param {Map}    index - The index map to update
+ * @param {string} key   - Lookup key
+ * @param {*}      value - Value to append
+ */
+function _cacheAddToIndex(index, key, value) {
+  if (!index.has(key)) index.set(key, []);
+  index.get(key).push(value);
+}
+
 const CacheManager = {
   timestamp: null,      // Cache creation timestamp for TTL
+  TTL: CONFIG.rules.CACHE_TTL_MS,
 
   // Active partition: Unpaid and Partial invoices (hot data - 10-30% of total)
   activeData: null,         // Active invoices array
@@ -65,7 +78,7 @@ const CacheManager = {
    */
   get: function () {
     const now = Date.now();
-    if (this.activeData && this.timestamp && (now - this.timestamp) < CONFIG.rules.CACHE_TTL_MS) {
+    if (this.activeData && this.timestamp && (now - this.timestamp) < this.TTL) {
       this.stats.cacheHits++;
       return this._snapshot();
     }
@@ -135,6 +148,17 @@ const CacheManager = {
   },
 
   /**
+   * Helper: Add a value to an index map (creates array if key doesn't exist).
+   * @private
+   * @param {Map}    index - The index map to update
+   * @param {string} key   - Lookup key
+   * @param {*}      value - Value to append
+   */
+  _addToIndex: function(index, key, value) {
+    _cacheAddToIndex(index, key, value);
+  },
+
+  /**
    * Add a row to the appropriate partition (active or inactive).
    * Updates indexMap, supplierIndex, and globalIndexMap atomically.
    *
@@ -150,19 +174,13 @@ const CacheManager = {
       const idx = this.activeData.length;
       this.activeData.push(rowData);
       this.activeIndexMap.set(key, idx);
-      if (!this.activeSupplierIndex.has(supplier)) {
-        this.activeSupplierIndex.set(supplier, []);
-      }
-      this.activeSupplierIndex.get(supplier).push(idx);
+      this._addToIndex(this.activeSupplierIndex, supplier, idx);
       this.globalIndexMap.set(key, { partition: 'active', index: idx, sheetRow: sheetRow });
     } else {
       const idx = this.inactiveData.length;
       this.inactiveData.push(rowData);
       this.inactiveIndexMap.set(key, idx);
-      if (!this.inactiveSupplierIndex.has(supplier)) {
-        this.inactiveSupplierIndex.set(supplier, []);
-      }
-      this.inactiveSupplierIndex.get(supplier).push(idx);
+      this._addToIndex(this.inactiveSupplierIndex, supplier, idx);
       this.globalIndexMap.set(key, { partition: 'inactive', index: idx, sheetRow: sheetRow });
     }
   },
@@ -421,11 +439,7 @@ const CacheManager = {
     const inactiveIndex = this.inactiveData.length;
     this.inactiveData.push(rowData);
     this.inactiveIndexMap.set(key, inactiveIndex);
-
-    if (!this.inactiveSupplierIndex.has(supplier)) {
-      this.inactiveSupplierIndex.set(supplier, []);
-    }
-    this.inactiveSupplierIndex.get(supplier).push(inactiveIndex);
+    this._addToIndex(this.inactiveSupplierIndex, supplier, inactiveIndex);
 
     // Sync globalIndexMap.index to the new inactive position.
     // Without this, findInvoice reads the stale active index from inactiveData,
@@ -468,11 +482,7 @@ const CacheManager = {
     const activeIndex = this.activeData.length;
     this.activeData.push(rowData);
     this.activeIndexMap.set(key, activeIndex);
-
-    if (!this.activeSupplierIndex.has(supplier)) {
-      this.activeSupplierIndex.set(supplier, []);
-    }
-    this.activeSupplierIndex.get(supplier).push(activeIndex);
+    this._addToIndex(this.activeSupplierIndex, supplier, activeIndex);
 
     // Sync globalIndexMap.index to the new active position.
     if (this.globalIndexMap.has(key)) {
@@ -672,19 +682,28 @@ const CacheManager = {
     const cached = this.get();
     if (cached) return cached;
 
-    // Cache miss - load data from sheet
-    // CONDITIONAL: Master mode reads from Master DB, Local mode reads from local sheet
-    const invoiceSh = CONFIG.isMasterMode()
-      ? MasterDatabaseUtils.getTargetSheet('invoice')  // Master: Read from Master DB (always fresh)
-      : MasterDatabaseUtils.getSourceSheet('invoice'); // Local: Read from local sheet
+    try {
+      // Cache miss - load data from sheet
+      // CONDITIONAL: Master mode reads from Master DB, Local mode reads from local sheet
+      const invoiceSh = CONFIG.isMasterMode()
+        ? MasterDatabaseUtils.getTargetSheet('invoice')  // Master: Read from Master DB (always fresh)
+        : MasterDatabaseUtils.getSourceSheet('invoice'); // Local: Read from local sheet
 
-    const lastRow = invoiceSh.getLastRow();
+      const lastRow = invoiceSh.getLastRow();
 
-    if (lastRow < 2) {
-      const emptyData = [[]]; // Header placeholder
-      this.set(emptyData);
+      if (lastRow < 2) {
+        this.set([[]]); // Header placeholder
+        return this._snapshot();
+      }
+
+      // OPTIMIZED: Read only used range
+      const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
+      this.set(data);
+      return this._snapshot();
+    } catch (error) {
+      AuditLogger.logError('CacheManager.getInvoiceData',
+        `Failed to load invoice data: ${error.toString()}`);
       return {
-        // Empty partition data
         activeData: [[]],
         activeIndexMap: new Map(),
         activeSupplierIndex: new Map(),
@@ -694,11 +713,6 @@ const CacheManager = {
         globalIndexMap: new Map()
       };
     }
-
-    // OPTIMIZED: Read only used range
-    const data = invoiceSh.getRange(1, 1, lastRow, CONFIG.totalColumns.invoice).getValues();
-    this.set(data);
-    return this._snapshot();
   },
 
   /**
@@ -740,5 +754,190 @@ const CacheManager = {
       transitions: this.stats.partitionTransitions,
       memoryReduction: `${inactivePercent.toFixed(0)}% (inactive invoices separated)`
     };
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: PAYMENT CACHE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Optimized Payment Cache Module
+ * ----------------------------------------------------
+ * Features:
+ *  - Global payment data cache (in-memory)
+ *  - Quad-index structure for O(1) lookups:
+ *    1. Invoice index: "INVOICE_NO" → [payment indices]
+ *    2. Supplier index: "SUPPLIER" → [payment indices]
+ *    3. Combined index: "SUPPLIER|INVOICE_NO" → [payment indices]
+ *    4. Payment ID index: "PAYMENT_ID" → row index (for duplicate detection)
+ *  - TTL-based auto-expiration (60 seconds)
+ *  - Write-through cache for immediate availability
+ *  - Memory-efficient: ~450KB for 1,000 payments
+ *
+ * Performance:
+ *  - Query time: 340ms → 2ms (170x faster)
+ *  - Duplicate check: 340ms → <1ms (340x faster)
+ *  - Scales to 50,000+ payments with constant performance
+ */
+const PaymentCache = {
+  data: null,
+  invoiceIndex: null,      // "INVOICE_NO" -> [row indices]
+  supplierIndex: null,     // "SUPPLIER" -> [row indices]
+  combinedIndex: null,     // "SUPPLIER|INVOICE_NO" -> [row indices]
+  paymentIdIndex: null,    // "PAYMENT_ID" -> row index (for duplicate detection)
+  timestamp: null,
+  TTL: CONFIG.rules.CACHE_TTL_MS,
+
+  /**
+   * Get cached data if valid (within TTL)
+   * @returns {{data:Array, invoiceIndex:Map, supplierIndex:Map, combinedIndex:Map, paymentIdIndex:Map}|null}
+   */
+  get: function() {
+    const now = Date.now();
+    if (this.data && this.timestamp && (now - this.timestamp) < this.TTL) {
+      return {
+        data: this.data,
+        invoiceIndex: this.invoiceIndex,
+        supplierIndex: this.supplierIndex,
+        combinedIndex: this.combinedIndex,
+        paymentIdIndex: this.paymentIdIndex
+      };
+    }
+    return null;
+  },
+
+  /**
+   * Set new cache with quad-index structure
+   * @param {Array[]} data - Sheet data array
+   */
+  set: function(data) {
+    this.data = data;
+    this.timestamp = Date.now();
+    this.invoiceIndex = new Map();
+    this.supplierIndex = new Map();
+    this.combinedIndex = new Map();
+    this.paymentIdIndex = new Map();
+
+    const col = CONFIG.paymentCols;
+
+    for (let i = CONFIG.constants.FIRST_DATA_ROW_INDEX; i < data.length; i++) {
+      const supplier = StringUtils.normalize(data[i][col.supplier]);
+      const invoiceNo = StringUtils.normalize(data[i][col.invoiceNo]);
+      const paymentId = data[i][col.sysId];
+
+      if (!supplier || !invoiceNo) continue;
+
+      _cacheAddToIndex(this.invoiceIndex, invoiceNo, i);
+      _cacheAddToIndex(this.supplierIndex, supplier, i);
+      _cacheAddToIndex(this.combinedIndex, `${supplier}|${invoiceNo}`, i);
+
+      if (paymentId) {
+        this.paymentIdIndex.set(paymentId, i);
+      }
+    }
+  },
+
+  /**
+   * ADD PAYMENT TO CACHE (Write-Through)
+   * Immediately adds newly created payment to cache indices
+   *
+   * @param {number} rowNumber - Sheet row number (1-based)
+   * @param {Array}  rowData   - Payment row data
+   */
+  addPaymentToCache: function(rowNumber, rowData) {
+    if (!this.data || !this.invoiceIndex || !this.supplierIndex || !this.combinedIndex || !this.paymentIdIndex) {
+      AuditLogger.logWarning('PaymentCache.addPaymentToCache', 'Cache not initialized, skipping write-through');
+      return;
+    }
+
+    const col = CONFIG.paymentCols;
+    const supplier = StringUtils.normalize(rowData[col.supplier]);
+    const invoiceNo = StringUtils.normalize(rowData[col.invoiceNo]);
+    const paymentId = rowData[col.sysId];
+
+    if (!supplier || !invoiceNo) return;
+
+    try {
+      const arrayIndex = rowNumber - 1;
+
+      while (this.data.length <= arrayIndex) {
+        this.data.push([]);
+      }
+
+      this.data[arrayIndex] = rowData;
+
+      _cacheAddToIndex(this.invoiceIndex, invoiceNo, arrayIndex);
+      _cacheAddToIndex(this.supplierIndex, supplier, arrayIndex);
+      _cacheAddToIndex(this.combinedIndex, `${supplier}|${invoiceNo}`, arrayIndex);
+
+      if (paymentId) {
+        this.paymentIdIndex.set(paymentId, arrayIndex);
+      }
+
+    } catch (error) {
+      AuditLogger.logError('PaymentCache.addPaymentToCache',
+        `Failed to add payment to cache: ${error.toString()}`);
+    }
+  },
+
+  /**
+   * Lazy load payment data and build indices
+   * @returns {{data:Array, invoiceIndex:Map, supplierIndex:Map, combinedIndex:Map, paymentIdIndex:Map}}
+   */
+  getPaymentData: function() {
+    const cached = this.get();
+    if (cached) return cached;
+
+    try {
+      // Always read from local sheet (IMPORTRANGE in master mode)
+      const paymentSh = MasterDatabaseUtils.getSourceSheet('payment');
+      const lastRow = paymentSh.getLastRow();
+
+      if (lastRow < CONFIG.constants.MIN_ROWS_WITH_DATA) {
+        const emptyData = [[]];
+        this.set(emptyData);
+        return {
+          data: emptyData,
+          invoiceIndex: new Map(),
+          supplierIndex: new Map(),
+          combinedIndex: new Map(),
+          paymentIdIndex: new Map()
+        };
+      }
+
+      const data = paymentSh.getRange(1, 1, lastRow, CONFIG.totalColumns.payment).getValues();
+      this.set(data);
+
+      return {
+        data: this.data,
+        invoiceIndex: this.invoiceIndex,
+        supplierIndex: this.supplierIndex,
+        combinedIndex: this.combinedIndex,
+        paymentIdIndex: this.paymentIdIndex
+      };
+    } catch (error) {
+      AuditLogger.logError('PaymentCache.getPaymentData',
+        `Failed to load payment data: ${error.toString()}`);
+      return {
+        data: [[]],
+        invoiceIndex: new Map(),
+        supplierIndex: new Map(),
+        combinedIndex: new Map(),
+        paymentIdIndex: new Map()
+      };
+    }
+  },
+
+  /**
+   * Clear entire cache memory
+   */
+  clear: function() {
+    this.data = null;
+    this.invoiceIndex = null;
+    this.supplierIndex = null;
+    this.combinedIndex = null;
+    this.paymentIdIndex = null;
+    this.timestamp = null;
   }
 };
