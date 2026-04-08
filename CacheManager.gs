@@ -527,30 +527,6 @@ const CacheManager = {
   },
 
   /**
-   * PERFORMANCE FIX #3: Surgical supplier-specific cache invalidation
-   *
-   * Invalidate and refresh cache for a specific supplier only
-   *
-   * OLD APPROACH:
-   * - Clear ENTIRE cache (all suppliers)
-   * - Next query for ANY supplier → full cache reload (200-600ms)
-   * - Wasteful: 49 suppliers' data cleared when only 1 changed
-   *
-   * NEW APPROACH (SURGICAL):
-   * - Update only changed supplier's invoices (10-50ms)
-   * - Read only supplier-specific rows from sheet
-   * - Update in-place with partition transitions
-   * - Other suppliers' cache data remains valid
-   *
-   * PERFORMANCE BENEFIT:
-   * - Typical: 50 suppliers, 1 batch operation on Supplier A
-   * - OLD: Clear all → Next query for Supplier B = 500ms reload
-   * - NEW: Update A only → Query for B = instant (still cached)
-   * - **50x faster** for queries on unaffected suppliers
-   *
-   * @param {string} supplier - Supplier name
-   */
-  /**
    * ✅ PERFORMANCE FIX #3: Surgical supplier-specific invalidation
    *
    * Updates only the specified supplier's invoices in cache.
