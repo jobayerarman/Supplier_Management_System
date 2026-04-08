@@ -758,61 +758,6 @@ const CacheManager = {
   },
 
   /**
-   * Get all invoice rows for a specific supplier
-   *
-   * Uses supplier index for O(m) performance where m = supplier's invoice count.
-   * Returns invoices from both active and inactive partitions.
-   *
-   * @param {string} supplier - Supplier name
-   * @returns {Array<{invoiceNo:string,status:string,amount:number,partition:string,rowIndex:number}>}
-   */
-  getSupplierData: function (supplier) {
-    if (!supplier) return [];
-    const normalized = StringUtils.normalize(supplier);
-    const cacheData = this.getInvoiceData();
-
-    const activeRows = cacheData.activeSupplierIndex?.get(normalized) || [];
-    const inactiveRows = cacheData.inactiveSupplierIndex?.get(normalized) || [];
-
-    if (activeRows.length === 0 && inactiveRows.length === 0) {
-      return [];
-    }
-
-    const col = CONFIG.invoiceCols;
-    const results = [];
-
-    // Add active invoices
-    for (const i of activeRows) {
-      const row = cacheData.activeData[i];
-      if (row) {
-        results.push({
-          invoiceNo: row[col.invoiceNo],
-          status: row[col.status],
-          amount: row[col.totalAmount],
-          partition: 'active',
-          rowIndex: i
-        });
-      }
-    }
-
-    // Add inactive invoices
-    for (const i of inactiveRows) {
-      const row = cacheData.inactiveData[i];
-      if (row) {
-        results.push({
-          invoiceNo: row[col.invoiceNo],
-          status: row[col.status],
-          amount: row[col.totalAmount],
-          partition: 'inactive',
-          rowIndex: i
-        });
-      }
-    }
-
-    return results;
-  },
-
-  /**
    * Get partition statistics
    * Useful for monitoring cache efficiency and partition distribution
    *
