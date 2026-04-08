@@ -553,42 +553,6 @@ function testRegularPaymentFlow() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SECTION 4: BALANCE CALCULATOR TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-function testBalanceCalculation() {
-  const audit = new PerfAudit("Balance Calculation Performance");
-
-  try {
-    const testCases = [
-      { type: "Unpaid", data: { supplier: "Test A", paymentType: "Unpaid", receivedAmt: 1000, paymentAmt: 0, prevInvoice: "" }},
-      { type: "Regular", data: { supplier: "Test B", paymentType: "Regular", receivedAmt: 1500, paymentAmt: 1500, prevInvoice: "" }},
-      { type: "Partial", data: { supplier: "Test C", paymentType: "Partial", receivedAmt: 2000, paymentAmt: 1000, prevInvoice: "" }},
-      { type: "Due", data: { supplier: "Test D", paymentType: "Due", receivedAmt: 0, paymentAmt: 500, prevInvoice: "INV-001" }}
-    ];
-
-    audit.start("Cache Warmup");
-    CacheManager.getInvoiceData();
-    audit.end("Cache Warmup");
-
-    testCases.forEach(testCase => {
-      const nested = audit.startNested(`${testCase.type} Payment`);
-      for (let i = 0; i < 10; i++) {
-        BalanceCalculator.calculate(testCase.data);
-      }
-      nested.end();
-    });
-
-    audit.endAll();
-    audit.printSummary();
-    return audit.getResult({ iterations: testCases.length * 10 });
-
-  } catch (error) {
-    return audit.fail("Balance calculation test failed", error);
-  }
-}
-
 function testSupplierOutstanding() {
   const audit = new PerfAudit("Supplier Outstanding Lookup");
 

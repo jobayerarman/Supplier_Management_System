@@ -117,35 +117,6 @@ class RowProcessingTracker {
 
 const BalanceCalculator = {
   /**
-   * Calculate balance after transaction
-   * ALWAYS returns supplier's total outstanding after transaction
-   *
-   * @param {Object} data - Transaction data
-   * @returns {number} New balance after transaction
-   */
-  calculate: function(data) {
-    const supplierOutstanding = this.getSupplierOutstanding(data.supplier);
-
-    // Calculate impact using centralized logic
-    const impact = this._calculateTransactionImpact(
-      data.paymentType,
-      data.receivedAmt,
-      data.paymentAmt,
-      data.prevInvoice
-    );
-
-    // Log errors if any
-    if (impact.error) {
-      AuditLogger.logError('BalanceCalculator.calculate',
-        `${impact.error} | Supplier: ${data.supplier}, Type: ${data.paymentType}`);
-    }
-
-    const newBalance = supplierOutstanding + impact.change;
-
-    return newBalance;
-  },
-
-  /**
    * Calculate balance preview (before post)
    * Shows what the balance will be after transaction is posted
    *
