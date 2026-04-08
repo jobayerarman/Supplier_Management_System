@@ -1,31 +1,30 @@
 // ==================== MODULE: CacheManager.gs ====================
-
 /**
- * CacheManager.gs
- * Centralized cache management for invoice data
+ * Sole owner of all in-memory caches: invoice data (CacheManager) and
+ * payment data (PaymentCache). Any lifecycle pattern change — e.g. adding
+ * a CacheService layer or adjusting TTL strategy — is applied once here.
  *
  * ARCHITECTURE:
- * - Intelligent caching with write-through support
- * - Partitioned cache (Active vs Inactive invoices)
- * - Fast lookup by supplier|invoiceNo (O(1))
- * - Supplier-wise index for quick filtering (O(m))
- * - TTL-based auto-expiration
- * - Surgical supplier-specific invalidation
+ * - CacheManager: partitioned invoice cache (Active vs Inactive)
+ * - PaymentCache: flat payment cache with quad-index structure
+ * - Shared _cacheAddToIndex() utility used by both caches
+ * - TTL-based auto-expiration with write-through support
  *
- * PERFORMANCE BENEFITS:
- * - Eliminates redundant sheet reads during transaction processing
- * - Reduces API calls to Google Sheets
- * - Enables instant invoice lookups
- * - Supports batch operations with in-memory data
- * - Partitioning reduces active cache size by 70-90%
+ * PERFORMANCE:
+ * - Invoice lookups: O(1) via supplier|invoiceNo key
+ * - Payment lookups: O(1) via invoice, supplier, combined, or payment-ID index
+ * - Partitioning reduces active invoice cache size by 70-90%
+ * - Incremental invoice updates: ~1ms vs ~500ms full reload
  *
- * FEATURES:
- * - Write-through cache for immediate findability
- * - Formula evaluation to ensure numeric data
- * - Cache synchronization after payments
- * - Configurable TTL for automatic expiration
- * - Cache partitioning for hot/cold data separation
+ * ORGANIZATION:
+ * 1. Shared Utilities  (_cacheAddToIndex)
+ * 2. Invoice Cache     (CacheManager)
+ * 3. Payment Cache     (PaymentCache)
  */
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: SHARED UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Shared index helper for CacheManager and PaymentCache.
@@ -39,6 +38,26 @@ function _cacheAddToIndex(index, key, value) {
   index.get(key).push(value);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: INVOICE CACHE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Invoice Cache Module
+ * ----------------------------------------------------
+ * Features:
+ *  - Partitioned cache (Active vs Inactive invoices)
+ *  - Fast lookup by supplier|invoiceNo (O(1))
+ *  - Supplier-wise index for quick filtering (O(m))
+ *  - TTL-based auto-expiration (60 seconds)
+ *  - Surgical supplier-specific invalidation
+ *  - Write-through cache for immediate findability
+ *
+ * Performance:
+ *  - Partitioning reduces active cache size by 70-90%
+ *  - Eliminates redundant sheet reads during transaction processing
+ *  - Incremental updates: 1ms vs 500ms full reload
+ */
 const CacheManager = {
   timestamp: null,      // Cache creation timestamp for TTL
   TTL: CONFIG.rules.CACHE_TTL_MS,
@@ -72,8 +91,7 @@ const CacheManager = {
   },
 
   /**
-   * Get cached data if valid (within TTL)
-   *
+   * Returns cached invoice partition data if initialized and within TTL, null otherwise.
    * @returns {{activeData:Array, activeIndexMap:Map, activeSupplierIndex:Map, inactiveData:Array, inactiveIndexMap:Map, inactiveSupplierIndex:Map, globalIndexMap:Map}|null}
    */
   get: function () {
@@ -240,16 +258,12 @@ const CacheManager = {
   },
 
   /**
-   * ADD INVOICE TO CACHE (Write-Through)
-   *
-   * STRATEGY:
-   * - Trusts pre-calculated data (no sheet re-read)
-   * - Adds directly to appropriate partition
-   * - Updates global index for cross-partition lookups
-   * - Tracks write time for smart refresh deferral
+   * Write-through add: inserts a newly created invoice row directly into the
+   * appropriate partition without re-reading from the sheet. Trusts pre-calculated
+   * values and records the write timestamp for SUMIFS deferral.
    *
    * @param {number} rowNumber - Sheet row number (1-based) stored for targeted re-reads
-   * @param {Array} rowData - Invoice row data (pre-calculated values)
+   * @param {Array}  rowData   - Invoice row data (pre-calculated values)
    */
   addInvoiceToCache: function (rowNumber, rowData) {
     // Only add if cache is currently active
@@ -289,10 +303,10 @@ const CacheManager = {
   },
 
   /**
-   * UPDATE INVOICE IN CACHE
-   *
-   * @param {string} supplier - Supplier name
-   * @param {string} invoiceNo - Invoice number
+   * Public alias for updateSingleInvoice().
+   * @param {string}  supplier  - Supplier name
+   * @param {string}  invoiceNo - Invoice number
+   * @param {boolean} [forceRead=false] - Force immediate sheet read
    * @returns {boolean} Success flag
    */
   updateInvoiceInCache: function (supplier, invoiceNo, forceRead = false) {
@@ -330,21 +344,15 @@ const CacheManager = {
   },
 
   /**
-   * UPDATE SINGLE INVOICE (Incremental Update)
+   * Refreshes a single invoice row in-place without invalidating the entire cache.
+   * Defers the sheet re-read by 100ms when the invoice was recently written
+   * (avoids reading before SUMIFS recalculates). Handles active↔inactive
+   * partition transitions automatically.
    *
-   * Updates only one invoice row without invalidating entire cache.
-   * Handles partition transitions automatically.
-   *
-   * STRATEGY:
-   * - Defers sheet read when invoice was recently written (100ms window)
-   * - Uses globalIndexMap to locate invoice in correct partition
-   * - Updates in-place or transitions between partitions as needed
-   * - Tracks sheet row number for re-reading from source
-   *
-   * @param {string} supplier - Supplier name
-   * @param {string} invoiceNo - Invoice number
-   * @param {boolean} forceRead - Force immediate read (default: false)
-   * @returns {boolean} Success flag
+   * @param {string}  supplier   - Supplier name
+   * @param {string}  invoiceNo  - Invoice number
+   * @param {boolean} [forceRead=false] - Skip the 100ms deferral and read immediately
+   * @returns {boolean} True on success or cache-miss (no-op), false on error
    */
   updateSingleInvoice: function (supplier, invoiceNo, forceRead = false) {
     // Validate cache is active
@@ -491,15 +499,14 @@ const CacheManager = {
   },
 
   /**
-   * Invalidate cache based on operation type
+   * Invalidates the cache based on operation type and available coordinates.
+   * When supplier + invoiceNo are provided for an incremental operation, only
+   * that row is refreshed (~1ms). Otherwise the entire cache is cleared and
+   * reloaded on next access (~500ms).
    *
-   * ENHANCED: Now supports incremental updates for specific operations
-   * If supplier and invoiceNo provided → incremental update (1ms)
-   * Otherwise → full invalidation (500ms on next access)
-   *
-   * @param {string} operation - Action type (updateAmount, updateStatus, etc.)
-   * @param {string} supplier - Optional: Supplier name for incremental update
-   * @param {string} invoiceNo - Optional: Invoice number for incremental update
+   * @param {string}      operation - Action type: 'updateAmount' | 'updateStatus' | 'updateDate' | 'schemaChange' | 'bulkUpdate'
+   * @param {string|null} [supplier=null]  - Supplier name for incremental update
+   * @param {string|null} [invoiceNo=null] - Invoice number for incremental update
    */
   invalidate: function (operation, supplier = null, invoiceNo = null) {
     const incrementalOps = ['updateAmount', 'updateStatus', 'updateDate'];
@@ -535,12 +542,11 @@ const CacheManager = {
   },
 
   /**
-   * ✅ PERFORMANCE FIX #3: Surgical supplier-specific invalidation
+   * Refreshes all cached invoices for a single supplier without touching the
+   * rest of the cache. Issues one batch sheet read covering all of that
+   * supplier's rows (active + inactive), then applies partition transitions.
    *
-   * Updates only the specified supplier's invoices in cache.
-   * Uses partition-aware architecture with globalIndexMap for efficient lookups.
-   *
-   * @param {string} supplier - Supplier name to invalidate
+   * @param {string} supplier - Supplier name to refresh
    */
   invalidateSupplierCache: function (supplier) {
     if (!supplier || !this.globalIndexMap) {
@@ -559,7 +565,6 @@ const CacheManager = {
         return;
       }
 
-      // ✅ PERFORMANCE FIX #3: Surgical update - refresh only this supplier's rows
       const invoiceSh = CONFIG.isMasterMode()
         ? MasterDatabaseUtils.getTargetSheet('invoice')
         : MasterDatabaseUtils.getSourceSheet('invoice');
