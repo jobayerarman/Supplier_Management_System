@@ -181,6 +181,41 @@ const CacheManager = {
   },
 
   /**
+   * Apply a partition transition for an updated invoice row.
+   * Handles active→inactive, inactive→active, and in-place updates.
+   * Does NOT update stats — callers are responsible for stat increments.
+   *
+   * @private
+   * @param {string}  key         - "SUPPLIER|INVOICE_NO" lookup key
+   * @param {string}  supplier    - Normalized supplier name
+   * @param {Array}   updatedData - Fresh row data read from sheet
+   * @param {Object}  location    - globalIndexMap entry {partition, index, sheetRow}
+   * @returns {boolean} True if a partition transition occurred
+   */
+  _applyPartitionTransition: function(key, supplier, updatedData, location) {
+    const wasActive = (location.partition === 'active');
+    const isActive = this._isActiveInvoice(updatedData);
+
+    if (wasActive && !isActive) {
+      this._moveToInactivePartition(key, supplier, updatedData);
+      this.globalIndexMap.get(key).partition = 'inactive';
+      return true;
+    } else if (!wasActive && isActive) {
+      this._moveToActivePartition(key, supplier, updatedData);
+      this.globalIndexMap.get(key).partition = 'active';
+      return true;
+    } else {
+      // Update in-place (same partition)
+      if (wasActive) {
+        this.activeData[location.index] = updatedData;
+      } else {
+        this.inactiveData[location.index] = updatedData;
+      }
+      return false;
+    }
+  },
+
+  /**
    * ADD INVOICE TO CACHE (Partition-Only Write-Through)
    *
    * SIMPLIFIED: Direct partition write without redundant reads or unified cache
@@ -337,29 +372,9 @@ const CacheManager = {
         CONFIG.totalColumns.invoice
       ).getValues()[0];
 
-      // Check partition transition
-      const wasActive = (location.partition === 'active');
-      const isActive = this._isActiveInvoice(updatedData);
-
-      if (wasActive && !isActive) {
-        // Active → Inactive transition
-        this._moveToInactivePartition(key, normalizedSupplier, updatedData);
-        this.globalIndexMap.get(key).partition = 'inactive';
+      if (this._applyPartitionTransition(key, normalizedSupplier, updatedData, location)) {
         this.stats.partitionTransitions++;
-      } else if (!wasActive && isActive) {
-        // Inactive → Active transition
-        this._moveToActivePartition(key, normalizedSupplier, updatedData);
-        this.globalIndexMap.get(key).partition = 'active';
-        this.stats.partitionTransitions++;
-      } else {
-        // Update in same partition
-        if (wasActive) {
-          this.activeData[location.index] = updatedData;
-        } else {
-          this.inactiveData[location.index] = updatedData;
-        }
       }
-
       this.stats.incrementalUpdates++;
 
       return true;
@@ -540,7 +555,6 @@ const CacheManager = {
         : MasterDatabaseUtils.getSourceSheet('invoice');
 
       const col = CONFIG.invoiceCols;
-      let partitionTransitions = 0;
 
       // Process all invoices for this supplier (both partitions)
       const allInvoices = [
@@ -575,34 +589,13 @@ const CacheManager = {
         sheetRows.forEach(r => rowMap.set(r, batchValues[r - minRow]));
       }
 
-      for (const { partition, index, key, location } of invoiceEntries) {
+      for (const { key, location } of invoiceEntries) {
         try {
           // Use pre-fetched row data from the batch read above
           const updatedData = rowMap.get(location.sheetRow);
           if (!updatedData) continue;
 
-          // Check partition transition
-          const wasActive = (partition === 'active');
-          const isActive = this._isActiveInvoice(updatedData);
-
-          if (wasActive && !isActive) {
-            // Transition: Active → Inactive (became fully paid)
-            this._moveToInactivePartition(key, normalizedSupplier, updatedData);
-            this.globalIndexMap.get(key).partition = 'inactive';
-            partitionTransitions++;
-          } else if (!wasActive && isActive) {
-            // Transition: Inactive → Active (reopened)
-            this._moveToActivePartition(key, normalizedSupplier, updatedData);
-            this.globalIndexMap.get(key).partition = 'active';
-            partitionTransitions++;
-          } else {
-            // Update in same partition
-            if (wasActive) {
-              this.activeData[index] = updatedData;
-            } else {
-              this.inactiveData[index] = updatedData;
-            }
-          }
+          this._applyPartitionTransition(key, normalizedSupplier, updatedData, location);
 
         } catch (rowError) {
           AuditLogger.logError('CacheManager.invalidateSupplierCache',
