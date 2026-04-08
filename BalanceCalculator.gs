@@ -334,48 +334,6 @@ const BalanceCalculator = {
     }
   },
 
-  /**
-   * Validate that preview matches actual result (for testing/debugging)
-   *
-   * @typedef {Object} PreviewValidationResult
-   * @property {boolean} matches - Whether preview and actual match (within tolerance)
-   * @property {number} preview - Preview balance calculated
-   * @property {number} actual - Actual balance calculated
-   * @property {number} difference - Absolute difference between preview and actual
-   *
-   * @param {Object} data - Transaction data
-   * @returns {PreviewValidationResult} Validation result with comparison details
-   */
-  validatePreviewAccuracy: function(data) {
-    // Calculate preview
-    const preview = this.calculatePreview(
-      data.supplier,
-      data.paymentType,
-      data.receivedAmt,
-      data.paymentAmt,
-      data.prevInvoice
-    );
-
-    // Calculate actual
-    const actual = this.calculate(data);
-
-    // Compare (allow small rounding differences)
-    const difference = Math.abs(preview.balance - actual);
-    const matches = difference < CONFIG.constants.BALANCE_TOLERANCE;
-
-    if (!matches) {
-      AuditLogger.logWarning('BalanceCalculator.validatePreviewAccuracy',
-        `Preview/Actual mismatch | Supplier: ${data.supplier} | Preview: ${preview.balance} | Actual: ${actual} | Diff: ${difference}`);
-    }
-
-    return {
-      matches: matches,
-      preview: preview.balance,
-      actual: actual,
-      difference: difference
-    };
-  },
-
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 4: BALANCE CALCULATOR - CORE CALCULATIONS (PRIVATE)
   // ═══════════════════════════════════════════════════════════════════════════
