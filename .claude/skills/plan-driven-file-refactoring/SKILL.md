@@ -132,7 +132,9 @@ argument values.>
 
 \```
 git add <File>.gs
-git commit -m "<type>(<scope>): <description>"
+git commit -m "<type>(<scope>): <brief summary>
+
+<expanded description>"
 \```
 ```
 
