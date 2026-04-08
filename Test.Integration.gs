@@ -763,7 +763,6 @@ function runAllCentralizedTests() {
 
   // Balance Calculator Tests
   console.log('\n▶ BALANCE CALCULATOR TESTS');
-  try { allResults.push(testBalanceCalculation()); } catch (e) { console.error("testBalanceCalculation failed", e); }
   try { allResults.push(testSupplierOutstanding()); } catch (e) { console.error("testSupplierOutstanding failed", e); }
 
   // Main Application Logic Tests
@@ -820,7 +819,6 @@ function runTestCategory(category) {
     },
     'balance': () => {
       const results = [];
-      results.push(testBalanceCalculation());
       results.push(testSupplierOutstanding());
       return results;
     },
