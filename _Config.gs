@@ -189,6 +189,8 @@ const CONFIG = {
   rules: {
     MAX_TRANSACTION_AMOUNT: 1000000,
     CACHE_TTL_MS: 60000,
+    CACHE_SERVICE_TTL_S: 3600,      // CacheService cross-execution TTL: 1 hour
+    CACHE_SERVICE_MAX_BYTES: 90000, // CacheService payload size guard: 90 KB (hard limit 100 KB)
     LOCK_TIMEOUT_MS: 30000,
     MAX_INVOICE_NO_LENGTH: 50,
     SUPPORTED_PAYMENT_TYPES: ['Unpaid', 'Regular', 'Partial', 'Due'],

@@ -156,6 +156,36 @@ function deleteDailySheetsSafe() {
 }
 
 /**
+ * Global handler: Show CacheService status dialog
+ * Delegates to UIMenu module
+ */
+function menuShowCacheStatus() { UIMenu.showCacheStatus(); }
+
+/**
+ * Global handler: Force full cache rebuild (clear + reload from sheet)
+ * Delegates to UIMenu module
+ */
+function menuForceRebuildCache() { UIMenu.forceRebuildCache(); }
+
+/**
+ * Global handler: Clear runtime + CacheService (lazy reload on next use)
+ * Delegates to UIMenu module
+ */
+function menuClearCache() { UIMenu.clearCache(); }
+
+/**
+ * Global handler: Drop in-memory cache only; CacheService entry preserved
+ * Delegates to UIMenu module
+ */
+function menuClearRuntimeCache() { UIMenu.clearRuntimeCache(); }
+
+/**
+ * Global handler: Invalidate a single supplier's cache entries
+ * Delegates to UIMenu module
+ */
+function menuInvalidateSupplierCache() { UIMenu.invalidateSupplierCache(); }
+
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * SECTION 3: UIMENU MODULE - Batch Operations Implementation
  * ═══════════════════════════════════════════════════════════════════════════
@@ -202,6 +232,16 @@ const UIMenu = {
       .addSubMenu(ui.createMenu('🔄 Reset Operations')
         .addItem('🧹 Quick Reset Current Sheet', 'quickResetCurrentSheet')
         .addItem('🧹 Reset All Daily Sheets to Zero', 'resetAllDailySheetsToZero'))
+
+      // ═══ CACHE ═══
+      .addSubMenu(ui.createMenu('🗄️ Cache Management')
+        .addItem('ℹ️ Show Cache Status', 'menuShowCacheStatus')
+        .addSeparator()
+        .addItem('🔄 Force Rebuild (Reload Now)', 'menuForceRebuildCache')
+        .addItem('🗑️ Clear Cache (Lazy Reload)', 'menuClearCache')
+        .addItem('💨 Clear Runtime Only', 'menuClearRuntimeCache')
+        .addSeparator()
+        .addItem('🎯 Invalidate Supplier Cache', 'menuInvalidateSupplierCache'))
 
       // ═══ ADMIN ═══
       .addSeparator()
@@ -1762,6 +1802,178 @@ const UIMenu = {
       ss.setActiveSheet(item.sheet);
       ss.moveActiveSheet(index + 1);
     });
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CACHE MANAGEMENT MENU HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Shows a dialog with runtime + CacheService status, payload size, active invoice
+   * count, last-persist timestamp, and partition distribution stats.
+   */
+  showCacheStatus: function() {
+    const ui = SpreadsheetApp.getUi();
+    const key = CacheManager._getServiceKey();
+    const raw = CacheService.getScriptCache().get(key);
+
+    const lines = [];
+
+    // ── Runtime status ──────────────────────────────────────────────────────
+    const runtimeWarm = !!(CacheManager.timestamp && CacheManager.activeData);
+    lines.push('RUNTIME CACHE');
+    lines.push('  Status: ' + (runtimeWarm ? 'Warm' : 'Cold'));
+    if (runtimeWarm) {
+      const remainingS = Math.max(0,
+        Math.round((CONFIG.rules.CACHE_TTL_MS - (Date.now() - CacheManager.timestamp)) / 1000));
+      lines.push('  TTL remaining: ' + remainingS + 's');
+    }
+    lines.push('');
+
+    // ── CacheService status ─────────────────────────────────────────────────
+    lines.push('CACHESERVICE (cross-execution)');
+    let serviceActiveRows = 0;
+    let servicePayload = null;
+    if (!raw) {
+      lines.push('  Status: Cold (empty)');
+    } else {
+      try {
+        servicePayload = JSON.parse(raw);
+        const elapsedS = (Date.now() - servicePayload.timestamp) / 1000;
+        const ttlRemainingS = Math.max(0,
+          Math.round(CONFIG.rules.CACHE_SERVICE_TTL_S - elapsedS));
+        serviceActiveRows = Array.isArray(servicePayload.activeData)
+          ? servicePayload.activeData.length - 1 : 0;
+        const persistedAt = new Date(servicePayload.timestamp).toLocaleTimeString();
+        const maxKb = Math.round(CONFIG.rules.CACHE_SERVICE_MAX_BYTES / 1000);
+        lines.push('  Status: Warm');
+        lines.push('  TTL remaining: ' + ttlRemainingS + 's (~' +
+                   Math.ceil(ttlRemainingS / 60) + ' min)');
+        lines.push('  Payload size: ' + (raw.length / 1024).toFixed(1) + ' KB' +
+                   ' / ' + maxKb + ' KB max');
+        lines.push('  Active invoices cached: ' + serviceActiveRows);
+        lines.push('  Last persisted: ' + persistedAt);
+      } catch (e) {
+        lines.push('  Status: Corrupt (parse error)');
+        servicePayload = null;
+      }
+    }
+    lines.push('');
+
+    // ── Partition stats ─────────────────────────────────────────────────────
+    if (runtimeWarm) {
+      // Runtime is loaded — show full live stats
+      const stats = CacheManager.getPartitionStats();
+      lines.push('PARTITION STATS (runtime)');
+      lines.push('  Active (unpaid/partial): ' + stats.active.count +
+                 ' rows (' + stats.active.percentage + '%)');
+      lines.push('  Inactive (paid):         ' + stats.inactive.count +
+                 ' rows (' + stats.inactive.percentage + '%)');
+      lines.push('  Total: ' + stats.total + ' rows');
+    } else if (servicePayload) {
+      // Runtime cold but CacheService warm — derive from persisted payload
+      lines.push('PARTITION STATS (from CacheService)');
+      lines.push('  Active (unpaid/partial): ' + serviceActiveRows + ' rows');
+      lines.push('  Inactive (paid):         not persisted');
+      lines.push('  Note: full stats available after next onEdit or Force Rebuild');
+    } else {
+      lines.push('PARTITION STATS');
+      lines.push('  No data — cache is empty');
+    }
+
+    ui.alert('🗄️ Cache Status', lines.join('\n'), ui.ButtonSet.OK);
+  },
+
+  /**
+   * Clears runtime + CacheService, immediately reloads from InvoiceDatabase sheet,
+   * and re-persists. Fixes stale data caused by direct edits to the Master DB spreadsheet.
+   */
+  forceRebuildCache: function() {
+    const ui = SpreadsheetApp.getUi();
+    if (ui.alert(
+      '🔄 Force Rebuild Cache',
+      'This will clear all cache data and immediately reload from the InvoiceDatabase sheet.\n\n' +
+      'Use this to fix stale data caused by direct edits to the spreadsheet.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    ) !== ui.Button.YES) return;
+
+    CacheManager.clear();
+    const data = CacheManager.getInvoiceData();
+    const activeRows = Array.isArray(data.activeData) ? data.activeData.length - 1 : 0;
+
+    ui.alert(
+      '✅ Cache Rebuilt',
+      'Cache reloaded from sheet successfully.\n\nActive invoices loaded: ' + activeRows,
+      ui.ButtonSet.OK
+    );
+  },
+
+  /**
+   * Clears runtime + CacheService without reloading. Cache rebuilds lazily on the
+   * next onEdit trigger (via CacheService restore or full sheet read).
+   */
+  clearCache: function() {
+    const ui = SpreadsheetApp.getUi();
+    if (ui.alert(
+      '🗑️ Clear Cache',
+      'This will clear the runtime and CacheService cache.\n\n' +
+      'The cache will rebuild automatically on the next operation.\n\nContinue?',
+      ui.ButtonSet.YES_NO
+    ) !== ui.Button.YES) return;
+
+    CacheManager.clear();
+    SpreadsheetApp.getActiveSpreadsheet()
+      .toast('Cache cleared. Will rebuild on next use.', '🗑️ Cache Cleared', 4);
+  },
+
+  /**
+   * Drops in-memory runtime state only. CacheService entry is preserved so the
+   * next access restores from CacheService rather than doing a full sheet read.
+   */
+  clearRuntimeCache: function() {
+    CacheManager.timestamp          = null;
+    CacheManager.activeData         = null;
+    CacheManager.inactiveData       = null;
+    CacheManager.activeIndexMap     = null;
+    CacheManager.inactiveIndexMap   = null;
+    CacheManager.activeSupplierIndex   = null;
+    CacheManager.inactiveSupplierIndex = null;
+    CacheManager.globalIndexMap     = null;
+
+    SpreadsheetApp.getUi().alert(
+      '💨 Runtime Cache Cleared',
+      'In-memory cache dropped for this session.\n\n' +
+      'CacheService is intact — the next operation will restore from CacheService ' +
+      '(no sheet read required).',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  },
+
+  /**
+   * Prompts for a supplier name and calls CacheManager.invalidateSupplierCache()
+   * to refresh only that supplier's active partition entries.
+   */
+  invalidateSupplierCache: function() {
+    const ui = SpreadsheetApp.getUi();
+    const response = ui.prompt(
+      '🎯 Invalidate Supplier Cache',
+      'Enter the exact supplier name to invalidate:',
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (response.getSelectedButton() !== ui.Button.OK) return;
+
+    const supplier = response.getResponseText().trim();
+    if (!supplier) {
+      ui.alert('No supplier name entered.', ui.ButtonSet.OK);
+      return;
+    }
+
+    CacheManager.invalidateSupplierCache(supplier);
+    ui.alert(
+      '✅ Supplier Cache Invalidated',
+      'Cache entries refreshed for supplier: ' + supplier,
+      ui.ButtonSet.OK
+    );
   }
 }
 

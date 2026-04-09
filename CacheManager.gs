@@ -62,6 +62,11 @@ const CacheManager = {
   timestamp: null,      // Cache creation timestamp for TTL
   TTL: CONFIG.rules.CACHE_TTL_MS,
 
+  // ═══ CACHESERVICE PERSISTENCE (cross-execution) ═══
+  CACHE_SERVICE_TTL_S:     CONFIG.rules.CACHE_SERVICE_TTL_S,
+  CACHE_SERVICE_MAX_BYTES: CONFIG.rules.CACHE_SERVICE_MAX_BYTES,
+  _serviceKey: null,               // memoised; computed on first use (includes spreadsheet ID)
+
   // Active partition: Unpaid and Partial invoices (hot data - 10-30% of total)
   activeData: null,         // Active invoices array
   activeIndexMap: null,     // "SUPPLIER|INVOICE NO" -> activeData index
@@ -139,7 +144,89 @@ const CacheManager = {
     }
 
     this.stats.fullReloads++;
+    this._persistActiveToService();
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CACHESERVICE PERSISTENCE HELPERS (cross-execution)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Returns the CacheService key for this spreadsheet (memoised).
+   * Includes the spreadsheet ID to prevent cross-file collisions.
+   * @private
+   * @returns {string}
+   */
+  _getServiceKey: function() {
+    if (!this._serviceKey) {
+      this._serviceKey =
+        'cache_v1_invoices_active_' +
+        SpreadsheetApp.getActiveSpreadsheet().getId();
+    }
+    return this._serviceKey;
+  },
+
+  /**
+   * Serialise the active partition and write it to CacheService.
+   * Silent on any error — cache failures must never block transactions.
+   * Skips the write if the payload exceeds CACHE_SERVICE_MAX_BYTES.
+   * @private
+   */
+  _persistActiveToService: function() {
+    try {
+      if (!this.activeData) return;
+      const payload = JSON.stringify({
+        version: 1,
+        timestamp: this.timestamp,
+        activeData:            this.activeData,
+        activeIndexEntries:    [...this.activeIndexMap.entries()],
+        activeSupplierEntries: [...this.activeSupplierIndex.entries()],
+        globalActiveEntries:   [...this.globalIndexMap.entries()]
+                                 .filter(([, v]) => v.partition === 'active')
+      });
+      if (payload.length > this.CACHE_SERVICE_MAX_BYTES) return; // size guard
+      CacheService.getScriptCache().put(
+        this._getServiceKey(), payload, this.CACHE_SERVICE_TTL_S
+      );
+    } catch (e) { /* silent — must never block transactions */ }
+  },
+
+  /**
+   * Read the active partition from CacheService and populate runtime memory.
+   * Initialises inactive structures as empty Maps so callers using ?. / || []
+   * degrade gracefully without null-deref errors.
+   * A JSON reviver restores Date objects that were serialised as ISO strings.
+   * @private
+   * @returns {boolean} True on successful restore, false on miss / error / version mismatch
+   */
+  _restoreActiveFromService: function() {
+    try {
+      const raw = CacheService.getScriptCache().get(this._getServiceKey());
+      if (!raw) return false;
+
+      const dateRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+      const p = JSON.parse(raw, (k, v) =>
+        typeof v === 'string' && dateRe.test(v) ? new Date(v) : v
+      );
+      if (p.version !== 1) return false;
+
+      this.activeData          = p.activeData;
+      this.activeIndexMap      = new Map(p.activeIndexEntries);
+      this.activeSupplierIndex = new Map(p.activeSupplierEntries);
+      this.globalIndexMap      = new Map(p.globalActiveEntries);
+
+      // Inactive not persisted — empty Maps so callers degrade gracefully
+      this.inactiveData          = [this.activeData[0]]; // header row only
+      this.inactiveIndexMap      = new Map();
+      this.inactiveSupplierIndex = new Map();
+
+      this.timestamp = Date.now(); // fresh 60 s runtime window from this execution
+      this.stats.cacheHits++;
+      return true;
+    } catch (e) { return false; }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * Determine if invoice belongs to active partition
@@ -296,6 +383,8 @@ const CacheManager = {
       // Track write time for smart refresh deferral
       this._recentWrites.set(key, Date.now());
 
+      if (isActive) this._persistActiveToService();
+
     } catch (error) {
       AuditLogger.logError('CacheManager.addInvoiceToCache',
         `Failed to add invoice to cache: ${error.toString()}`);
@@ -340,6 +429,7 @@ const CacheManager = {
     if (!rowData) return false;
 
     rowData[colIndex] = value;
+    this._persistActiveToService();
     return true;
   },
 
@@ -402,6 +492,7 @@ const CacheManager = {
         this.stats.partitionTransitions++;
       }
       this.stats.incrementalUpdates++;
+      this._persistActiveToService();
 
       return true;
 
@@ -618,6 +709,7 @@ const CacheManager = {
             `Failed to update invoice for supplier "${supplier}": ${rowError.toString()}`);
         }
       }
+      this._persistActiveToService();
     } catch (error) {
       // Fallback: Clear entire cache if surgical update fails
       AuditLogger.logError('CacheManager.invalidateSupplierCache',
@@ -663,6 +755,7 @@ const CacheManager = {
 
     // Recent write timestamps (reset to bound memory growth)
     this._recentWrites = new Map();
+    try { CacheService.getScriptCache().remove(this._getServiceKey()); } catch (e) {}
   },
 
   /**
@@ -686,6 +779,9 @@ const CacheManager = {
   getInvoiceData: function () {
     const cached = this.get();
     if (cached) return cached;
+
+    // ② CacheService — cross-execution persistence (active partition only)
+    if (this._restoreActiveFromService()) return this._snapshot();
 
     try {
       // Cache miss - load data from sheet
