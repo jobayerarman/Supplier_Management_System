@@ -170,6 +170,18 @@ const BalanceCalculator = {
   },
 
   /**
+   * Return the numeric outstanding balance for the supplier in rowData after posting.
+   * Thin wrapper over _computeBalanceInfo(rowData, true) — reserved for callers that have
+   * rowData but not the supplier name already extracted.
+   *
+   * @param {Array} rowData - Row data array
+   * @returns {number} Supplier outstanding balance
+   */
+  computeBalance: function(rowData) {
+    return this._computeBalanceInfo(rowData, true).balance;
+  },
+
+  /**
    * Get balance due for a specific invoice
    *
    * @param {string} invoiceNo - Invoice number
