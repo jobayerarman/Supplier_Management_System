@@ -1,16 +1,35 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const fs=require('fs'),path=require('path');const g=path.join(process.cwd(),'GRAPH_REPORT.md');if(fs.existsSync(g)){console.log('graphify: Knowledge graph exists. Read GRAPH_REPORT.md for god nodes and community structure before searching raw files.')}\""
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
+      "Read(//c/Users/Jobayer Arman/.claude/**)",
       "mcp__codebase-memory-mcp__search_graph",
       "mcp__codebase-memory-mcp__query_graph",
       "Bash(python)",
       "Bash(grep -E \"^function [a-zA-Z]+\" *.gs)",
       "Read(//c/Users/Jobayer Arman/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/subagent-driven-development/**)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
       "Bash(python -c ':*)",
       "Bash(python -c \"import graphify\")",
-      "Bash(pip install:*)"
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git status*)",
+      "Bash(git branch*)",
+      "Bash(git remote*)",
+      "Bash(git rev-parse*)",
+      "Bash(git config --get*)"
     ]
   }
 }
