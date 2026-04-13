@@ -692,7 +692,7 @@ const UIMenu = {
   /** @private Orchestrate the Regular/Partial/Due path: accumulate then bulk-flush. */
   _handleRegularBatchPosting: function(context) {
     this._runBatchPostLoop(context);               // Phase 2: accumulate
-    this._flushRegularDailySheetUpdates(context);  // Phase 3: 3 bulk writes
+    this._flushRegularDailySheetUpdates(context);  // Phase 3: up to 3 bulk writes
   },
 
   /** @private Orchestrate the all-Unpaid fast path. */
@@ -744,7 +744,7 @@ const UIMenu = {
   _runBatchPostLoop: function(context) {
     const { sheetName, allData, startRow, numRows,
             results, suppliersToInvalidate,
-            progressInterval, enteredBy, batchContext } = context;
+            progressInterval, enteredBy } = context;
 
     try {
       for (let i = 0; i < allData.length; i++) {
@@ -769,7 +769,7 @@ const UIMenu = {
           this._executeDomainLogic(data, context);         // Stage 2: Domain Execution
           this._queueBalanceUpdate(data, rowNum, context); // Stage 3: State Capture
           this._queueStatusSuccess(data, rowNum, context); // Stage 4: Status Queue
-          suppliersToInvalidate.add(data.supplier);
+          suppliersToInvalidate.add(data.supplier); // Error paths skip this — no domain state was mutated
           results.posted++;
 
         } catch (error) {
@@ -778,7 +778,7 @@ const UIMenu = {
       }
     } finally {
       // Release batch lock immediately after loop — post-loop flush does not need it.
-      LockManager.releaseLock(batchContext ? batchContext.batchLock : null);
+      LockManager.releaseLock(context.batchContext?.batchLock);
     }
   },
 
@@ -796,8 +796,13 @@ const UIMenu = {
         return this._executeInvoiceAndPayment(data, context);
       case 'Due':
         return this._executeDuePayment(data, context);
+      case 'Unpaid':
+        // Mixed-batch path: pure-Unpaid batches use _runUnpaidBatchPostLoop, but any batch
+        // containing non-Unpaid rows routes here. Create/update invoice; no payment recorded.
+        return this._executeInvoiceOnly(data, context);
       default:
         throw new Error(`Unsupported payment type in batch: "${data.paymentType}"`);
+        // Caught by row-level catch → logged → queued as ERROR — no silent corruption
     }
   },
 
@@ -811,6 +816,12 @@ const UIMenu = {
   /** @private Stage 2 (Due): payment only — no invoice creation. */
   _executeDuePayment: function(data, context) {
     PaymentManager.processPayment(data, null, context.batchContext);
+  },
+
+  /** @private Stage 2 (Unpaid in mixed batch): create or update invoice only — no payment recorded. */
+  _executeInvoiceOnly: function(data, context) {
+    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, context.batchContext);
+    data.invoiceId = invoiceResult.invoiceId;
   },
 
   /** @private Stage 3 — State Capture: read updated balance from cache, push to accumulator. */
@@ -972,7 +983,7 @@ const UIMenu = {
 
   /**
    * @private Flush engine for Regular/Partial/Due batches — mirrors _flushUnpaidDailySheetUpdates.
-   * 3 bulk writes total regardless of batch size.
+   * Up to 3 bulk writes total; skips each flush if its accumulator is empty.
    */
   _flushRegularDailySheetUpdates: function(context) {
     if (

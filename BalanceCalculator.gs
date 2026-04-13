@@ -170,12 +170,12 @@ const BalanceCalculator = {
   },
 
   /**
-   * Return the numeric outstanding balance for the supplier in rowData after posting.
-   * Thin wrapper over _computeBalanceInfo(rowData, true) — reserved for callers that have
-   * rowData but not the supplier name already extracted.
+   * Convenience wrapper: extracts supplier from rowData and returns their outstanding balance.
+   * Functionally equivalent to getSupplierOutstanding(rowData[CONFIG.cols.supplier]).
+   * Reserved for future callers that hold rowData rather than the extracted supplier name.
    *
    * @param {Array} rowData - Row data array
-   * @returns {number} Supplier outstanding balance
+   * @returns {number} Supplier outstanding balance after posting
    */
   computeBalance: function(rowData) {
     return this._computeBalanceInfo(rowData, true).balance;
