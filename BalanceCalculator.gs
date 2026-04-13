@@ -178,7 +178,7 @@ const BalanceCalculator = {
    * @returns {number} Supplier outstanding balance after posting
    */
   computeBalance: function(rowData) {
-    return this._computeBalanceInfo(rowData, true).balance;
+    return this.getSupplierOutstanding(rowData[CONFIG.cols.supplier]);
   },
 
   /**

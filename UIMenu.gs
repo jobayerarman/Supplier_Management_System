@@ -732,8 +732,15 @@ const UIMenu = {
       sheet, sheetName, connectionMode,
       startRow, endRow, numRows, allData,
       results,
-      suppliersToInvalidate: new Set(),
-      pendingStatusUpdates:  [],
+      suppliersToInvalidate:  new Set(),
+      pendingStatusUpdates:   [],
+      // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
+      // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
+      // Shapes are strict contracts — enforce at push site, not in flush layer.
+      // { rowNum: number, sysId: string }
+      // { rowNum: number, balance: number }
+      pendingSysIdUpdates:    [],
+      pendingBalanceUpdates:  [],
       progressInterval: this._calculateProgressInterval(numRows),
       enteredBy:    UserResolver.getCurrentUser(),
       startTime
@@ -801,8 +808,9 @@ const UIMenu = {
         // containing non-Unpaid rows routes here. Create/update invoice; no payment recorded.
         return this._executeInvoiceOnly(data, context);
       default:
-        throw new Error(`Unsupported payment type in batch: "${data.paymentType}"`);
         // Caught by row-level catch → logged → queued as ERROR — no silent corruption
+        throw new Error(`Unsupported payment type in batch: "${data.paymentType}"`);
+
     }
   },
 
@@ -982,7 +990,7 @@ const UIMenu = {
   },
 
   /**
-   * @private Flush engine for Regular/Partial/Due batches — mirrors _flushUnpaidDailySheetUpdates.
+   * @private Flush engine for Regular/Partial/Due batches — analogous to _flushUnpaidDailySheetUpdates.
    * Up to 3 bulk writes total; skips each flush if its accumulator is empty.
    */
   _flushRegularDailySheetUpdates: function(context) {
@@ -1553,29 +1561,13 @@ const UIMenu = {
 
     if (!CONFIG.isMasterMode()) {
       // LOCAL mode: no remote sheet pre-fetching needed; carry the lock only.
-      return {
-        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
-        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
-        // Shapes are strict contracts — enforce at push site, not in flush layer.
-        // { rowNum: number, sysId: string }
-        // { rowNum: number, balance: number }
-        pendingSysIdUpdates:   [],
-        pendingBalanceUpdates: [],
-        batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null
-      };
+      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
     }
 
     try {
       const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
       const paymentSheet = MasterDatabaseUtils.getTargetSheet('payment');
       return {
-        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
-        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
-        // Shapes are strict contracts — enforce at push site, not in flush layer.
-        // { rowNum: number, sysId: string }
-        // { rowNum: number, balance: number }
-        pendingSysIdUpdates:   [],
-        pendingBalanceUpdates: [],
         batchLock,
         invoiceSheet,
         paymentSheet,
@@ -1586,16 +1578,7 @@ const UIMenu = {
       // Non-fatal — fall back to per-row getLastRow() calls; lock still carried.
       AuditLogger.logWarning('UIMenu._initBatchContext',
         `Failed to pre-fetch batch context: ${e.toString()}`);
-      return {
-        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
-        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
-        // Shapes are strict contracts — enforce at push site, not in flush layer.
-        // { rowNum: number, sysId: string }
-        // { rowNum: number, balance: number }
-        pendingSysIdUpdates:   [],
-        pendingBalanceUpdates: [],
-        batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null
-      };
+      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
     }
   },
 
