@@ -682,12 +682,17 @@ const UIMenu = {
     if (isUnpaid) {
       this._handleUnpaidBatchPosting(context);
     } else {
-      this._runBatchPostLoop(context);
-      this._flushBatchStatusUpdates(context);
+      this._handleRegularBatchPosting(context);
     }
 
     this._invalidateBatchCaches(context);
     return this._reportBatchPostResults(context);
+  },
+
+  /** @private Orchestrate the Regular/Partial/Due path: accumulate then bulk-flush. */
+  _handleRegularBatchPosting: function(context) {
+    this._runBatchPostLoop(context);               // Phase 2: accumulate
+    this._flushRegularDailySheetUpdates(context);  // Phase 3: 3 bulk writes
   },
 
   /** @private Orchestrate the all-Unpaid fast path. */
@@ -735,10 +740,10 @@ const UIMenu = {
     };
   },
 
-  /** @private Phase 2: iterate rows, validate, invoice, payment, queue status updates. */
+  /** @private Phase 2: iterate rows, accumulate all writes — no per-row sheet I/O. */
   _runBatchPostLoop: function(context) {
-    const { sheet, sheetName, allData, startRow, numRows,
-            results, suppliersToInvalidate, pendingStatusUpdates,
+    const { sheetName, allData, startRow, numRows,
+            results, suppliersToInvalidate,
             progressInterval, enteredBy, batchContext } = context;
 
     try {
@@ -756,69 +761,103 @@ const UIMenu = {
         if (status && status.toString().toUpperCase() === 'POSTED') { results.skipped++; continue; }
 
         try {
-          const data = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
+          const data       = this._buildDataObject(rowData, rowNum, sheetName, enteredBy);
           const validation = validatePostData(data);
+          if (!validation.valid) { this._queueValidationError(context, data, rowNum, validation); continue; }
 
-          if (!validation.valid) {
-            results.failed++;
-            results.errors.push({ row: rowNum, supplier: data.supplier,
-                                  invoiceNo: data.invoiceNo || 'N/A',
-                                  error: validation.error || validation.errors.join(', ') });
-
-            const errorMsg = validation.error ||
-              (validation.errors && validation.errors.length > 0 ? validation.errors[0] : 'Validation failed');
-            pendingStatusUpdates.push({
-              rowNum, keepChecked: false,
-              status:  `ERROR: ${errorMsg.substring(0, 100)}`,
-              user:    UserResolver.extractUsername(data.enteredBy),
-              time:    data.timestamp, bgColor: CONFIG.colors.error
-            });
-            AuditLogger.log('VALIDATION_FAILED', data, errorMsg);
-            continue;
-          }
-
-          if (!data.sysId) {
-            data.sysId = IDGenerator.generateUUID();
-            sheet.getRange(rowNum, CONFIG.cols.sysId + 1, 1, 1).setValue(data.sysId);
-          }
-
-          const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, batchContext);
-          data.invoiceId = invoiceResult.invoiceId;
-
-          if (this._shouldProcessPayment(data)) {
-            PaymentManager.processPayment(data, invoiceResult.invoiceId, batchContext);
-          }
-
-          BalanceCalculator.updateBalanceCell(sheet, rowNum, true, rowData, false); // bg deferred to flushBackgroundUpdates
-
-          pendingStatusUpdates.push({
-            rowNum, keepChecked: true, status: 'POSTED',
-            user:    UserResolver.extractUsername(data.enteredBy),
-            time:    data.timestamp, bgColor: CONFIG.colors.success
-          });
-
+          this._ensureSysId(data, context);                // Stage 1: Identity
+          this._executeDomainLogic(data, context);         // Stage 2: Domain Execution
+          this._queueBalanceUpdate(data, rowNum, context); // Stage 3: State Capture
+          this._queueStatusSuccess(data, rowNum, context); // Stage 4: Status Queue
           suppliersToInvalidate.add(data.supplier);
           results.posted++;
 
         } catch (error) {
-          results.failed++;
-          results.errors.push({
-            row: rowNum, supplier: rowData[CONFIG.cols.supplier],
-            invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
-          });
-          pendingStatusUpdates.push({
-            rowNum, keepChecked: false,
-            status:  `ERROR: ${error.message.substring(0, 100)}`,
-            user:    UserResolver.extractUsername(enteredBy),
-            time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error
-          });
-          AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
+          this._queueRuntimeError(context, error, rowData, rowNum, enteredBy);
         }
       }
     } finally {
-      // Release batch lock immediately after loop — post-loop work does not need it.
+      // Release batch lock immediately after loop — post-loop flush does not need it.
       LockManager.releaseLock(batchContext ? batchContext.batchLock : null);
     }
+  },
+
+  /** @private Stage 1 — Identity: ensure sysId exists and queue for deferred write. */
+  _ensureSysId: function(data, context) {
+    if (!data.sysId) data.sysId = IDGenerator.generateUUID();
+    context.pendingSysIdUpdates.push({ rowNum: data.rowNum, sysId: data.sysId });
+  },
+
+  /** @private Stage 2 — Domain Execution: dispatch by payment type. All branching isolated here. */
+  _executeDomainLogic: function(data, context) {
+    switch (data.paymentType) {
+      case 'Regular':
+      case 'Partial':
+        return this._executeInvoiceAndPayment(data, context);
+      case 'Due':
+        return this._executeDuePayment(data, context);
+      default:
+        throw new Error(`Unsupported payment type in batch: "${data.paymentType}"`);
+    }
+  },
+
+  /** @private Stage 2 (Regular/Partial): create or update invoice, then record full/partial payment. */
+  _executeInvoiceAndPayment: function(data, context) {
+    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, context.batchContext);
+    data.invoiceId = invoiceResult.invoiceId;
+    PaymentManager.processPayment(data, invoiceResult.invoiceId, context.batchContext);
+  },
+
+  /** @private Stage 2 (Due): payment only — no invoice creation. */
+  _executeDuePayment: function(data, context) {
+    PaymentManager.processPayment(data, null, context.batchContext);
+  },
+
+  /** @private Stage 3 — State Capture: read updated balance from cache, push to accumulator. */
+  _queueBalanceUpdate: function(data, rowNum, context) {
+    const balance = BalanceCalculator.getSupplierOutstanding(data.supplier);
+    context.pendingBalanceUpdates.push({ rowNum, balance });
+  },
+
+  /** @private Stage 4 — Status Queue: push success status update to accumulator. */
+  _queueStatusSuccess: function(data, rowNum, context) {
+    context.pendingStatusUpdates.push({
+      rowNum, keepChecked: true, status: 'POSTED',
+      user:    UserResolver.extractUsername(data.enteredBy),
+      time:    data.timestamp, bgColor: CONFIG.colors.success
+    });
+  },
+
+  /** @private Error helper: queue validation failure status and log audit entry. */
+  _queueValidationError: function(context, data, rowNum, validation) {
+    const msg = validation.error ||
+      (validation.errors?.length ? validation.errors[0] : 'Validation failed');
+    context.results.failed++;
+    context.results.errors.push({ row: rowNum, supplier: data.supplier,
+                                  invoiceNo: data.invoiceNo || 'N/A', error: msg });
+    context.pendingStatusUpdates.push({
+      rowNum, keepChecked: false,
+      status:  `ERROR: ${msg.substring(0, 100)}`,
+      user:    UserResolver.extractUsername(data.enteredBy),
+      time:    data.timestamp, bgColor: CONFIG.colors.error
+    });
+    AuditLogger.log('VALIDATION_FAILED', data, msg);
+  },
+
+  /** @private Error helper: queue runtime error status and log audit entry. */
+  _queueRuntimeError: function(context, error, rowData, rowNum, enteredBy) {
+    context.results.failed++;
+    context.results.errors.push({
+      row: rowNum, supplier: rowData[CONFIG.cols.supplier],
+      invoiceNo: rowData[CONFIG.cols.invoiceNo] || 'N/A', error: error.message
+    });
+    context.pendingStatusUpdates.push({
+      rowNum, keepChecked: false,
+      status:  `ERROR: ${error.message.substring(0, 100)}`,
+      user:    UserResolver.extractUsername(enteredBy),
+      time:    DateUtils.formatTimestamp(), bgColor: CONFIG.colors.error
+    });
+    AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
   },
 
   /** @private Fast-path loop for all-Unpaid batch: zero API calls per row; defers writes. */
@@ -929,6 +968,42 @@ const UIMenu = {
     const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
     sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
     flushBackgroundUpdates(sheet, pendingStatusUpdates);
+  },
+
+  /**
+   * @private Flush engine for Regular/Partial/Due batches — mirrors _flushUnpaidDailySheetUpdates.
+   * 3 bulk writes total regardless of batch size.
+   */
+  _flushRegularDailySheetUpdates: function(context) {
+    if (
+      context.pendingSysIdUpdates.length   === 0 &&
+      context.pendingBalanceUpdates.length === 0 &&
+      context.pendingStatusUpdates.length  === 0
+    ) return;
+
+    this._flushSysIdUpdates(context);       // 1 setValues — sysId column
+    this._flushBalanceUpdates(context);     // 1 setValues — balance column
+    this._flushBatchStatusUpdates(context); // 1 setValues + grouped setBackground
+  },
+
+  /** @private Build sysId column grid and write in one setValues call. */
+  _flushSysIdUpdates: function(context) {
+    if (context.pendingSysIdUpdates.length === 0) return;
+    const { sheet, allData, startRow, numRows } = context;
+    const updateMap = new Map(context.pendingSysIdUpdates.map(u => [u.rowNum, u.sysId]));
+    const grid = Array.from({ length: numRows }, (_, i) => {
+      const rowNum = startRow + i;
+      return [updateMap.get(rowNum) ?? allData[i][CONFIG.cols.sysId]];
+    });
+    sheet.getRange(startRow, CONFIG.cols.sysId + 1, numRows, 1).setValues(grid);
+  },
+
+  /** @private Build balance column grid and write in one setValues call. Reuses _buildBalanceGrid. */
+  _flushBalanceUpdates: function(context) {
+    if (context.pendingBalanceUpdates.length === 0) return;
+    const { sheet, allData, startRow, numRows } = context;
+    const grid = this._buildBalanceGrid(allData, startRow, numRows, context.pendingBalanceUpdates);
+    sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(grid);
   },
 
   /** @private Write balance col, status+sysId grid, and row backgrounds — 3 local API calls. */
@@ -1467,13 +1542,29 @@ const UIMenu = {
 
     if (!CONFIG.isMasterMode()) {
       // LOCAL mode: no remote sheet pre-fetching needed; carry the lock only.
-      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
+      return {
+        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
+        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
+        // Shapes are strict contracts — enforce at push site, not in flush layer.
+        // { rowNum: number, sysId: string }
+        // { rowNum: number, balance: number }
+        pendingSysIdUpdates:   [],
+        pendingBalanceUpdates: [],
+        batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null
+      };
     }
 
     try {
       const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
       const paymentSheet = MasterDatabaseUtils.getTargetSheet('payment');
       return {
+        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
+        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
+        // Shapes are strict contracts — enforce at push site, not in flush layer.
+        // { rowNum: number, sysId: string }
+        // { rowNum: number, balance: number }
+        pendingSysIdUpdates:   [],
+        pendingBalanceUpdates: [],
         batchLock,
         invoiceSheet,
         paymentSheet,
@@ -1484,7 +1575,16 @@ const UIMenu = {
       // Non-fatal — fall back to per-row getLastRow() calls; lock still carried.
       AuditLogger.logWarning('UIMenu._initBatchContext',
         `Failed to pre-fetch batch context: ${e.toString()}`);
-      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
+      return {
+        // -- Deferred daily-sheet write queues (Regular / Partial / Due batches) --
+        // Populated during _runBatchPostLoop; flushed atomically in _flushRegularDailySheetUpdates.
+        // Shapes are strict contracts — enforce at push site, not in flush layer.
+        // { rowNum: number, sysId: string }
+        // { rowNum: number, balance: number }
+        pendingSysIdUpdates:   [],
+        pendingBalanceUpdates: [],
+        batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null
+      };
     }
   },
 
