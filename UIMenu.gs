@@ -741,6 +741,7 @@ const UIMenu = {
       // { rowNum: number, balance: number }
       pendingSysIdUpdates:    [],
       pendingBalanceUpdates:  [],
+      pendingBalanceRows:     [],    // { rowNum, supplier } — resolved post-flush in _runBalancePass
       progressInterval: this._calculateProgressInterval(numRows),
       enteredBy:    UserResolver.getCurrentUser(),
       startTime
