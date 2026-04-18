@@ -338,12 +338,15 @@ const PaymentManager = {
         invoiceId || ''
       ];
 
-      // Single write operation for payment
-      paymentSh.getRange(newRow, 1, 1, CONFIG.totalColumns.payment).setValues([paymentRow]);
-
-      // ═══ WRITE-THROUGH CACHE ═══
-      // Add payment to cache for immediate availability
-      PaymentCache.addPaymentToCache(newRow, paymentRow);
+      // Deferred mode: buffer for batch flush; immediate mode: write now
+      if (batchContext?.pendingPaymentRows) {
+        if (batchContext.paymentFirstRow === null) batchContext.paymentFirstRow = newRow;
+        batchContext.pendingPaymentRows.push(paymentRow);
+      } else {
+        paymentSh.getRange(newRow, 1, 1, CONFIG.totalColumns.payment).setValues([paymentRow]);
+        // ═══ WRITE-THROUGH CACHE ═══
+        PaymentCache.addPaymentToCache(newRow, paymentRow);
+      }
 
       // Log payment creation
       AuditLogger.log('PAYMENT_CREATED', data,
