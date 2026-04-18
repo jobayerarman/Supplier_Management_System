@@ -244,6 +244,24 @@ const InvoiceManager = {
     invoiceSh.getRange(firstRow, 1, rows.length, rows[0].length).setValues(rows);
   },
 
+  /**
+   * Flush deferred invoice rows for Regular/Partial/Due batch.
+   * @param {Object} batchContext - Must contain invoiceSheet, invoiceFirstRow, pendingInvoiceRows[].
+   * @returns {{success: boolean, failedCount: number, error?: string}}
+   */
+  flushPendingRegularInvoices: function(batchContext) {
+    const rows = batchContext.pendingInvoiceRows;
+    if (!rows || rows.length === 0) return { success: true, failedCount: 0 };
+    try {
+      batchContext.invoiceSheet
+        .getRange(batchContext.invoiceFirstRow, 1, rows.length, rows[0].length)
+        .setValues(rows);
+      return { success: true, failedCount: 0 };
+    } catch (e) {
+      AuditLogger.logError('InvoiceManager.flushPendingRegularInvoices', e);
+      return { success: false, failedCount: rows.length, error: e.toString() };
+    }
+  },
 
   /**
    * Update invoice if data changed (conditional write)
