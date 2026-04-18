@@ -86,9 +86,10 @@ const PaymentManager = {
             : InvoiceManager.findInvoice(data.supplier, targetInvoice);
           if (invoice) {
             batchContext.pendingPaidDateChecks.push({
-              invoiceRow: invoice.row,
-              invoiceNo:  targetInvoice,
-              supplier:   data.supplier
+              invoiceRow:  invoice.row,
+              invoiceNo:   targetInvoice,
+              supplier:    data.supplier,
+              paymentDate: data.paymentDate || data.invoiceDate
             });
           }
         }
@@ -328,8 +329,7 @@ const PaymentManager = {
       // Use Master Database if in master mode, otherwise use local sheet.
       // PERF: batchContext pre-fetched the sheet and last-row before the batch
       // loop — reuse them and increment the counter instead of a remote getLastRow().
-      const paymentSh = batchContext ? batchContext.paymentSheet
-                                     : MasterDatabaseUtils.getTargetSheet('payment');
+      const paymentSh = batchContext?.paymentSheet ?? MasterDatabaseUtils.getTargetSheet('payment');
       const newRow = batchContext ? batchContext.paymentNextRow++
                                   : paymentSh.getLastRow() + 1;
 

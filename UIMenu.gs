@@ -1053,14 +1053,13 @@ const UIMenu = {
   _runPaidDatePass: function(batchCtx) {
     if (!batchCtx?.pendingPaidDateChecks?.length) return;
     const invoiceSheet = batchCtx.invoiceSheet;
-    const today        = new Date();
     const balanceCol   = CONFIG.invoiceCols.balanceDue + 1;
     const paidDateCol  = CONFIG.invoiceCols.paidDate   + 1;
     batchCtx.pendingPaidDateChecks.forEach(function(entry) {
       try {
         const balance = invoiceSheet.getRange(entry.invoiceRow, balanceCol).getValue();
         if (Math.abs(Number(balance)) < CONFIG.constants.BALANCE_TOLERANCE) {
-          invoiceSheet.getRange(entry.invoiceRow, paidDateCol).setValue(today);
+          invoiceSheet.getRange(entry.invoiceRow, paidDateCol).setValue(entry.paymentDate || new Date());
         }
       } catch (e) {
         AuditLogger.logWarning('UIMenu._runPaidDatePass',
