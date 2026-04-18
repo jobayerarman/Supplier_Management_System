@@ -92,7 +92,7 @@ const PaymentManager = {
             });
           }
         }
-        return this._buildPaymentResult(paymentRecorded, { attempted: false, fullyPaid: false, paidDateUpdated: false });
+        return this._buildPaymentResult(paymentRecorded, { attempted: false, fullyPaid: false, paidDateUpdated: false, balanceInfo: null });
       }
 
       // Step 3: Update cache and fetch invoice data
