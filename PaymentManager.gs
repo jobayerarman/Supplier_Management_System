@@ -386,6 +386,25 @@ const PaymentManager = {
   },
 
   /**
+   * Flush deferred payment rows for Regular/Partial/Due batch.
+   * @param {Object} batchContext - Must contain paymentSheet, paymentFirstRow, pendingPaymentRows[].
+   * @returns {{success: boolean, failedCount: number, error?: string}}
+   */
+  flushPendingPaymentRows: function(batchContext) {
+    const rows = batchContext.pendingPaymentRows;
+    if (!rows || rows.length === 0) return { success: true, failedCount: 0 };
+    try {
+      batchContext.paymentSheet
+        .getRange(batchContext.paymentFirstRow, 1, rows.length, rows[0].length)
+        .setValues(rows);
+      return { success: true, failedCount: 0 };
+    } catch (e) {
+      AuditLogger.logError('PaymentManager.flushPendingPaymentRows', e);
+      return { success: false, failedCount: rows.length, error: e.toString() };
+    }
+  },
+
+  /**
    * Check invoice balance and update paid date if fully settled
    *
    * ✓ OPTIMIZED: Lock acquired only during sheet write operation (via helper)
