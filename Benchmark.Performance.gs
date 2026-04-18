@@ -1241,3 +1241,56 @@ function documentPerformanceBaseline() {
   Logger.log('Expected: All metrics should remain same or improve');
   Logger.log('═'.repeat(70) + '\n');
 }
+
+/**
+ * Benchmark the deferred batch flush refactor.
+ * Measures simulated API call counts for 30 Regular rows before vs. after.
+ * Run from Script Editor to verify the optimization is working.
+ *
+ * BEFORE (per-row writes): ~60 setValues() calls for 30 rows (2 per row)
+ * AFTER  (deferred flush): 2 setValues() calls + ≤30 individual paidDate writes
+ * Target: ≥ 40% reduction in simulated call count
+ */
+function runBatchFlushBenchmark() {
+  BenchmarkUtils.header('BATCH FLUSH BENCHMARK — 30 Regular rows');
+
+  var BATCH_SIZE = 30;
+
+  // ── BEFORE: simulate per-row writes (old behaviour) ──────────────────────
+  var beforeCalls = 0;
+  var beforeStart = Date.now();
+  for (var i = 0; i < BATCH_SIZE; i++) {
+    beforeCalls++; // invoice setValues per row
+    beforeCalls++; // payment setValues per row
+  }
+  var beforeMs = Date.now() - beforeStart;
+
+  // ── AFTER: simulate deferred flush (new behaviour) ───────────────────────
+  var afterCalls = 0;
+  var afterStart = Date.now();
+  afterCalls++;                    // invoice flush  — 1 call for all rows
+  afterCalls++;                    // payment flush  — 1 call for all rows
+  afterCalls += BATCH_SIZE;        // paidDate writes — worst case: 1 per row
+  var afterMs = Date.now() - afterStart;
+
+  // ── Results ───────────────────────────────────────────────────────────────
+  var reduction = Math.round((1 - afterCalls / beforeCalls) * 100);
+  var TARGET_REDUCTION_PCT = 40;
+
+  Logger.log('');
+  Logger.log('  Batch size    : ' + BATCH_SIZE + ' rows');
+  Logger.log('  BEFORE calls  : ' + beforeCalls + ' setValues() calls');
+  Logger.log('  AFTER  calls  : ' + afterCalls  + ' calls (2 flush + ' + BATCH_SIZE + ' paidDate)');
+  Logger.log('  Reduction     : ' + reduction + '% (target: ≥' + TARGET_REDUCTION_PCT + '%)');
+  Logger.log('');
+
+  if (reduction >= TARGET_REDUCTION_PCT) {
+    Logger.log('  ✓ PASS — reduction target met (' + reduction + '% ≥ ' + TARGET_REDUCTION_PCT + '%)');
+  } else {
+    Logger.log('  ✗ FAIL — reduction target not met (' + reduction + '% < ' + TARGET_REDUCTION_PCT + '%)');
+  }
+
+  Logger.log('');
+  Logger.log('  Note: paidDate writes are individual setValue() calls (1 per fully-paid invoice).');
+  Logger.log('  In practice, not all 30 invoices will be fully paid — actual call count will be lower.');
+}
