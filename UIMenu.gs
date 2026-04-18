@@ -818,7 +818,8 @@ const UIMenu = {
   /** @private Stage 2 (Regular/Partial): create or update invoice, then record full/partial payment. */
   _executeInvoiceAndPayment: function(data, context) {
     const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, context.batchContext);
-    data.invoiceId = invoiceResult.invoiceId;
+    data.invoiceId  = invoiceResult.invoiceId;
+    data.invoiceRow = invoiceResult.row;
     PaymentManager.processPayment(data, invoiceResult.invoiceId, context.batchContext);
   },
 
@@ -833,10 +834,9 @@ const UIMenu = {
     data.invoiceId = invoiceResult.invoiceId;
   },
 
-  /** @private Stage 3 — State Capture: read updated balance from cache, push to accumulator. */
+  /** @private Stage 3 — State Capture: queue supplier for post-flush balance calculation. */
   _queueBalanceUpdate: function(data, rowNum, context) {
-    const balance = BalanceCalculator.getSupplierOutstanding(data.supplier);
-    context.pendingBalanceUpdates.push({ rowNum, balance });
+    context.pendingBalanceRows.push({ rowNum, supplier: data.supplier });
   },
 
   /** @private Stage 4 — Status Queue: push success status update to accumulator. */
