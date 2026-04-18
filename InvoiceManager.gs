@@ -212,7 +212,7 @@ const InvoiceManager = {
       }
 
       // ═══ ADD TO CACHE (Write-Through) - KEY FIX ═══
-      CacheManager.addInvoiceToCache(newRow, newRowData);
+      if (!batchContext?.pendingInvoiceRows) CacheManager.addInvoiceToCache(newRow, newRowData);
 
       AuditLogger.log('INVOICE_CREATED', data, `Created new invoice ${invoiceNo} at row ${newRow} | Date: ${formattedDate} | Added to cache`);
 
