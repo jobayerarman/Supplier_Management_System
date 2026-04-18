@@ -691,8 +691,36 @@ const UIMenu = {
 
   /** @private Orchestrate the Regular/Partial/Due path: accumulate then bulk-flush. */
   _handleRegularBatchPosting: function(context) {
-    this._runBatchPostLoop(context);               // Phase 2: accumulate
-    this._flushRegularDailySheetUpdates(context);  // Phase 3: up to 3 bulk writes
+    this._runBatchPostLoop(context);               // Phase 2: accumulate (no sheet writes)
+
+    const batchCtx = context.batchContext;
+
+    // STEP 1 — Invoice flush (1 API call)
+    const invoiceFlushResult = InvoiceManager.flushPendingRegularInvoices(batchCtx);
+    if (!invoiceFlushResult.success) {
+      this._markAllPendingAsFailed(context, invoiceFlushResult);
+      this._flushRegularDailySheetUpdates(context);
+      return;
+    }
+
+    // STEP 2 — Payment flush (1 API call)
+    const paymentFlushResult = PaymentManager.flushPendingPaymentRows(batchCtx);
+    if (!paymentFlushResult.success) {
+      AuditLogger.logWarning('UIMenu._handleRegularBatchPosting',
+        'PARTIAL_FLUSH_STATE: invoices written, payments not — manual reconciliation required via AuditLog');
+      this._markAllPendingAsFailed(context, paymentFlushResult);
+      this._flushRegularDailySheetUpdates(context);
+      return;
+    }
+
+    // STEP 3 — paidDate pass (SUMIFS now reflect new payments)
+    this._runPaidDatePass(batchCtx);
+
+    // STEP 4 — Balance pass (SUMIFS now reflect new payments)
+    this._runBalancePass(context);
+
+    // STEPS 5-6 — Flush balance + status updates → daily sheet + summary
+    this._flushRegularDailySheetUpdates(context);
   },
 
   /** @private Orchestrate the all-Unpaid fast path. */
@@ -1004,6 +1032,64 @@ const UIMenu = {
     this._flushSysIdUpdates(context);       // 1 setValues — sysId column
     this._flushBalanceUpdates(context);     // 1 setValues — balance column
     this._flushBatchStatusUpdates(context); // 1 setValues + grouped setBackground
+  },
+
+  /** @private Flip all POSTED pending status entries to FAILED after a flush error. */
+  _markAllPendingAsFailed: function(context, flushResult) {
+    var flipped = 0;
+    context.pendingStatusUpdates.forEach(function(entry) {
+      if (entry.status === 'POSTED') {
+        entry.status      = 'FAILED';
+        entry.bgColor     = CONFIG.colors.error;
+        entry.keepChecked = false;
+        flipped++;
+      }
+    });
+    context.results.failed += flipped;
+    context.results.posted  = Math.max(0, context.results.posted - flipped);
+  },
+
+  /** @private Post-flush paidDate pass: read recalculated SUMIFS, write paidDate where balance is within tolerance. */
+  _runPaidDatePass: function(batchCtx) {
+    if (!batchCtx?.pendingPaidDateChecks?.length) return;
+    const invoiceSheet = batchCtx.invoiceSheet;
+    const today        = new Date();
+    const balanceCol   = CONFIG.invoiceCols.balanceDue + 1;
+    const paidDateCol  = CONFIG.invoiceCols.paidDate   + 1;
+    batchCtx.pendingPaidDateChecks.forEach(function(entry) {
+      try {
+        const balance = invoiceSheet.getRange(entry.invoiceRow, balanceCol).getValue();
+        if (Math.abs(Number(balance)) < CONFIG.constants.BALANCE_TOLERANCE) {
+          invoiceSheet.getRange(entry.invoiceRow, paidDateCol).setValue(today);
+        }
+      } catch (e) {
+        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+          'Failed to write paidDate for invoice ' + entry.invoiceNo +
+          ' row ' + entry.invoiceRow + ': ' + e.toString());
+      }
+    });
+  },
+
+  /** @private Post-flush balance pass: one getSupplierOutstanding per unique supplier, fills pendingBalanceUpdates. */
+  _runBalancePass: function(context) {
+    if (!context.pendingBalanceRows?.length) return;
+    const balanceBySupplier = new Map();
+    context.pendingBalanceRows.forEach(function(entry) {
+      if (!balanceBySupplier.has(entry.supplier)) {
+        try {
+          balanceBySupplier.set(entry.supplier,
+            BalanceCalculator.getSupplierOutstanding(entry.supplier));
+        } catch (e) {
+          AuditLogger.logWarning('UIMenu._runBalancePass',
+            'Balance lookup failed for ' + entry.supplier + ': ' + e.toString());
+          balanceBySupplier.set(entry.supplier, null);
+        }
+      }
+      const balance = balanceBySupplier.get(entry.supplier);
+      if (balance !== null) {
+        context.pendingBalanceUpdates.push({ rowNum: entry.rowNum, balance: balance });
+      }
+    });
   },
 
   /** @private Build sysId column grid and write in one setValues call. */
