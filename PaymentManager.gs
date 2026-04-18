@@ -78,6 +78,23 @@ const PaymentManager = {
 
       const { paymentId, targetInvoice } = paymentRecorded;
 
+      // Deferred mode: skip Steps 3-4; queue paidDate check for post-flush pass
+      if (batchContext?.pendingPaymentRows) {
+        if (this._shouldUpdatePaidDate(data.paymentType)) {
+          const invoice = data.invoiceRow
+            ? { row: data.invoiceRow }
+            : InvoiceManager.findInvoice(data.supplier, targetInvoice);
+          if (invoice) {
+            batchContext.pendingPaidDateChecks.push({
+              invoiceRow: invoice.row,
+              invoiceNo:  targetInvoice,
+              supplier:   data.supplier
+            });
+          }
+        }
+        return this._buildPaymentResult(paymentRecorded, { attempted: false, fullyPaid: false, paidDateUpdated: false });
+      }
+
       // Step 3: Update cache and fetch invoice data
       const cachedInvoice = this._updateCacheAndFetchInvoice(data.supplier, targetInvoice);
 
