@@ -1559,26 +1559,30 @@ const UIMenu = {
     // Non-fatal if acquisition fails — callees fall back to per-row locks.
     const batchLock = LockManager.acquireScriptLock(CONFIG.rules.LOCK_TIMEOUT_MS);
 
-    if (!CONFIG.isMasterMode()) {
-      // LOCAL mode: no remote sheet pre-fetching needed; carry the lock only.
-      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
-    }
-
     try {
+      // Fetch sheet refs for both LOCAL and MASTER modes.
+      // MasterDatabaseUtils.getTargetSheet() routes to the correct sheet automatically.
       const invoiceSheet = MasterDatabaseUtils.getTargetSheet('invoice');
       const paymentSheet = MasterDatabaseUtils.getTargetSheet('payment');
       return {
         batchLock,
         invoiceSheet,
         paymentSheet,
-        invoiceNextRow:  invoiceSheet.getLastRow() + 1,
-        paymentNextRow:  paymentSheet.getLastRow() + 1,
+        invoiceNextRow:        invoiceSheet.getLastRow() + 1,
+        paymentNextRow:        paymentSheet.getLastRow() + 1,
+        // Deferred-write buffers for Regular/Partial/Due batch flush
+        invoiceFirstRow:       null,   // set on first invoice push
+        pendingInvoiceRows:    [],     // Array<Array[13]> — flushed by flushPendingRegularInvoices
+        paymentFirstRow:       null,   // set on first payment push
+        pendingPaymentRows:    [],     // Array<Array[12]> — flushed by flushPendingPaymentRows
+        pendingPaidDateChecks: [],     // Array<{invoiceRow, invoiceNo, supplier}>
       };
     } catch (e) {
-      // Non-fatal — fall back to per-row getLastRow() calls; lock still carried.
+      // Non-fatal — fall back to per-row getLastRow() + writes; lock still carried.
+      // No buffer fields: createInvoice/_recordPayment detect absence and write immediately.
       AuditLogger.logWarning('UIMenu._initBatchContext',
         `Failed to pre-fetch batch context: ${e.toString()}`);
-      return { batchLock, invoiceSheet: null, paymentSheet: null, invoiceNextRow: null, paymentNextRow: null };
+      return { batchLock };
     }
   },
 
