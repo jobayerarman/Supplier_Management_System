@@ -431,7 +431,7 @@ const UserResolver = (() => {
     _stats.totalCalls++;
 
     try {
-      // ═══ LEVEL 1: Execution-scoped cache (in-memory, < 0.01ms) ═══
+      // Level 1: execution-scoped cache (< 0.01ms)
       const execCached = getExecutionCache();
       if (execCached) {
         _stats.executionCacheHits++;
@@ -439,132 +439,92 @@ const UserResolver = (() => {
         _stats.avgExecutionCacheTime =
           (_stats.avgExecutionCacheTime * (_stats.executionCacheHits - 1) + duration)
           / _stats.executionCacheHits;
-
-        lastDetection = {
-          email: execCached.email,
-          method: execCached.method,
-          context: getExecutionContext(),
-          timestamp: new Date()
-        };
+        lastDetection = { email: execCached.email, method: execCached.method, context: getExecutionContext(), timestamp: new Date() };
         return execCached.email;
       }
 
-      // ═══ LEVEL 2: UserProperties cache (persistent, 3-5ms) ═══
-      const cached = getCachedUser();
-      if (cached) {
-        _stats.userPropertiesCacheHits++;
-        const duration = Date.now() - startTime;
-        _stats.avgUserPropertiesCacheTime =
-          (_stats.avgUserPropertiesCacheTime * (_stats.userPropertiesCacheHits - 1) + duration)
-          / _stats.userPropertiesCacheHits;
+      // Level 2: UserProperties cache (3–5ms)
+      const fromProps = _resolveFromUserProperties(startTime);
+      if (fromProps) return fromProps;
 
-        // Store in execution cache for subsequent calls
-        setExecutionCache(cached.email, 'cached');
-
-        lastDetection = {
-          email: cached.email,
-          method: 'cached',
-          context: getExecutionContext(),
-          timestamp: new Date()
-        };
-        return cached.email;
-      }
-
-      // ═══ LEVEL 3: Session detection (20-40ms) ═══
+      // Level 3: Session detection (20–40ms)
       const context = getExecutionContext();
+      const fromSession = _resolveFromSession(startTime, context);
+      if (fromSession) return fromSession;
 
-      // Try Session.getActiveUser() first (works in most contexts)
-      const sessionActive = getSessionActiveUser();
-      if (sessionActive) {
-        _stats.sessionDetections++;
-        const duration = Date.now() - startTime;
-        _stats.avgDetectionTime =
-          (_stats.avgDetectionTime * (_stats.sessionDetections - 1) + duration)
-          / _stats.sessionDetections;
-
-        // Store in BOTH caches
-        setCachedUser(sessionActive, 'session_active');
-        setExecutionCache(sessionActive, 'session_active');
-
-        lastDetection = {
-          email: sessionActive,
-          method: 'session_active',
-          context: context,
-          timestamp: new Date()
-        };
-        return sessionActive;
-      }
-
-      // Try Session.getEffectiveUser() second
-      const sessionEffective = getSessionEffectiveUser();
-      if (sessionEffective) {
-        _stats.sessionDetections++;
-        const duration = Date.now() - startTime;
-        _stats.avgDetectionTime =
-          (_stats.avgDetectionTime * (_stats.sessionDetections - 1) + duration)
-          / _stats.sessionDetections;
-
-        // Store in BOTH caches
-        setCachedUser(sessionEffective, 'session_effective');
-        setExecutionCache(sessionEffective, 'session_effective');
-
-        lastDetection = {
-          email: sessionEffective,
-          method: 'session_effective',
-          context: context,
-          timestamp: new Date()
-        };
-        return sessionEffective;
-      }
-
-      // ═══ LEVEL 4: User prompt (menu context only) ═══
+      // Level 4: User prompt (menu context only)
       if (context === 'menu') {
-        // In menu context, prompt user for identification
-        const prompted = promptUserForIdentification();
-        if (prompted) {
-          _stats.promptFallbacks++;
-
-          // Store in BOTH caches
-          setCachedUser(prompted, 'user_prompt');
-          setExecutionCache(prompted, 'user_prompt');
-
-          lastDetection = {
-            email: prompted,
-            method: 'user_prompt',
-            context: context,
-            timestamp: new Date()
-          };
-          return prompted;
-        }
+        const fromPrompt = _resolveFromPrompt(context);
+        if (fromPrompt) return fromPrompt;
       }
 
-      // ═══ LEVEL 5: Default fallback ═══
-      _stats.defaultFallbacks++;
-
-      lastDetection = {
-        email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL,
-        method: 'default_fallback',
-        context: context,
-        timestamp: new Date()
-      };
-
-      // Log warning for audit purposes
-      Logger.log(`⚠️ UserResolver using default fallback | Context: ${context}`);
-
-      return RESOLVER_CONFIG.DEFAULT_USER_EMAIL;
+      // Level 5: Default fallback
+      return _resolveDefault(context);
 
     } catch (error) {
       Logger.log('UserResolver critical error: ' + error.message);
       _stats.defaultFallbacks++;
-
-      lastDetection = {
-        email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL,
-        method: 'error_fallback',
-        context: 'error',
-        timestamp: new Date()
-      };
+      lastDetection = { email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL, method: 'error_fallback', context: 'error', timestamp: new Date() };
       return RESOLVER_CONFIG.DEFAULT_USER_EMAIL;
     }
+  }
+
+  // ─── getCurrentUser phase helpers (private) ─────────────────────────────
+
+  function _resolveFromUserProperties(startTime) {
+    const cached = getCachedUser();
+    if (!cached) return null;
+
+    _stats.userPropertiesCacheHits++;
+    const duration = Date.now() - startTime;
+    _stats.avgUserPropertiesCacheTime =
+      (_stats.avgUserPropertiesCacheTime * (_stats.userPropertiesCacheHits - 1) + duration)
+      / _stats.userPropertiesCacheHits;
+
+    setExecutionCache(cached.email, 'cached');
+    lastDetection = { email: cached.email, method: 'cached', context: getExecutionContext(), timestamp: new Date() };
+    return cached.email;
+  }
+
+  function _resolveFromSession(startTime, context) {
+    const sessionActive = getSessionActiveUser();
+    const email = sessionActive || getSessionEffectiveUser();
+    const method = sessionActive ? 'session_active' : 'session_effective';
+    if (!email) return null;
+
+    _stats.sessionDetections++;
+    const duration = Date.now() - startTime;
+    _stats.avgDetectionTime =
+      (_stats.avgDetectionTime * (_stats.sessionDetections - 1) + duration)
+      / _stats.sessionDetections;
+
+    setCachedUser(email, method);
+    setExecutionCache(email, method);
+    lastDetection = { email, method, context, timestamp: new Date() };
+    return email;
+  }
+
+  function _resolveFromPrompt(context) {
+    const prompted = promptUserForIdentification();
+    if (!prompted) return null;
+
+    _stats.promptFallbacks++;
+    setCachedUser(prompted, 'user_prompt');
+    setExecutionCache(prompted, 'user_prompt');
+    lastDetection = { email: prompted, method: 'user_prompt', context, timestamp: new Date() };
+    return prompted;
+  }
+
+  function _resolveDefault(context) {
+    _stats.defaultFallbacks++;
+    Logger.log(`⚠️ UserResolver using default fallback | Context: ${context}`);
+    lastDetection = {
+      email: RESOLVER_CONFIG.DEFAULT_USER_EMAIL,
+      method: 'default_fallback',
+      context,
+      timestamp: new Date()
+    };
+    return RESOLVER_CONFIG.DEFAULT_USER_EMAIL;
   }
 
   /**
