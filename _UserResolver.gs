@@ -659,7 +659,7 @@ const UserResolver = (() => {
    * @param {Object} overrides - Configuration properties to override
    */
   function setConfig(overrides) {
-    Object.assign(CONFIG, overrides);
+    Object.assign(RESOLVER_CONFIG, overrides);
   }
 
   /**
@@ -667,7 +667,7 @@ const UserResolver = (() => {
    * @returns {Object} Configuration object
    */
   function getConfig() {
-    return { ...CONFIG };
+    return { ...RESOLVER_CONFIG };
   }
 
   // ═══ DEPRECATED METHODS (Kept for backward compatibility) ═══
