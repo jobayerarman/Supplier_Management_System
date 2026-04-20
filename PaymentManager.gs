@@ -89,7 +89,8 @@ const PaymentManager = {
               invoiceRow:  invoice.row,
               invoiceNo:   targetInvoice,
               supplier:    data.supplier,
-              paymentDate: data.paymentDate || data.invoiceDate
+              paymentDate: data.paymentDate || data.invoiceDate,
+              paymentType: data.paymentType
             });
           }
         }

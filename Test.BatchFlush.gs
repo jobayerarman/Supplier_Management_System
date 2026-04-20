@@ -235,47 +235,53 @@ var TestBatchFlush = {
     } catch(e) { return { passed: false, name: name, error: e.toString() }; }
   },
 
-  // _runPaidDatePass — writes paidDate when balance below tolerance
+  // _runPaidDatePass — writes paidDate for Due entry when balance below tolerance
   testRunPaidDatePass_writesWhenBelowTolerance: function() {
-    var name = '_runPaidDatePass: writes paidDate when balance < BALANCE_TOLERANCE';
+    var name = '_runPaidDatePass: writes paidDate when Due balance < BALANCE_TOLERANCE';
     try {
       var paidDateWritten = false;
-      var balanceReadRow = null;
-      // Fake invoiceSheet: balance column returns 0.005 (below tolerance), paidDate setValue tracked
+      var balanceReadRow  = null;
       var fakeSheet = {
-        getRange: function(row, col) {
+        getRange: function(row, col, height, width) {
+          balanceReadRow = row;
           return {
-            getValue: function() { balanceReadRow = row; return 0.005; },
-            setValue: function(v) { paidDateWritten = true; }
+            getValues: function() { return [[0.005]]; },  // single-row window, below tolerance
+            setValues: function(v) { paidDateWritten = true; }
           };
         }
       };
       var batchCtx = {
-        pendingPaidDateChecks: [{ invoiceRow: 12, invoiceNo: 'INV-001', supplier: 'SupA' }],
+        pendingPaidDateChecks: [
+          { invoiceRow: 12, invoiceNo: 'INV-001', supplier: 'SupA',
+            paymentDate: new Date(), paymentType: 'Due' }
+        ],
         invoiceSheet: fakeSheet
       };
       UIMenu._runPaidDatePass(batchCtx);
-      if (!paidDateWritten) throw new Error('paidDate should have been written for balance 0.005');
+      if (!paidDateWritten) throw new Error('paidDate should have been written for Due balance 0.005');
       if (balanceReadRow !== 12) throw new Error('Balance read from wrong row: ' + balanceReadRow);
       return { passed: true, name: name };
     } catch(e) { return { passed: false, name: name, error: e.toString() }; }
   },
 
-  // _runPaidDatePass — skips when balance above tolerance
+  // _runPaidDatePass — skips Due entry when balance above tolerance
   testRunPaidDatePass_skipsWhenAboveTolerance: function() {
-    var name = '_runPaidDatePass: skips paidDate write when balance >= BALANCE_TOLERANCE';
+    var name = '_runPaidDatePass: skips paidDate write when Due balance >= BALANCE_TOLERANCE';
     try {
       var paidDateWritten = false;
       var fakeSheet = {
-        getRange: function(row, col) {
+        getRange: function(row, col, height, width) {
           return {
-            getValue: function() { return 50.00; },
-            setValue: function(v) { paidDateWritten = true; }
+            getValues: function() { return [[50.00]]; },
+            setValues: function(v) { paidDateWritten = true; }
           };
         }
       };
       var batchCtx = {
-        pendingPaidDateChecks: [{ invoiceRow: 7, invoiceNo: 'INV-002', supplier: 'SupB' }],
+        pendingPaidDateChecks: [
+          { invoiceRow: 7, invoiceNo: 'INV-002', supplier: 'SupB',
+            paymentDate: new Date(), paymentType: 'Due' }
+        ],
         invoiceSheet: fakeSheet
       };
       UIMenu._runPaidDatePass(batchCtx);
@@ -284,30 +290,30 @@ var TestBatchFlush = {
     } catch(e) { return { passed: false, name: name, error: e.toString() }; }
   },
 
-  // _runPaidDatePass — continues on per-entry error
+  // _runPaidDatePass — continues on per-entry balance window error, writes qualifying entry
   testRunPaidDatePass_continuesOnError: function() {
-    var name = '_runPaidDatePass: continues processing remaining entries after per-entry error';
+    var name = '_runPaidDatePass: continues processing after per-entry balance parse error';
     try {
       var successWritten = false;
-      var callCount = 0;
+      var balanceCol = CONFIG.invoiceCols.balanceDue + 1;
+      var paidDateCol = CONFIG.invoiceCols.paidDate  + 1;
+      // Two Due entries: rows 5 and 9. Window spans rows 5-9 (height 5).
+      // Index 0 (row 5) = null → balanceWindow[0][0] throws TypeError → per-entry catch fires.
+      // Index 4 (row 9) = [0]  → qualifies → paidDate written.
       var fakeSheet = {
-        getRange: function(row, col) {
-          callCount++;
-          if (row === 5) {
-            // First entry: throws on getValue
-            return { getValue: function() { throw new Error('Sheet read error'); }, setValue: function() {} };
+        getRange: function(row, col, height, width) {
+          if (col === balanceCol) {
+            return { getValues: function() { return [null, [0], [0], [0], [0]]; } };
           }
-          // Second entry: balance 0 → should write paidDate
-          return {
-            getValue: function() { return 0; },
-            setValue: function() { successWritten = true; }
-          };
+          return { setValues: function(v) { successWritten = true; } };
         }
       };
       var batchCtx = {
         pendingPaidDateChecks: [
-          { invoiceRow: 5, invoiceNo: 'INV-ERR', supplier: 'SupErr' },
-          { invoiceRow: 9, invoiceNo: 'INV-OK',  supplier: 'SupOK'  }
+          { invoiceRow: 5, invoiceNo: 'INV-ERR', supplier: 'SupErr',
+            paymentDate: new Date(), paymentType: 'Due' },
+          { invoiceRow: 9, invoiceNo: 'INV-OK',  supplier: 'SupOK',
+            paymentDate: new Date(), paymentType: 'Due' }
         ],
         invoiceSheet: fakeSheet
       };

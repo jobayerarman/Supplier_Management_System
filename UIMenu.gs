@@ -1049,24 +1049,143 @@ const UIMenu = {
     context.results.posted  = Math.max(0, context.results.posted - flipped);
   },
 
-  /** @private Post-flush paidDate pass: read recalculated SUMIFS, write paidDate where balance is within tolerance. */
+  /**
+   * @private Flush a sorted list of qualifying paidDate rows to the invoice sheet.
+   * Groups consecutive rows with the same paymentDate into contiguous runs and issues
+   * one setValues() per run — mirrors _applyUnpaidBatchBackgrounds run-grouping pattern.
+   *
+   * @param {Sheet}  invoiceSheet
+   * @param {Array}  qualifyingRows  [{invoiceRow: number, paymentDate: Date}] — pre-filtered, unsorted OK
+   * @param {number} paidDateCol     1-based column index of the paidDate column
+   */
+  _flushPaidDateRuns: function(invoiceSheet, qualifyingRows, paidDateCol) {
+    if (!qualifyingRows.length) return;
+
+    const sorted = qualifyingRows.slice().sort((a, b) => a.invoiceRow - b.invoiceRow);
+
+    let runStartRow = null;
+    let runValues   = [];
+
+    const flushRun = () => {
+      if (runStartRow === null || !runValues.length) return;
+      try {
+        invoiceSheet
+          .getRange(runStartRow, paidDateCol, runValues.length, 1)
+          .setValues(runValues);
+      } catch (e) {
+        AuditLogger.logWarning('UIMenu._flushPaidDateRuns',
+          'setValues failed at row ' + runStartRow +
+          ' height ' + runValues.length + ': ' + e.toString());
+      }
+      runStartRow = null;
+      runValues   = [];
+    };
+
+    for (let i = 0; i < sorted.length; i++) {
+      const entry    = sorted[i];
+      const prevRow    = i > 0 ? sorted[i - 1].invoiceRow : null;
+      const prevDateMs = i > 0
+        ? (sorted[i - 1].paymentDate instanceof Date
+            ? sorted[i - 1].paymentDate.getTime()
+            : Number(new Date(sorted[i - 1].paymentDate)))
+        : null;
+      const currDateMs = entry.paymentDate instanceof Date
+        ? entry.paymentDate.getTime()
+        : Number(new Date(entry.paymentDate));
+      const isContiguous = prevRow !== null
+        && entry.invoiceRow === prevRow + 1
+        && currDateMs === prevDateMs;
+
+      if (isContiguous) {
+        runValues.push([entry.paymentDate]);
+      } else {
+        flushRun();
+        runStartRow = entry.invoiceRow;
+        runValues   = [[entry.paymentDate]];
+      }
+    }
+    flushRun();
+  },
+
+  /**
+   * @private Post-flush paidDate pass — two optimised paths by payment type.
+   *
+   * Regular: invoice is always fully paid by definition → write paidDate unconditionally,
+   *          zero sheet reads, grouped setValues() per contiguous run.
+   * Due:     balance must be re-read to confirm it cleared → one batch getValues() spanning
+   *          all Due rows, in-memory filter, then grouped setValues() per contiguous run.
+   */
   _runPaidDatePass: function(batchCtx) {
     if (!batchCtx?.pendingPaidDateChecks?.length) return;
+
     const invoiceSheet = batchCtx.invoiceSheet;
+    if (!invoiceSheet) {
+      AuditLogger.logWarning('UIMenu._runPaidDatePass', 'invoiceSheet unavailable — skipping paidDate pass');
+      return;
+    }
+
     const balanceCol   = CONFIG.invoiceCols.balanceDue + 1;
     const paidDateCol  = CONFIG.invoiceCols.paidDate   + 1;
-    batchCtx.pendingPaidDateChecks.forEach(function(entry) {
+    const tolerance    = CONFIG.constants.BALANCE_TOLERANCE;
+    const checks       = batchCtx.pendingPaidDateChecks;
+
+    const regularEntries = checks.filter(e => e.paymentType === 'Regular');
+    const dueEntries     = checks.filter(e => e.paymentType === 'Due');
+
+    checks.forEach(function(e) {
+      if (e.paymentType !== 'Regular' && e.paymentType !== 'Due') {
+        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+          'Unhandled paymentType "' + e.paymentType + '" for invoice ' + e.invoiceNo + ' — skipped');
+      }
+    });
+
+    // ── Regular path: zero reads ─────────────────────────────────────────────
+    if (regularEntries.length) {
+      const qualifyingRegular = regularEntries.map(e => ({
+        invoiceRow:  e.invoiceRow,
+        paymentDate: e.paymentDate || new Date()
+      }));
+      this._flushPaidDateRuns(invoiceSheet, qualifyingRegular, paidDateCol);
+    }
+
+    // ── Due path: one batch read ─────────────────────────────────────────────
+    if (!dueEntries.length) return;
+
+    const dueRows = dueEntries.map(e => e.invoiceRow);
+    const minRow  = dueRows.reduce((m, r) => r < m ? r : m, dueRows[0]);
+    const maxRow  = dueRows.reduce((m, r) => r > m ? r : m, dueRows[0]);
+
+    let balanceWindow;
+    try {
+      balanceWindow = invoiceSheet
+        .getRange(minRow, balanceCol, maxRow - minRow + 1, 1)
+        .getValues();
+    } catch (e) {
+      dueEntries.forEach(function(entry) {
+        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+          'Batch balance read failed for invoice ' + entry.invoiceNo +
+          ' row ' + entry.invoiceRow + ': ' + e.toString());
+      });
+      return;
+    }
+
+    const qualifyingDue = [];
+    dueEntries.forEach(function(entry) {
       try {
-        const balance = invoiceSheet.getRange(entry.invoiceRow, balanceCol).getValue();
-        if (Math.abs(Number(balance)) < CONFIG.constants.BALANCE_TOLERANCE) {
-          invoiceSheet.getRange(entry.invoiceRow, paidDateCol).setValue(entry.paymentDate || new Date());
+        const balance = Number(balanceWindow[entry.invoiceRow - minRow][0]);
+        if (Math.abs(balance) < tolerance) {
+          qualifyingDue.push({ invoiceRow: entry.invoiceRow, paymentDate: entry.paymentDate || new Date() });
         }
       } catch (e) {
         AuditLogger.logWarning('UIMenu._runPaidDatePass',
-          'Failed to write paidDate for invoice ' + entry.invoiceNo +
+          'Failed to evaluate balance for invoice ' + entry.invoiceNo +
           ' row ' + entry.invoiceRow + ': ' + e.toString());
       }
     });
+
+    if (qualifyingDue.length) {
+      this._flushPaidDateRuns(invoiceSheet, qualifyingDue, paidDateCol);
+    }
   },
 
   /** @private Post-flush balance pass: one getSupplierOutstanding per unique supplier, fills pendingBalanceUpdates. */
@@ -1661,7 +1780,7 @@ const UIMenu = {
         pendingInvoiceRows:    [],     // Array<Array[13]> — flushed by flushPendingRegularInvoices
         paymentFirstRow:       null,   // set on first payment push
         pendingPaymentRows:    [],     // Array<Array[12]> — flushed by flushPendingPaymentRows
-        pendingPaidDateChecks: [],     // Array<{invoiceRow, invoiceNo, supplier}>
+        pendingPaidDateChecks: [],     // Array<{invoiceRow, invoiceNo, supplier, paymentDate, paymentType}>
       };
     } catch (e) {
       // Non-fatal — fall back to per-row getLastRow() + writes; lock still carried.
