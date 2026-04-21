@@ -957,18 +957,6 @@ const UIMenuBatchPosting = {
   },
 
   /**
-   * PRIVATE: Determine if payment should be processed for this row
-   *
-   * @param {Object} data - Transaction data object
-   * @return {boolean} True if payment should be recorded
-   * @private
-   */
-  _shouldProcessPayment: function(data) {
-    // Process payment for all types except when receiving new invoice with no payment
-    return !(data.paymentType === 'Unpaid' && data.paymentAmt === 0);
-  },
-
-  /**
    * PRIVATE: Create empty validation results object
    *
    * @return {Object} Empty results structure

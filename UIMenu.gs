@@ -510,8 +510,7 @@ const UIMenu = {
     ) !== ui.Button.YES) return;
 
     CacheManager.clear();
-    SpreadsheetApp.getActiveSpreadsheet()
-      .toast('Cache cleared. Will rebuild on next use.', '🗑️ Cache Cleared', 4);
+    UIUtils.toast('Cache cleared. Will rebuild on next use.', '🗑️ Cache Cleared', 4);
   },
 
   /**

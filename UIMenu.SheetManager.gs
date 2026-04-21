@@ -101,7 +101,7 @@ const UIMenuSheetManager = {
 
       // Start from Day 2 — up to the last day of the template month
       const daysInMonth = this._getDaysInMonth(ss);
-      const sheetsToCreate = CONFIG.sheets.daily.slice(1, daysInMonth);
+      const sheetsToCreate = CONFIG.dailySheets.slice(1, daysInMonth);
 
       // Build a lookup map of already-existing sheets (one API call)
       const sheetMap = {};
@@ -155,7 +155,7 @@ const UIMenuSheetManager = {
 
       // Check only sheets valid for this month (02 … last day of month)
       const daysInMonth = this._getDaysInMonth(ss);
-      CONFIG.sheets.daily.slice(1, daysInMonth).forEach(sheetName => {
+      CONFIG.dailySheets.slice(1, daysInMonth).forEach(sheetName => {
         if (!sheetMap[sheetName]) {
           missingSheets.push(sheetName);
         }
