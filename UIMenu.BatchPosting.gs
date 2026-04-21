@@ -563,12 +563,16 @@ const UIMenuBatchPosting = {
     const checks       = batchCtx.pendingPaidDateChecks;
 
     const regularEntries = checks.filter(e => e.paymentType === 'Regular');
-    const dueEntries     = checks.filter(e => e.paymentType === 'Due');
+    // Non-Regular entries (Due + any unexpected type) go through balance-check.
+    // An entry should only reach here via _shouldUpdatePaidDate which requires 'Regular'|'Due';
+    // routing unexpected types through balance-check is safer than silently dropping them.
+    const balanceCheckEntries = checks.filter(e => e.paymentType !== 'Regular');
 
-    checks.forEach(function(e) {
-      if (e.paymentType !== 'Regular' && e.paymentType !== 'Due') {
+    balanceCheckEntries.forEach(function(e) {
+      if (e.paymentType !== 'Due') {
         AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
-          'Unhandled paymentType "' + e.paymentType + '" for invoice ' + e.invoiceNo + ' — skipped');
+          'Unexpected paymentType "' + e.paymentType + '" for invoice ' + e.invoiceNo +
+          ' — routing through balance-check path');
       }
     });
 
@@ -581,12 +585,12 @@ const UIMenuBatchPosting = {
       this._flushPaidDateRuns(invoiceSheet, qualifyingRegular, paidDateCol);
     }
 
-    // ── Due path: one batch read ─────────────────────────────────────────────
-    if (!dueEntries.length) return;
+    // ── Balance-check path: one batch read (Due + fallback entries) ──────────
+    if (!balanceCheckEntries.length) return;
 
-    const dueRows = dueEntries.map(e => e.invoiceRow);
-    const minRow  = dueRows.reduce((m, r) => r < m ? r : m, dueRows[0]);
-    const maxRow  = dueRows.reduce((m, r) => r > m ? r : m, dueRows[0]);
+    const checkRows = balanceCheckEntries.map(e => e.invoiceRow);
+    const minRow    = checkRows.reduce((m, r) => r < m ? r : m, checkRows[0]);
+    const maxRow    = checkRows.reduce((m, r) => r > m ? r : m, checkRows[0]);
 
     let balanceWindow;
     try {
@@ -594,7 +598,7 @@ const UIMenuBatchPosting = {
         .getRange(minRow, balanceCol, maxRow - minRow + 1, 1)
         .getValues();
     } catch (e) {
-      dueEntries.forEach(function(entry) {
+      balanceCheckEntries.forEach(function(entry) {
         AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
           'Batch balance read failed for invoice ' + entry.invoiceNo +
           ' row ' + entry.invoiceRow + ': ' + e.toString());
@@ -602,12 +606,12 @@ const UIMenuBatchPosting = {
       return;
     }
 
-    const qualifyingDue = [];
-    dueEntries.forEach(function(entry) {
+    const qualifyingChecked = [];
+    balanceCheckEntries.forEach(function(entry) {
       try {
         const balance = Number(balanceWindow[entry.invoiceRow - minRow][0]);
         if (Math.abs(balance) < tolerance) {
-          qualifyingDue.push({ invoiceRow: entry.invoiceRow, paymentDate: entry.paymentDate || new Date() });
+          qualifyingChecked.push({ invoiceRow: entry.invoiceRow, paymentDate: entry.paymentDate || new Date() });
         }
       } catch (e) {
         AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
@@ -616,8 +620,8 @@ const UIMenuBatchPosting = {
       }
     });
 
-    if (qualifyingDue.length) {
-      this._flushPaidDateRuns(invoiceSheet, qualifyingDue, paidDateCol);
+    if (qualifyingChecked.length) {
+      this._flushPaidDateRuns(invoiceSheet, qualifyingChecked, paidDateCol);
     }
   },
 
