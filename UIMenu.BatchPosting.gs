@@ -153,7 +153,7 @@ const UIMenuBatchPosting = {
     // STEP 2 — Payment flush (1 API call)
     const paymentFlushResult = PaymentManager.flushPendingPaymentRows(batchCtx);
     if (!paymentFlushResult.success) {
-      AuditLogger.logWarning('UIMenu._handleRegularBatchPosting',
+      AuditLogger.logWarning('UIMenuBatchPosting._handleRegularBatchPosting',
         'PARTIAL_FLUSH_STATE: invoices written, payments not — manual reconciliation required via AuditLog');
       this._markAllPendingAsFailed(context, paymentFlushResult);
       this._flushRegularDailySheetUpdates(context);
@@ -520,7 +520,7 @@ const UIMenuBatchPosting = {
           .getRange(runStartRow, paidDateCol, runValues.length, 1)
           .setValues(runValues);
       } catch (e) {
-        AuditLogger.logWarning('UIMenu._flushPaidDateRuns',
+        AuditLogger.logWarning('UIMenuBatchPosting._flushPaidDateRuns',
           'setValues failed at row ' + runStartRow +
           ' height ' + runValues.length + ': ' + e.toString());
       }
@@ -567,7 +567,7 @@ const UIMenuBatchPosting = {
 
     const invoiceSheet = batchCtx.invoiceSheet;
     if (!invoiceSheet) {
-      AuditLogger.logWarning('UIMenu._runPaidDatePass', 'invoiceSheet unavailable — skipping paidDate pass');
+      AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass', 'invoiceSheet unavailable — skipping paidDate pass');
       return;
     }
 
@@ -581,7 +581,7 @@ const UIMenuBatchPosting = {
 
     checks.forEach(function(e) {
       if (e.paymentType !== 'Regular' && e.paymentType !== 'Due') {
-        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+        AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
           'Unhandled paymentType "' + e.paymentType + '" for invoice ' + e.invoiceNo + ' — skipped');
       }
     });
@@ -609,7 +609,7 @@ const UIMenuBatchPosting = {
         .getValues();
     } catch (e) {
       dueEntries.forEach(function(entry) {
-        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+        AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
           'Batch balance read failed for invoice ' + entry.invoiceNo +
           ' row ' + entry.invoiceRow + ': ' + e.toString());
       });
@@ -624,7 +624,7 @@ const UIMenuBatchPosting = {
           qualifyingDue.push({ invoiceRow: entry.invoiceRow, paymentDate: entry.paymentDate || new Date() });
         }
       } catch (e) {
-        AuditLogger.logWarning('UIMenu._runPaidDatePass',
+        AuditLogger.logWarning('UIMenuBatchPosting._runPaidDatePass',
           'Failed to evaluate balance for invoice ' + entry.invoiceNo +
           ' row ' + entry.invoiceRow + ': ' + e.toString());
       }
@@ -645,7 +645,7 @@ const UIMenuBatchPosting = {
           balanceBySupplier.set(entry.supplier,
             BalanceCalculator.getSupplierOutstanding(entry.supplier));
         } catch (e) {
-          AuditLogger.logWarning('UIMenu._runBalancePass',
+          AuditLogger.logWarning('UIMenuBatchPosting._runBalancePass',
             'Balance lookup failed for ' + entry.supplier + ': ' + e.toString());
           balanceBySupplier.set(entry.supplier, null);
         }
@@ -802,7 +802,7 @@ const UIMenuBatchPosting = {
     } catch (e) {
       // Non-fatal — fall back to per-row getLastRow() + writes; lock still carried.
       // No buffer fields: createInvoice/_recordPayment detect absence and write immediately.
-      AuditLogger.logWarning('UIMenu._initBatchContext',
+      AuditLogger.logWarning('UIMenuBatchPosting._initBatchContext',
         `Failed to pre-fetch batch context: ${e.toString()}`);
       return { batchLock };
     }
@@ -824,7 +824,7 @@ const UIMenuBatchPosting = {
       };
     } catch (e) {
       LockManager.releaseLock(batchLock);
-      AuditLogger.logWarning('UIMenu._initUnpaidBatchContext',
+      AuditLogger.logWarning('UIMenuBatchPosting._initUnpaidBatchContext',
         `Failed to pre-fetch invoice sheet for Unpaid batch: ${e.toString()}`);
       throw e;
     }
