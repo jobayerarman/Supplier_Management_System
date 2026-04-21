@@ -58,7 +58,7 @@ const UIMenuBatchPosting = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVATE METHODS
+  // VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
 
   /** @private Phase 1: validate row bounds, show toast, init results object. Returns null if sheet is empty. */
@@ -136,46 +136,9 @@ const UIMenuBatchPosting = {
     }
   },
 
-  /** @private Orchestrate the Regular/Partial/Due path: accumulate then bulk-flush. */
-  _handleRegularBatchPosting: function(context) {
-    this._runBatchPostLoop(context);               // Phase 2: accumulate (no sheet writes)
-
-    const batchCtx = context.batchContext;
-
-    // STEP 1 — Invoice flush (1 API call)
-    const invoiceFlushResult = InvoiceManager.flushPendingRegularInvoices(batchCtx);
-    if (!invoiceFlushResult.success) {
-      this._markAllPendingAsFailed(context, invoiceFlushResult);
-      this._flushRegularDailySheetUpdates(context);
-      return;
-    }
-
-    // STEP 2 — Payment flush (1 API call)
-    const paymentFlushResult = PaymentManager.flushPendingPaymentRows(batchCtx);
-    if (!paymentFlushResult.success) {
-      AuditLogger.logWarning('UIMenuBatchPosting._handleRegularBatchPosting',
-        'PARTIAL_FLUSH_STATE: invoices written, payments not — manual reconciliation required via AuditLog');
-      this._markAllPendingAsFailed(context, paymentFlushResult);
-      this._flushRegularDailySheetUpdates(context);
-      return;
-    }
-
-    // STEP 3 — paidDate pass (SUMIFS now reflect new payments)
-    this._runPaidDatePass(batchCtx);
-
-    // STEP 4 — Balance pass (SUMIFS now reflect new payments)
-    this._runBalancePass(context);
-
-    // STEPS 5-6 — Flush balance + status updates → daily sheet + summary
-    this._flushRegularDailySheetUpdates(context);
-  },
-
-  /** @private Orchestrate the all-Unpaid fast path. */
-  _handleUnpaidBatchPosting: function(context) {
-    this._runUnpaidBatchPostLoop(context);
-    InvoiceManager.flushPendingInvoiceRows(context.batchContext);  // 1 remote write
-    this._flushUnpaidDailySheetUpdates(context);                   // 3 local writes
-  },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // POSTING SETUP & ORCHESTRATION
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /** @private Phase 1: initialise context for a batch post run. Returns null if sheet is empty. */
   _initBatchPostSetup: function(sheet, startRow, endRow) {
@@ -222,6 +185,51 @@ const UIMenuBatchPosting = {
       startTime
     };
   },
+
+  /** @private Orchestrate the Regular/Partial/Due path: accumulate then bulk-flush. */
+  _handleRegularBatchPosting: function(context) {
+    this._runBatchPostLoop(context);               // Phase 2: accumulate (no sheet writes)
+
+    const batchCtx = context.batchContext;
+
+    // STEP 1 — Invoice flush (1 API call)
+    const invoiceFlushResult = InvoiceManager.flushPendingRegularInvoices(batchCtx);
+    if (!invoiceFlushResult.success) {
+      this._markAllPendingAsFailed(context, invoiceFlushResult);
+      this._flushRegularDailySheetUpdates(context);
+      return;
+    }
+
+    // STEP 2 — Payment flush (1 API call)
+    const paymentFlushResult = PaymentManager.flushPendingPaymentRows(batchCtx);
+    if (!paymentFlushResult.success) {
+      AuditLogger.logWarning('UIMenuBatchPosting._handleRegularBatchPosting',
+        'PARTIAL_FLUSH_STATE: invoices written, payments not — manual reconciliation required via AuditLog');
+      this._markAllPendingAsFailed(context, paymentFlushResult);
+      this._flushRegularDailySheetUpdates(context);
+      return;
+    }
+
+    // STEP 3 — paidDate pass (SUMIFS now reflect new payments)
+    this._runPaidDatePass(batchCtx);
+
+    // STEP 4 — Balance pass (SUMIFS now reflect new payments)
+    this._runBalancePass(context);
+
+    // STEPS 5-6 — Flush balance + status updates → daily sheet + summary
+    this._flushRegularDailySheetUpdates(context);
+  },
+
+  /** @private Orchestrate the all-Unpaid fast path. */
+  _handleUnpaidBatchPosting: function(context) {
+    this._runUnpaidBatchPostLoop(context);
+    InvoiceManager.flushPendingInvoiceRows(context.batchContext);  // 1 remote write
+    this._flushUnpaidDailySheetUpdates(context);                   // 3 local writes
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REGULAR BATCH LOOP
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /** @private Phase 2: iterate rows, accumulate all writes — no per-row sheet I/O. */
   _runBatchPostLoop: function(context) {
@@ -355,6 +363,10 @@ const UIMenuBatchPosting = {
     AuditLogger.logError('BATCH_POST_FAILED', error, { row: rowNum });
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UNPAID FAST-PATH LOOP
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /** @private Fast-path loop for all-Unpaid batch: zero API calls per row; defers writes. */
   _runUnpaidBatchPostLoop: function(context) {
     const { sheet, sheetName, allData, startRow, numRows,
@@ -449,6 +461,10 @@ const UIMenuBatchPosting = {
     }
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CACHE INVALIDATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /** @private Phase 3: invalidate supplier cache once per unique supplier. */
   _invalidateBatchCaches: function(context) {
     for (const supplier of context.suppliersToInvalidate) {
@@ -456,14 +472,9 @@ const UIMenuBatchPosting = {
     }
   },
 
-  /** @private Phase 4: flush all queued status updates in a single setValues() call. */
-  _flushBatchStatusUpdates: function(context) {
-    const { sheet, allData, startRow, numRows, pendingStatusUpdates } = context;
-    if (pendingStatusUpdates.length === 0) return;
-    const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
-    sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
-    flushBackgroundUpdates(sheet, pendingStatusUpdates);
-  },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FLUSH — REGULAR PATH
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * @private Flush engine for Regular/Partial/Due batches — analogous to _flushUnpaidDailySheetUpdates.
@@ -481,6 +492,35 @@ const UIMenuBatchPosting = {
     this._flushBatchStatusUpdates(context); // 1 setValues + grouped setBackground
   },
 
+  /** @private Build sysId column grid and write in one setValues call. */
+  _flushSysIdUpdates: function(context) {
+    if (context.pendingSysIdUpdates.length === 0) return;
+    const { sheet, allData, startRow, numRows } = context;
+    const updateMap = new Map(context.pendingSysIdUpdates.map(u => [u.rowNum, u.sysId]));
+    const grid = Array.from({ length: numRows }, (_, i) => {
+      const rowNum = startRow + i;
+      return [updateMap.get(rowNum) ?? allData[i][CONFIG.cols.sysId]];
+    });
+    sheet.getRange(startRow, CONFIG.cols.sysId + 1, numRows, 1).setValues(grid);
+  },
+
+  /** @private Build balance column grid and write in one setValues call. Reuses _buildBalanceGrid. */
+  _flushBalanceUpdates: function(context) {
+    if (context.pendingBalanceUpdates.length === 0) return;
+    const { sheet, allData, startRow, numRows } = context;
+    const grid = this._buildBalanceGrid(allData, startRow, numRows, context.pendingBalanceUpdates);
+    sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(grid);
+  },
+
+  /** @private Phase 4: flush all queued status updates in a single setValues() call. */
+  _flushBatchStatusUpdates: function(context) {
+    const { sheet, allData, startRow, numRows, pendingStatusUpdates } = context;
+    if (pendingStatusUpdates.length === 0) return;
+    const statusGrid = buildStatusGrid(allData, startRow, pendingStatusUpdates);
+    sheet.getRange(startRow, CONFIG.cols.post + 1, numRows, 4).setValues(statusGrid);
+    flushBackgroundUpdates(sheet, pendingStatusUpdates);
+  },
+
   /** @private Flip all POSTED pending status entries to FAILED after a flush error. */
   _markAllPendingAsFailed: function(context, flushResult) {
     var flipped = 0;
@@ -496,63 +536,9 @@ const UIMenuBatchPosting = {
     context.results.posted  = Math.max(0, context.results.posted - flipped);
   },
 
-  /**
-   * @private Flush a sorted list of qualifying paidDate rows to the invoice sheet.
-   * Groups consecutive rows with the same paymentDate into contiguous runs and issues
-   * one setValues() per run — mirrors _applyUnpaidBatchBackgrounds run-grouping pattern.
-   *
-   * @param {Sheet}  invoiceSheet
-   * @param {Array}  qualifyingRows  [{invoiceRow: number, paymentDate: Date}] — pre-filtered, unsorted OK
-   * @param {number} paidDateCol     1-based column index of the paidDate column
-   */
-  _flushPaidDateRuns: function(invoiceSheet, qualifyingRows, paidDateCol) {
-    if (!qualifyingRows.length) return;
-
-    const sorted = qualifyingRows.slice().sort((a, b) => a.invoiceRow - b.invoiceRow);
-
-    let runStartRow = null;
-    let runValues   = [];
-
-    const flushRun = () => {
-      if (runStartRow === null || !runValues.length) return;
-      try {
-        invoiceSheet
-          .getRange(runStartRow, paidDateCol, runValues.length, 1)
-          .setValues(runValues);
-      } catch (e) {
-        AuditLogger.logWarning('UIMenuBatchPosting._flushPaidDateRuns',
-          'setValues failed at row ' + runStartRow +
-          ' height ' + runValues.length + ': ' + e.toString());
-      }
-      runStartRow = null;
-      runValues   = [];
-    };
-
-    for (let i = 0; i < sorted.length; i++) {
-      const entry    = sorted[i];
-      const prevRow    = i > 0 ? sorted[i - 1].invoiceRow : null;
-      const prevDateMs = i > 0
-        ? (sorted[i - 1].paymentDate instanceof Date
-            ? sorted[i - 1].paymentDate.getTime()
-            : Number(new Date(sorted[i - 1].paymentDate)))
-        : null;
-      const currDateMs = entry.paymentDate instanceof Date
-        ? entry.paymentDate.getTime()
-        : Number(new Date(entry.paymentDate));
-      const isContiguous = prevRow !== null
-        && entry.invoiceRow === prevRow + 1
-        && currDateMs === prevDateMs;
-
-      if (isContiguous) {
-        runValues.push([entry.paymentDate]);
-      } else {
-        flushRun();
-        runStartRow = entry.invoiceRow;
-        runValues   = [[entry.paymentDate]];
-      }
-    }
-    flushRun();
-  },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FLUSH — PAID DATE PASS
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * @private Post-flush paidDate pass — two optimised paths by payment type.
@@ -657,25 +643,67 @@ const UIMenuBatchPosting = {
     });
   },
 
-  /** @private Build sysId column grid and write in one setValues call. */
-  _flushSysIdUpdates: function(context) {
-    if (context.pendingSysIdUpdates.length === 0) return;
-    const { sheet, allData, startRow, numRows } = context;
-    const updateMap = new Map(context.pendingSysIdUpdates.map(u => [u.rowNum, u.sysId]));
-    const grid = Array.from({ length: numRows }, (_, i) => {
-      const rowNum = startRow + i;
-      return [updateMap.get(rowNum) ?? allData[i][CONFIG.cols.sysId]];
-    });
-    sheet.getRange(startRow, CONFIG.cols.sysId + 1, numRows, 1).setValues(grid);
+  /**
+   * @private Flush a sorted list of qualifying paidDate rows to the invoice sheet.
+   * Groups consecutive rows with the same paymentDate into contiguous runs and issues
+   * one setValues() per run — mirrors _applyUnpaidBatchBackgrounds run-grouping pattern.
+   *
+   * @param {Sheet}  invoiceSheet
+   * @param {Array}  qualifyingRows  [{invoiceRow: number, paymentDate: Date}] — pre-filtered, unsorted OK
+   * @param {number} paidDateCol     1-based column index of the paidDate column
+   */
+  _flushPaidDateRuns: function(invoiceSheet, qualifyingRows, paidDateCol) {
+    if (!qualifyingRows.length) return;
+
+    const sorted = qualifyingRows.slice().sort((a, b) => a.invoiceRow - b.invoiceRow);
+
+    let runStartRow = null;
+    let runValues   = [];
+
+    const flushRun = () => {
+      if (runStartRow === null || !runValues.length) return;
+      try {
+        invoiceSheet
+          .getRange(runStartRow, paidDateCol, runValues.length, 1)
+          .setValues(runValues);
+      } catch (e) {
+        AuditLogger.logWarning('UIMenuBatchPosting._flushPaidDateRuns',
+          'setValues failed at row ' + runStartRow +
+          ' height ' + runValues.length + ': ' + e.toString());
+      }
+      runStartRow = null;
+      runValues   = [];
+    };
+
+    for (let i = 0; i < sorted.length; i++) {
+      const entry    = sorted[i];
+      const prevRow    = i > 0 ? sorted[i - 1].invoiceRow : null;
+      const prevDateMs = i > 0
+        ? (sorted[i - 1].paymentDate instanceof Date
+            ? sorted[i - 1].paymentDate.getTime()
+            : Number(new Date(sorted[i - 1].paymentDate)))
+        : null;
+      const currDateMs = entry.paymentDate instanceof Date
+        ? entry.paymentDate.getTime()
+        : Number(new Date(entry.paymentDate));
+      const isContiguous = prevRow !== null
+        && entry.invoiceRow === prevRow + 1
+        && currDateMs === prevDateMs;
+
+      if (isContiguous) {
+        runValues.push([entry.paymentDate]);
+      } else {
+        flushRun();
+        runStartRow = entry.invoiceRow;
+        runValues   = [[entry.paymentDate]];
+      }
+    }
+    flushRun();
   },
 
-  /** @private Build balance column grid and write in one setValues call. Reuses _buildBalanceGrid. */
-  _flushBalanceUpdates: function(context) {
-    if (context.pendingBalanceUpdates.length === 0) return;
-    const { sheet, allData, startRow, numRows } = context;
-    const grid = this._buildBalanceGrid(allData, startRow, numRows, context.pendingBalanceUpdates);
-    sheet.getRange(startRow, CONFIG.cols.balance + 1, numRows, 1).setValues(grid);
-  },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FLUSH — UNPAID PATH
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /** @private Write balance col, status+sysId grid, and row backgrounds — 3 local API calls. */
   _flushUnpaidDailySheetUpdates: function(context) {
@@ -746,6 +774,10 @@ const UIMenuBatchPosting = {
     flushGroup(startRow + numRows - 1);
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RESULTS & REPORTING
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /** @private Phase 5: calculate metrics, show completion toast, return results. */
   _reportBatchPostResults: function(context) {
     const { results, startTime, connectionMode } = context;
@@ -760,6 +792,63 @@ const UIMenuBatchPosting = {
     );
     return results;
   },
+
+  /**
+   * PRIVATE: Build the text body for the validation/posting results dialog.
+   *
+   * @param {Object}  results    - Results object with validation/posting data
+   * @param {boolean} isPosting  - True if posting operation, false if validation only
+   * @param {number}  maxErrors  - Maximum error entries to show before truncating
+   * @return {string} Formatted multi-line message string
+   * @private
+   */
+  _buildValidationMessage: function(results, isPosting, maxErrors) {
+    let message = `Total Rows Processed: ${results.total}\n`;
+
+    if (isPosting) {
+      message += `Successfully Posted: ${results.posted}\n`;
+      message += `Failed: ${results.failed}\n`;
+    } else {
+      message += `Valid: ${results.valid}\n`;
+      message += `Invalid: ${results.invalid}\n`;
+    }
+
+    message += `Skipped (empty or already posted): ${results.skipped}\n`;
+
+    if (isPosting && results.connectionMode) {
+      message += `\n--- Performance ---\n`;
+      message += `Connection Mode: ${results.connectionMode}\n`;
+      message += `Total Duration: ${(results.duration / 1000).toFixed(1)}s\n`;
+      if (results.posted > 0) {
+        message += `Avg Time/Row: ${results.avgTimePerRow}ms\n`;
+      }
+      if (results.connectionMode === 'MASTER') {
+        message += `\nNote: Master mode may be slightly slower due to\n`;
+        message += `cross-file writes (+50-100ms per row expected).\n`;
+      }
+    }
+
+    message += '\n';
+
+    if (results.errors && results.errors.length > 0) {
+      message += '--- Errors ---\n';
+      const errorsToShow = results.errors.slice(0, maxErrors);
+      errorsToShow.forEach(function(err) {
+        message += `Row ${err.row}: ${err.supplier} - ${err.invoiceNo}\n`;
+        message += `  Error: ${err.error}\n\n`;
+      });
+      if (results.errors.length > maxErrors) {
+        message += `... and ${results.errors.length - maxErrors} more errors.\n`;
+        message += 'Check the Status column (K) for details.\n';
+      }
+    }
+
+    return message;
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CONTEXT INITIALIZERS
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * PRIVATE: Pre-fetch Master DB sheet references and last-row counters.
@@ -829,6 +918,10 @@ const UIMenuBatchPosting = {
       throw e;
     }
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UTILITIES & DATA
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /** @private Returns true if every non-empty row in allData has paymentType === 'Unpaid'. Returns false for all-blank selections. */
   _isAllUnpaidBatch: function(allData) {
@@ -901,59 +994,6 @@ const UIMenuBatchPosting = {
 
     const calculatedInterval = Math.ceil(totalRows / targetUpdates);
     return Math.max(minInterval, Math.min(maxInterval, calculatedInterval));
-  },
-
-  /**
-   * PRIVATE: Build the text body for the validation/posting results dialog.
-   *
-   * @param {Object}  results    - Results object with validation/posting data
-   * @param {boolean} isPosting  - True if posting operation, false if validation only
-   * @param {number}  maxErrors  - Maximum error entries to show before truncating
-   * @return {string} Formatted multi-line message string
-   * @private
-   */
-  _buildValidationMessage: function(results, isPosting, maxErrors) {
-    let message = `Total Rows Processed: ${results.total}\n`;
-
-    if (isPosting) {
-      message += `Successfully Posted: ${results.posted}\n`;
-      message += `Failed: ${results.failed}\n`;
-    } else {
-      message += `Valid: ${results.valid}\n`;
-      message += `Invalid: ${results.invalid}\n`;
-    }
-
-    message += `Skipped (empty or already posted): ${results.skipped}\n`;
-
-    if (isPosting && results.connectionMode) {
-      message += `\n--- Performance ---\n`;
-      message += `Connection Mode: ${results.connectionMode}\n`;
-      message += `Total Duration: ${(results.duration / 1000).toFixed(1)}s\n`;
-      if (results.posted > 0) {
-        message += `Avg Time/Row: ${results.avgTimePerRow}ms\n`;
-      }
-      if (results.connectionMode === 'MASTER') {
-        message += `\nNote: Master mode may be slightly slower due to\n`;
-        message += `cross-file writes (+50-100ms per row expected).\n`;
-      }
-    }
-
-    message += '\n';
-
-    if (results.errors && results.errors.length > 0) {
-      message += '--- Errors ---\n';
-      const errorsToShow = results.errors.slice(0, maxErrors);
-      errorsToShow.forEach(function(err) {
-        message += `Row ${err.row}: ${err.supplier} - ${err.invoiceNo}\n`;
-        message += `  Error: ${err.error}\n\n`;
-      });
-      if (results.errors.length > maxErrors) {
-        message += `... and ${results.errors.length - maxErrors} more errors.\n`;
-        message += 'Check the Status column (K) for details.\n';
-      }
-    }
-
-    return message;
   },
 
   /**

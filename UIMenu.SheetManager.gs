@@ -23,6 +23,10 @@
 
 const UIMenuSheetManager = {
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PUBLIC INTERFACE — called by UIMenu
+  // ═══════════════════════════════════════════════════════════════════════════
+
   /**
    * PRIVATE: Handle clear checkboxes operation
    *
@@ -46,41 +50,6 @@ const UIMenuSheetManager = {
     range.uncheck();
 
     UIUtils.toast('All post checkboxes cleared successfully.', 'Success', 5);
-  },
-
-  /**
-   * PRIVATE: Returns the number of days in the template month.
-   *
-   * Reads the date from sheet "01" cell B3 and converts it to the
-   * spreadsheet's local timezone before extracting month/year. This is
-   * required because GAS executes in UTC: for UTC+6 (Bangladesh), a local
-   * date of April 1 00:00 is stored as March 31 18:00 UTC, so a naïve
-   * getMonth() would return 2 (March = 31 days) instead of 3 (April = 30).
-   *
-   * Falls back to 31 on any error so existing behaviour is preserved.
-   *
-   * @param {Spreadsheet} ss
-   * @returns {number} Last day of the template month (28–31)
-   * @private
-   */
-  _getDaysInMonth: function(ss) {
-    try {
-      const templateSheet = ss.getSheetByName('01');
-      if (!templateSheet) return 31;
-
-      const dateCell = templateSheet.getRange('B3').getValue();
-      if (!(dateCell instanceof Date) || isNaN(dateCell.getTime())) return 31;
-
-      // Use the spreadsheet's own timezone so UTC offsets don't shift the month.
-      const tz = ss.getSpreadsheetTimeZone();
-      const localStr = Utilities.formatDate(dateCell, tz, 'yyyy-MM-dd'); // e.g. "2026-04-01"
-      const [year, month] = localStr.split('-').map(Number);
-
-      // Day 0 of the next month = last day of the current month
-      return new Date(year, month, 0).getDate();
-    } catch (e) {
-      return 31;
-    }
   },
 
   /**
@@ -332,77 +301,42 @@ const UIMenuSheetManager = {
     }
   },
 
-  /** @private Collect names of deletable daily sheets for this month (02–<lastDay>, not in protectedSheets). */
-  _collectSheetsToDelete: function(ss, daysInMonth) {
-    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard',
-                             'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
-    // Only sheets that exist in this month's valid range (e.g. 02–28 for February)
-    const validDailySet = new Set(CONFIG.dailySheets.slice(1, daysInMonth));
-    const sheetsToDelete = [];
-    ss.getSheets().forEach(function(sheet) {
-      const name = sheet.getName();
-      if (validDailySet.has(name) && !protectedSheets.includes(name)) {
-        sheetsToDelete.push(name);
-      }
-    });
-    return sheetsToDelete;
-  },
-
-  /** @private Delete each sheet in the list, collect errors. Returns {deletedCount, errors}. */
-  _deleteSheetsWithFeedback: function(sheetsToDelete, ss) {
-    let deletedCount = 0;
-    const errors = [];
-    sheetsToDelete.forEach(function(sheetName) {
-      try {
-        const sheet = ss.getSheetByName(sheetName);
-        if (sheet) { ss.deleteSheet(sheet); deletedCount++; }
-      } catch (error) {
-        errors.push(`Failed to delete ${sheetName}: ${error.message}`);
-      }
-    });
-    return { deletedCount, errors };
-  },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET CREATION HELPERS
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * PRIVATE: Clear all transaction data from a sheet
+   * PRIVATE: Returns the number of days in the template month.
    *
-   * Clears content while preserving formulas, formatting, and data validation
-   * Specifically handles clearing checkboxes, status messages, and system IDs
+   * Reads the date from sheet "01" cell B3 and converts it to the
+   * spreadsheet's local timezone before extracting month/year. This is
+   * required because GAS executes in UTC: for UTC+6 (Bangladesh), a local
+   * date of April 1 00:00 is stored as March 31 18:00 UTC, so a naïve
+   * getMonth() would return 2 (March = 31 days) instead of 3 (April = 30).
    *
-   * @param {Sheet} sheet - The sheet to clear
+   * Falls back to 31 on any error so existing behaviour is preserved.
+   *
+   * @param {Spreadsheet} ss
+   * @returns {number} Last day of the template month (28–31)
    * @private
    */
-  _clearSheetData: function(sheet) {
-    const lastRow = sheet.getLastRow();
-    const lastCol = sheet.getLastColumn();
+  _getDaysInMonth: function(ss) {
+    try {
+      const templateSheet = ss.getSheetByName('01');
+      if (!templateSheet) return 31;
 
-    if (lastRow < CONFIG.dataStartRow) {
-      return; // No data to clear
-    }
+      const dateCell = templateSheet.getRange('B3').getValue();
+      if (!(dateCell instanceof Date) || isNaN(dateCell.getTime())) return 31;
 
-    // Clear values starting from row CONFIG.dataStartRow (preserve header)
-    const dataRange = sheet.getRange(CONFIG.dataStartRow, 1, lastRow - CONFIG.dataStartRow + 1, lastCol);
-    dataRange.clearContent();
-    dataRange.clearNote();
+      // Use the spreadsheet's own timezone so UTC offsets don't shift the month.
+      const tz = ss.getSpreadsheetTimeZone();
+      const localStr = Utilities.formatDate(dateCell, tz, 'yyyy-MM-dd'); // e.g. "2026-04-01"
+      const [year, month] = localStr.split('-').map(Number);
 
-    // Clear specific columns to avoid breaking formulas
-    const postCol = CONFIG.cols.post + 1;
-    const statusCol = CONFIG.cols.status + 1;
-    const sysIdCol = CONFIG.cols.sysId + 1;
-    const balanceCol = CONFIG.cols.balance + 1;
-
-    if (lastRow >= CONFIG.dataStartRow) {
-      // Clear post checkboxes
-      sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1).uncheck();
-
-      // Clear status messages
-      sheet.getRange(CONFIG.dataStartRow, statusCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
-
-      // Clear system IDs
-      sheet.getRange(CONFIG.dataStartRow, sysIdCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
-
-      // Clear balance calculations (but keep formulas)
-      sheet.getRange(CONFIG.dataStartRow, balanceCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+      // Day 0 of the next month = last day of the current month
+      return new Date(year, month, 0).getDate();
+    } catch (e) {
+      return 31;
     }
   },
 
@@ -438,6 +372,10 @@ const UIMenuSheetManager = {
     const dayNum = parseInt(sheetName);
     return dayNum - 1; // Sheet 01 gets +0, Sheet 02 gets +1, etc.
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET ORGANIZATION
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * PRIVATE: Check if a sheet name is a daily sheet (01-31)
@@ -485,6 +423,88 @@ const UIMenuSheetManager = {
       ss.setActiveSheet(item.sheet);
       ss.moveActiveSheet(index + 1);
     });
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET RESET & DATA CLEARING
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * PRIVATE: Clear all transaction data from a sheet
+   *
+   * Clears content while preserving formulas, formatting, and data validation
+   * Specifically handles clearing checkboxes, status messages, and system IDs
+   *
+   * @param {Sheet} sheet - The sheet to clear
+   * @private
+   */
+  _clearSheetData: function(sheet) {
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+
+    if (lastRow < CONFIG.dataStartRow) {
+      return; // No data to clear
+    }
+
+    // Clear values starting from row CONFIG.dataStartRow (preserve header)
+    const dataRange = sheet.getRange(CONFIG.dataStartRow, 1, lastRow - CONFIG.dataStartRow + 1, lastCol);
+    dataRange.clearContent();
+    dataRange.clearNote();
+
+    // Clear specific columns to avoid breaking formulas
+    const postCol = CONFIG.cols.post + 1;
+    const statusCol = CONFIG.cols.status + 1;
+    const sysIdCol = CONFIG.cols.sysId + 1;
+    const balanceCol = CONFIG.cols.balance + 1;
+
+    if (lastRow >= CONFIG.dataStartRow) {
+      // Clear post checkboxes
+      sheet.getRange(CONFIG.dataStartRow, postCol, lastRow - CONFIG.dataStartRow + 1, 1).uncheck();
+
+      // Clear status messages
+      sheet.getRange(CONFIG.dataStartRow, statusCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+
+      // Clear system IDs
+      sheet.getRange(CONFIG.dataStartRow, sysIdCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+
+      // Clear balance calculations (but keep formulas)
+      sheet.getRange(CONFIG.dataStartRow, balanceCol, lastRow - CONFIG.dataStartRow + 1, 1).clearContent();
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET DELETION HELPERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** @private Collect names of deletable daily sheets for this month (02–<lastDay>, not in protectedSheets). */
+  _collectSheetsToDelete: function(ss, daysInMonth) {
+    const protectedSheets = ['01', 'MonthlySummary', 'SupplierList', 'Dashboard',
+                             'Config', 'InvoiceDatabase', 'PaymentLog', 'AuditLog'];
+    // Only sheets that exist in this month's valid range (e.g. 02–28 for February)
+    const validDailySet = new Set(CONFIG.dailySheets.slice(1, daysInMonth));
+    const sheetsToDelete = [];
+    ss.getSheets().forEach(function(sheet) {
+      const name = sheet.getName();
+      if (validDailySet.has(name) && !protectedSheets.includes(name)) {
+        sheetsToDelete.push(name);
+      }
+    });
+    return sheetsToDelete;
+  },
+
+  /** @private Delete each sheet in the list, collect errors. Returns {deletedCount, errors}. */
+  _deleteSheetsWithFeedback: function(sheetsToDelete, ss) {
+    let deletedCount = 0;
+    const errors = [];
+    sheetsToDelete.forEach(function(sheetName) {
+      try {
+        const sheet = ss.getSheetByName(sheetName);
+        if (sheet) { ss.deleteSheet(sheet); deletedCount++; }
+      } catch (error) {
+        errors.push(`Failed to delete ${sheetName}: ${error.message}`);
+      }
+    });
+    return { deletedCount, errors };
   },
 
 }; // end UIMenuSheetManager
