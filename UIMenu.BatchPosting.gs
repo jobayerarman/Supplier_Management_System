@@ -588,6 +588,11 @@ const UIMenuBatchPosting = {
     // ── Balance-check path: one batch read (Due + fallback entries) ──────────
     if (!balanceCheckEntries.length) return;
 
+    // Force Sheets to commit the payment flush and recalculate SUMIFS before
+    // we read the balance column — without this the formula may still show the
+    // pre-payment balance and qualifying rows would be incorrectly excluded.
+    SpreadsheetApp.flush();
+
     const checkRows = balanceCheckEntries.map(e => e.invoiceRow);
     const minRow    = checkRows.reduce((m, r) => r < m ? r : m, checkRows[0]);
     const maxRow    = checkRows.reduce((m, r) => r > m ? r : m, checkRows[0]);
