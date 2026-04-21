@@ -110,8 +110,12 @@ const InvoiceManager = {
         const prevInvoice = data.prevInvoice
           ? this.findInvoice(data.supplier, data.prevInvoice)
           : null;
+        if (!prevInvoice) {
+          AuditLogger.logWarning('InvoiceManager.createOrUpdateInvoice',
+            `Due payment prevInvoice "${data.prevInvoice}" not found in cache for supplier "${data.supplier}" row ${data.rowNum} — paidDate will not be updated`);
+        }
         const invoiceId = prevInvoice ? prevInvoice.data[CONFIG.invoiceCols.sysId] : null;
-        return { success: true, action: 'none', invoiceId: invoiceId };
+        return { success: true, action: 'none', invoiceId: invoiceId, row: prevInvoice?.row };
       }
 
       // Check existence using cached data

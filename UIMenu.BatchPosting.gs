@@ -306,9 +306,15 @@ const UIMenuBatchPosting = {
     PaymentManager.processPayment(data, invoiceResult.invoiceId, context.batchContext);
   },
 
-  /** @private Stage 2 (Due): payment only — no invoice creation. */
+  /** @private Stage 2 (Due): look up prevInvoice to get invoiceRow + invoiceId, then record payment. */
   _executeDuePayment: function(data, context) {
-    PaymentManager.processPayment(data, null, context.batchContext);
+    // Mirror _executeInvoiceAndPayment: get invoiceRow before processPayment so the
+    // paidDate push in processPayment uses data.invoiceRow directly (trusted path)
+    // instead of a second findInvoice call that may fail on a cold/stale cache.
+    const invoiceResult = InvoiceManager.createOrUpdateInvoice(data, context.batchContext);
+    data.invoiceId  = invoiceResult.invoiceId;
+    data.invoiceRow = invoiceResult.row;
+    PaymentManager.processPayment(data, invoiceResult.invoiceId, context.batchContext);
   },
 
   /** @private Stage 2 (Unpaid in mixed batch): create or update invoice only — no payment recorded. */
