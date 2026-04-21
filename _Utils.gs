@@ -1015,3 +1015,31 @@ function setRowBackground(sheet, rowNum, color) {
   const totalCols = CONFIG.totalColumns.daily - 5; // Exclude date column (A)
   sheet.getRange(rowNum, 2, 1, totalCols).setBackground(color);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UIUtils — Shared UI primitives for UIMenu sub-modules
+// ═══════════════════════════════════════════════════════════════════════════
+
+const UIUtils = {
+  /**
+   * Spreadsheet toast wrapper.
+   * @param {string} message
+   * @param {string} title
+   * @param {number} [duration=3]
+   */
+  toast: function(message, title, duration) {
+    SpreadsheetApp.getActiveSpreadsheet()
+      .toast(message, title, duration == null ? 3 : duration);
+  },
+
+  /**
+   * YES/NO confirmation dialog. Returns true if user clicked YES.
+   * @param {string} title
+   * @param {string} message
+   * @return {boolean}
+   */
+  confirmOperation: function(title, message) {
+    const ui = SpreadsheetApp.getUi();
+    return ui.alert(title, message, ui.ButtonSet.YES_NO) === ui.Button.YES;
+  }
+};
