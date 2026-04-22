@@ -179,7 +179,7 @@ const UIMenuBatchPosting = {
       // { rowNum: number, balance: number }
       pendingSysIdUpdates:    [],
       pendingBalanceUpdates:  [],
-      pendingBalanceRows:     [],    // { rowNum, supplier } — resolved post-flush in _runBalancePass
+      pendingBalanceRows:     [],    // { rowNum, supplier, receivedAmt, paymentAmt } — resolved pre-flush in _resolveInMemoryBalances
       progressInterval: this._calculateProgressInterval(numRows),
       enteredBy:    UserResolver.getCurrentUser(),
       startTime
@@ -190,9 +190,12 @@ const UIMenuBatchPosting = {
   _handleRegularBatchPosting: function(context) {
     this._runBatchPostLoop(context);               // Phase 2: accumulate (no sheet writes)
 
+    // STEP 1 — Balance resolution (in-memory, pre-batch cache; must precede all writes)
+    this._resolveInMemoryBalances(context);
+
     const batchCtx = context.batchContext;
 
-    // STEP 1 — Invoice flush (1 API call)
+    // STEP 2 — Invoice flush (1 API call)
     const invoiceFlushResult = InvoiceManager.flushPendingRegularInvoices(batchCtx);
     if (!invoiceFlushResult.success) {
       this._markAllPendingAsFailed(context, invoiceFlushResult);
@@ -200,7 +203,7 @@ const UIMenuBatchPosting = {
       return;
     }
 
-    // STEP 2 — Payment flush (1 API call)
+    // STEP 3 — Payment flush (1 API call)
     const paymentFlushResult = PaymentManager.flushPendingPaymentRows(batchCtx);
     if (!paymentFlushResult.success) {
       AuditLogger.logWarning('UIMenuBatchPosting._handleRegularBatchPosting',
@@ -210,19 +213,17 @@ const UIMenuBatchPosting = {
       return;
     }
 
-    // STEP 3 — paidDate pass (SUMIFS now reflect new payments)
+    // STEP 4 — paidDate pass (SUMIFS now reflect new payments)
     this._runPaidDatePass(batchCtx);
 
-    // STEP 4 — Balance pass (SUMIFS now reflect new payments)
-    this._runBalancePass(context);
-
-    // STEPS 5-6 — Flush balance + status updates → daily sheet + summary
+    // STEP 5-6 — Flush balance + status updates → daily sheet + summary
     this._flushRegularDailySheetUpdates(context);
   },
 
   /** @private Orchestrate the all-Unpaid fast path. */
   _handleUnpaidBatchPosting: function(context) {
     this._runUnpaidBatchPostLoop(context);
+    this._resolveInMemoryBalances(context);                        // balance resolution before flush
     InvoiceManager.flushPendingInvoiceRows(context.batchContext);  // 1 remote write
     this._flushUnpaidDailySheetUpdates(context);                   // 3 local writes
   },
@@ -323,9 +324,9 @@ const UIMenuBatchPosting = {
     data.invoiceId = invoiceResult.invoiceId;
   },
 
-  /** @private Stage 3 — State Capture: queue supplier for post-flush balance calculation. */
+  /** @private Stage 3 — State Capture: queue supplier + amounts for in-memory balance resolution. */
   _queueBalanceUpdate: function(data, rowNum, context) {
-    context.pendingBalanceRows.push({ rowNum, supplier: data.supplier });
+    context.pendingBalanceRows.push({ rowNum, supplier: data.supplier, receivedAmt: data.receivedAmt, paymentAmt: data.paymentAmt });
   },
 
   /** @private Stage 4 — Status Queue: push success status update to accumulator. */
@@ -378,7 +379,6 @@ const UIMenuBatchPosting = {
     const { sheet, sheetName, allData, startRow, numRows,
             results, suppliersToInvalidate, pendingStatusUpdates,
             progressInterval, enteredBy, batchContext } = context;
-    context.pendingBalanceUpdates = [];
 
     try {
       for (let i = 0; i < allData.length; i++) {
@@ -433,8 +433,7 @@ const UIMenuBatchPosting = {
             continue;
           }
 
-          const balance = BalanceCalculator.getSupplierOutstanding(data.supplier);
-          context.pendingBalanceUpdates.push({ rowNum, balance });
+          this._queueBalanceUpdate(data, rowNum, context);
 
           pendingStatusUpdates.push({
             rowNum, keepChecked: true, status: 'POSTED',
@@ -538,8 +537,61 @@ const UIMenuBatchPosting = {
         flipped++;
       }
     });
+    context.pendingBalanceUpdates = [];  // FAILED rows use original allData balance via _buildBalanceGrid fallback
     context.results.failed += flipped;
     context.results.posted  = Math.max(0, context.results.posted - flipped);
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BALANCE RESOLUTION — IN-MEMORY
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * @private Compute post-batch balance per supplier without any post-flush sheet reads.
+   *
+   * Reads pre-batch balance once per unique supplier from CacheManager (no extra API call —
+   * cache is warm from the batch loop). Adds the net balance delta for all rows of each
+   * supplier: receivedAmt creates obligation, paymentAmt discharges it.
+   *
+   * Formula: finalBalance = preBalance + Σ(receivedAmt − paymentAmt)
+   *   Unpaid:  net = +receivedAmt (new invoice, no payment)
+   *   Due:     net = −paymentAmt  (existing invoice paid, receivedAmt = 0)
+   *   Regular: net = 0            (invoice amount = payment, fully offset)
+   *   Partial: net = +(receivedAmt − paymentAmt)
+   *
+   * MUST be called before any batch flush (invoice or payment) — reads preBalance
+   * from the pre-write cache that the batch loop already warmed.
+   */
+  _resolveInMemoryBalances: function(context) {
+    if (!context.pendingBalanceRows.length) return;
+
+    // Sum net balance change per supplier across all queued rows
+    const netBySupplier = new Map();
+    context.pendingBalanceRows.forEach(function(entry) {
+      netBySupplier.set(entry.supplier,
+        (netBySupplier.get(entry.supplier) || 0) + (entry.receivedAmt || 0) - (entry.paymentAmt || 0));
+    });
+
+    // One pre-batch balance read per unique supplier (cache-served, 0 extra API calls)
+    const finalBalanceBySupplier = new Map();
+    netBySupplier.forEach(function(net, supplier) {
+      let preBalance = 0;
+      try {
+        preBalance = BalanceCalculator.getSupplierOutstanding(supplier);
+      } catch (e) {
+        AuditLogger.logWarning('UIMenuBatchPosting._resolveInMemoryBalances',
+          'Balance lookup failed for ' + supplier + ': ' + e.toString());
+      }
+      finalBalanceBySupplier.set(supplier, preBalance + net);
+    });
+
+    // Populate pendingBalanceUpdates (same shape consumed by _flushBalanceUpdates / _buildBalanceGrid)
+    context.pendingBalanceRows.forEach(function(entry) {
+      const balance = finalBalanceBySupplier.get(entry.supplier);
+      if (balance !== undefined) {
+        context.pendingBalanceUpdates.push({ rowNum: entry.rowNum, balance: balance });
+      }
+    });
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
