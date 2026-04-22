@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-04-23
+
+### 2026-04-23
+#### Fixed
+- `755f9a8` Stale balance in batch posting — in-memory resolution across all payment types (Unpaid, Due, Regular, Partial)
+
+### 2026-04-22
+#### Fixed
+- `e861bac` Flush before balance read in `_runPaidDatePass`
+- `67bd26a` Set `invoiceRow` before `processPayment` to guarantee paidDate push
+
+### 2026-04-21
+#### Added
+- `a983018` Extract `UIMenuBatchPosting` sub-module from `UIMenu.gs`
+- `fa26ad6` Extract `UIMenuSheetManager` sub-module from `UIMenu.gs`
+- `7db3766` Add `UIUtils` shared toast + confirmOperation helpers
+
+#### Fixed
+- `a28b3ba` Route unexpected `paymentType` through balance-check in `_runPaidDatePass`
+- `689ef8c` Correct `setConfig`/`getConfig` to use `RESOLVER_CONFIG`
+- `35e8868` Post-review fixes from UIMenu modularization
+
+#### Performance
+- `a3db09e` Batch paidDate writes in `_runPaidDatePass` — 2N API calls → O(1)
+
+#### Refactored
+- `6b98581` Slim `UIMenu` to thin facade; delegate batch/sheet logic to sub-modules
+- `7c87d8d` Decompose `UserResolver.getCurrentUser` into phase helpers
+
+### 2026-04-18
+#### Added
+- `eef3438` Post-flush sequence in `_handleRegularBatchPosting`; add `_markAllPendingAsFailed`, `_runPaidDatePass`, `_runBalancePass`
+- `dd81021` `flushPendingRegularInvoices` in `InvoiceManager`
+- `18a856e` Defer balance calculation post-flush; pass `invoiceRow` to `processPayment`
+- `2d3f983` `flushPendingPaymentRows` in `PaymentManager`
+
+#### Fixed
+- `3d0d06c` Null-coalescing for paymentSheet fallback; pass `paymentDate` through pending checks
+
+#### Performance
+- `303af96` Defer payment write in batch mode
+- `ab496ba` Defer steps 3–4 in batch mode; queue `pendingPaidDateChecks`
+- `122d06c` Skip cache update in deferred batch mode
+
+### 2026-04-14
+#### Fixed
+- `c610c62` Move accumulator arrays to top-level batch context
+- `7548a65` Handle Unpaid rows in mixed batches
+
+#### Performance
+- `b61fe3f` Eliminate per-row API calls via deferred bulk writes
+
+### 2026-04-09
+#### Added
+- `4d78a99` CacheService cross-execution persistence for active invoice partition
+
+### 2026-04-08
+#### Fixed
+- `679d31c` Silence spurious write-through warning in PaymentCache
+- `6b64937` Remove erroneous `formatTime` call on pre-formatted timestamp
+
+#### Performance
+- `52e2536` Eliminate dual-trigger overhead; fix col F formatting regression
+- `0a2024e` Eliminate duplicate balance `setBackground` in batch post
+
+#### Refactored
+- `d665137` Consolidate PaymentCache into `CacheManager.gs`
+- `606ce3a` Remove dead `testBalanceCalculation` call sites from Integration test
+- Multiple CacheManager dead-code removals (`_logStatistics`, `getSupplierData`, dead partition fields, vestigial stats)
+- Multiple BalanceCalculator dead-method removals (`getSupplierSummary`, `validatePreviewAccuracy`, `getSupplierOutstandingDetailed`)
+- Multiple InvoiceManager cleanup commits (dead result builders, `_rowToInvoiceObject` extraction, formula delegation)
+
+### 2026-04-07
+#### Added
+- `31e0fca` Unpaid batch fast-path — loop, flush, grid builders, backgrounds
+- `6f13eb9` Detect all-Unpaid batch and branch to fast-path
+- `5ffadaf` Deferred-write mode for `createInvoice` + `flushPendingInvoiceRows`
+
+#### Fixed
+- `44912c5` Code review findings in UIMenu
+- `be3cb4d` Release lock if `getTargetSheet` throws in `_initUnpaidBatchContext`
+
+### 2026-04-05
+#### Fixed
+- `c47f9b5` Read-back verification for Due payment paidDate writes
+- `9e3224f` Record `invoiceId` for Due payments; simplify payment gating
+- `b07cc94` Correct stale `globalIndexMap.index` after partition transition
+- `52a6e1a` Null-coalescing guard in `_toast` to preserve `duration=0`
+
+#### Performance
+- `7f6982e` Eliminate lock churn; fix post-payment balance overcounting
+- `66a3e31` Eliminate dead API calls in paymentType/supplier edit subchain
+
+#### Refactored
+- `354b3ae` Decompose `_handleBatchPosting` into 5 phase helpers
+- `71c028b` Extract `_confirmOperation`; replace 11 inline dialog blocks
+- `1a3b41c` Extract `_toast` helper; replace all toast chains
+- `374618a` Restructure UI menu by frequency of use
+
+### 2026-04-02
+#### Added
+- `1fd58b0` System Health Check menu item wired to `validateDataIntegrity`
+- `b2f2965` `setBatchPostStatus()` configurable via CONFIG
+
+#### Fixed
+- `49466de` Correct post-payment balance; persist manual user identity across sessions
+- `4b319a2` Allow dots and slashes in invoice numbers
+- `255020c` `createInvoice` falls through to update on race-condition duplicate
+- `9a81435` Prevent cache read before SUMIFS recalculates
+- `476b44c` New invoices placed in correct ACTIVE partition
+- `8a862f6` Wire `validateInvoiceNo` and `validateAmount` into `validatePostData`
+- `ff8ae00` Correct `dataStartRow` to 7 throughout codebase
+
+#### Performance
+- `e506484` Reduce `batchPostSelectedRows` from 17s to ~5s in MASTER mode
+- `6af4af9` Add early column guards and minimal batch reads to trigger handlers
+- `05e6af3` Eliminate extra API call in `_handlePaymentTypeEdit`
+
+### 2025-11-19
+#### Fixed
+- `9241629` Use paidDate parameter instead of reading from sheet
+- `043cd0d` Format paid date in INVOICE_ALREADY_PAID audit log
+- `e253362` Standardize invoice/payment date extraction to cell B3
+- `e8993bb` Correct INVOICE_ALREADY_PAID paid date source; add validation
+
+### 2025-11-12
+#### Refactored
+- `c455ed0` Rename `processOptimized()` → `createOrUpdateInvoice()` for clarity
+- `9a05fc3` Remove unused `batchCreateInvoices()` and helpers
+- Multiple InvoiceManager dead-code removals, JSDoc standardization, and semantic naming pass
+
 ## [2.3.0] - 2025-11-11
 
 ### Added
