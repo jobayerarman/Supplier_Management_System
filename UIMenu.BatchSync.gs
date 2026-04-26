@@ -1,3 +1,21 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * UIMenu.BatchSync.gs — Batch Payment Fields Sync Engine
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Sub-module of UIMenu. Populates prevInvoice (col F) and paymentAmt (col G)
+ * for IMPORTRANGE-populated rows that have not yet been processed, replacing
+ * the manual row-by-row paymentType edit that would otherwise trigger the
+ * same logic via onEditInstallable.
+ *
+ * PUBLIC INTERFACE (called by UIMenu):
+ *   handleBatchSync(sheet)   → { regularPartial, due, skipped, failed }
+ *   showSyncResults(results)
+ *
+ * Dependencies: _Config.gs, BalanceCalculator.gs, InvoiceManager.gs,
+ *               AuditLogger.gs
+ */
+
 var UIMenuBatchSync = {
 
   handleBatchSync: function(sheet) {
