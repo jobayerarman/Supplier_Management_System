@@ -63,30 +63,39 @@ var UIMenuBatchSync = {
 
     // ── Regular / Partial ── single setValues for cols F+G ──────────────────
     if (regularPartialRows.length > 0) {
-      // Build full-height write array; non-qualifying rows keep existing values
       const writeArray = allValues.map(row => [row[cols.prevInvoice], row[cols.paymentAmt]]);
       for (const r of regularPartialRows) {
         writeArray[r.i][0] = r.invoiceNo;
         writeArray[r.i][1] = r.receivedAmt;
       }
-      sheet
-        .getRange(firstDataRow, cols.prevInvoice + 1, numDataRows, 2)
-        .setValues(writeArray);
 
-      // Partial background + balance update (per row — small N)
-      for (const r of regularPartialRows) {
-        try {
-          if (r.paymentType === 'Partial') {
-            sheet.getRange(firstDataRow + r.i, cols.paymentAmt + 1)
-              .setBackground(CONFIG.colors.warning);
+      let writeSucceeded = false;
+      try {
+        sheet
+          .getRange(firstDataRow, cols.prevInvoice + 1, numDataRows, 2)
+          .setValues(writeArray);
+        writeSucceeded = true;
+      } catch (err) {
+        AuditLogger.logError('batchSyncPaymentFields',
+          'Batch setValues failed: ' + err.toString());
+        failed += regularPartialRows.length;
+      }
+
+      if (writeSucceeded) {
+        for (const r of regularPartialRows) {
+          try {
+            if (r.paymentType === 'Partial') {
+              sheet.getRange(firstDataRow + r.i, cols.paymentAmt + 1)
+                .setBackground(CONFIG.colors.warning);
+            }
+            r.rowValues[cols.prevInvoice] = r.invoiceNo;
+            r.rowValues[cols.paymentAmt]  = r.receivedAmt;
+            BalanceCalculator.updateBalanceCell(sheet, firstDataRow + r.i, false, r.rowValues);
+          } catch (err) {
+            AuditLogger.logError('batchSyncPaymentFields',
+              'Row ' + (firstDataRow + r.i) + ': ' + err.toString());
+            failed++;
           }
-          r.rowValues[cols.prevInvoice] = r.invoiceNo;
-          r.rowValues[cols.paymentAmt]  = r.receivedAmt;
-          BalanceCalculator.updateBalanceCell(sheet, firstDataRow + r.i, false, r.rowValues);
-        } catch (err) {
-          AuditLogger.logError('batchSyncPaymentFields',
-            'Row ' + (firstDataRow + r.i) + ': ' + err.toString());
-          failed++;
         }
       }
     }
