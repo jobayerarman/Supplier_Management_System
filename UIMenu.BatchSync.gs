@@ -26,7 +26,7 @@ var UIMenuBatchSync = {
 
       // Skip rows with no payment type, or already processed (either field populated)
       if (!paymentType || paymentType === '') continue;
-      if (paymentAmt  !== '' && paymentAmt  !== null) continue;
+      if (paymentAmt  !== '' && paymentAmt  !== null && paymentAmt  !== 0) continue;
       if (prevInvoice !== '' && prevInvoice !== null) continue;
 
       const invoiceNo   = row[cols.invoiceNo];
@@ -117,6 +117,14 @@ var UIMenuBatchSync = {
       }
     }
 
+    AuditLogger.log('BATCH_SYNC_PAYMENT_FIELDS', {
+      sheet:          sheet.getName(),
+      regularPartial: regularPartialRows.length,
+      due:            dueRows.length,
+      skipped:        skipped,
+      failed:         failed
+    }, 'Batch sync payment fields completed');
+
     return {
       regularPartial: regularPartialRows.length,
       due:            dueRows.length,
@@ -125,7 +133,7 @@ var UIMenuBatchSync = {
     };
   },
 
-  _showSyncResults: function(results) {
+  showSyncResults: function(results) {
     const ui    = SpreadsheetApp.getUi();
     const lines = [
       '✅ Regular/Partial populated:  ' + results.regularPartial,

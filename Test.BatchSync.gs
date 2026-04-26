@@ -38,8 +38,8 @@ function testBatchSync_idempotent() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const r1    = UIMenuBatchSync.handleBatchSync(sheet);
   const r2    = UIMenuBatchSync.handleBatchSync(sheet);
-  // Second run must find zero qualifying rows — all already processed
-  const pass  = r2.regularPartial === 0 && r2.due === 0;
+  // Second run must find zero qualifying rows and no failures
+  const pass  = r2.regularPartial === 0 && r2.due === 0 && r2.failed === 0;
   Logger.log('run1=' + JSON.stringify(r1));
   Logger.log('run2=' + JSON.stringify(r2));
   SpreadsheetApp.getUi().alert(

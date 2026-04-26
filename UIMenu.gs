@@ -55,6 +55,10 @@ function onOpen() {
  * Global handler: Batch validate all rows
  * Delegates to UIMenu module
  */
+/**
+ * Global handler: Batch sync payment fields for all unprocessed rows
+ * Delegates to UIMenu module
+ */
 function batchSyncPaymentFields() {
   UIMenu.batchSyncPaymentFields();
 }
@@ -271,7 +275,7 @@ const UIMenu = {
     if (!UIUtils.confirmOperation('Batch Sync Payment Fields',
       'This will populate payment fields for all unprocessed rows on this sheet.\n\nContinue?')) return;
     const results = UIMenuBatchSync.handleBatchSync(sheet);
-    UIMenuBatchSync._showSyncResults(results);
+    UIMenuBatchSync.showSyncResults(results);
   },
 
   batchValidateAllRows: function() {
