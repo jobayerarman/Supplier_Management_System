@@ -55,6 +55,10 @@ function onOpen() {
  * Global handler: Batch validate all rows
  * Delegates to UIMenu module
  */
+function batchSyncPaymentFields() {
+  UIMenu.batchSyncPaymentFields();
+}
+
 function batchValidateAllRows() {
   UIMenu.batchValidateAllRows();
 }
@@ -207,6 +211,7 @@ const UIMenu = {
     const ui = SpreadsheetApp.getUi();
 
     ui.createMenu('📋 FP - Operations')
+      .addItem('🔄 Batch Sync Payment Fields', 'batchSyncPaymentFields')
 
       // ═══ DAILY ═══
       .addItem('✅ Validate Selected Rows', 'batchValidateSelectedRows')
@@ -258,6 +263,15 @@ const UIMenu = {
         .addItem('🔍 Diagnose User Resolution', 'diagnoseUserResolution'))
 
       .addToUi();
+  },
+
+  batchSyncPaymentFields: function() {
+    const sheet = SpreadsheetApp.getActiveSheet();
+    if (!this._validateDailySheet(sheet)) return;
+    if (!UIUtils.confirmOperation('Batch Sync Payment Fields',
+      'This will populate payment fields for all unprocessed rows on this sheet.\n\nContinue?')) return;
+    const results = UIMenuBatchSync.handleBatchSync(sheet);
+    UIMenuBatchSync._showSyncResults(results);
   },
 
   batchValidateAllRows: function() {
